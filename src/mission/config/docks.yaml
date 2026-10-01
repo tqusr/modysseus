@@ -1,0 +1,9 @@
+docks:
+  A: {tag_id: 0, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  B: {tag_id: 1, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  C: {tag_id: 2, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  D: {tag_id: 3, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  E: {tag_id: 4, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  F: {tag_id: 5, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  G: {tag_id: 6, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  H: {tag_id: 7, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
