@@ -13,6 +13,21 @@ BB_PACKAGE_DELIVERED = "package_delivered"
 BB_CURRENT_POSITION = "current_position"
 
 
+def _saga_status_is(saga_client, status):
+    """WaitUntil condition factory: SUCCESS once saga_client.get_status()'s
+    "status" field matches. Swallows exceptions (e.g. requests.RequestException
+    on a transient network blip) the same way GetRouteFromSaga does -- a
+    failed poll should just keep waiting, not crash tree.tick()."""
+
+    def check():
+        try:
+            return saga_client.get_status()["status"] == status
+        except Exception:
+            return False
+
+    return check
+
+
 class HasRoute(py_trees.behaviour.Behaviour):
     def __init__(self, name):
         super().__init__(name)
@@ -50,12 +65,13 @@ class ClearRoute(py_trees.behaviour.Behaviour):
     def __init__(self, name):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
-        for key in (BB_ROUTE_ID, BB_HOLDS_PACKAGE, BB_PACKAGE_DELIVERED):
+        for key in (BB_ROUTE_ID, BB_SOURCE, BB_DESTINATION, BB_HOLDS_PACKAGE, BB_PACKAGE_DELIVERED):
             self.blackboard.register_key(key=key, access=py_trees.common.Access.WRITE)
 
     def update(self):
-        if self.blackboard.exists(BB_ROUTE_ID):
-            self.blackboard.unset(BB_ROUTE_ID)
+        for key in (BB_ROUTE_ID, BB_SOURCE, BB_DESTINATION):
+            if self.blackboard.exists(key):
+                self.blackboard.unset(key)
         self.blackboard.set(BB_HOLDS_PACKAGE, False)
         self.blackboard.set(BB_PACKAGE_DELIVERED, False)
         return py_trees.common.Status.SUCCESS
@@ -154,7 +170,7 @@ def build_mission_tree(node, saga_client, docks):
         BlackboardFlagTrue("HoldsPackage?", key=BB_HOLDS_PACKAGE),
         py_trees.composites.Sequence(name="Load at source", memory=True, children=[
             build_goto_dock_subtree(node, BB_SOURCE, docks),
-            WaitUntil("SagaLoaded?", condition=lambda: saga_client.get_status()["status"] == "loading_complete",
+            WaitUntil("SagaLoaded?", condition=_saga_status_is(saga_client, "loading_complete"),
                       timeout_sec=300.0, poll_sec=1.0),
             SetBlackboardFlag("Set HoldsPackage", key=BB_HOLDS_PACKAGE, value=True),
         ]),
@@ -164,7 +180,7 @@ def build_mission_tree(node, saga_client, docks):
         BlackboardFlagTrue("PackageDelivered?", key=BB_PACKAGE_DELIVERED),
         py_trees.composites.Sequence(name="Unload at destination", memory=True, children=[
             build_goto_dock_subtree(node, BB_DESTINATION, docks),
-            WaitUntil("SagaUnloaded?", condition=lambda: saga_client.get_status()["status"] == "unloading_complete",
+            WaitUntil("SagaUnloaded?", condition=_saga_status_is(saga_client, "unloading_complete"),
                       timeout_sec=300.0, poll_sec=1.0),
             SetBlackboardFlag("Set PackageDelivered", key=BB_PACKAGE_DELIVERED, value=True),
         ]),
