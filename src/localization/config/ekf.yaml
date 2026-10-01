@@ -1,0 +1,53 @@
+### ekf_filter_node parameters
+#
+# Fuses wheel odometry (/odom) and IMU (/imu) for the einride-mini-truck sim.
+#
+# Frame note: the sim's /odom message has child_frame_id "base_footprint" (not
+# "base_link"), and the sim already broadcasts the odom->base_footprint TF
+# itself (from its wheel-odometry / diff-drive plugin), while
+# robot_state_publisher broadcasts a static base_footprint->base_link
+# transform. base_link_frame is set to base_footprint to match that existing
+# chain for internal sensor-frame transforms.
+#
+# publish_tf is disabled: with it enabled, this node's own odom->base_footprint
+# broadcast fought with the sim's existing broadcast of the exact same edge
+# (two independent, unsynchronized publishers for one TF edge), observed as
+# continuous TF_OLD_DATA warnings and cascading "Failed to meet update rate"
+# errors. odom->base_link already resolves fine via the sim's own
+# odom->base_footprint (dynamic) + base_footprint->base_link (static) chain,
+# so this package only contributes the fused /odometry/filtered topic and
+# does not attempt to also own that TF edge.
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    two_d_mode: true
+    sensor_timeout: 0.1
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: odom
+
+    odom0: odom
+    # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+    odom0_config: [true,  true,  false,
+                   false, false, true,
+                   true,  true,  false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 10
+
+    imu0: imu
+    imu0_config: [false, false, false,
+                  true,  true,  true,
+                  false, false, false,
+                  true,  true,  true,
+                  true,  true,  true]
+    imu0_differential: false
+    imu0_relative: false
+    imu0_queue_size: 10
+    imu0_remove_gravitational_acceleration: true
+
+    publish_tf: false
+    publish_acceleration: false
+    print_diagnostics: true
