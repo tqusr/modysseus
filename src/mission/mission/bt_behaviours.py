@@ -1,6 +1,8 @@
 import time
 
 import py_trees
+from action_msgs.msg import GoalStatus
+from rclpy.action import ActionClient
 
 
 class BlackboardFlagTrue(py_trees.behaviour.Behaviour):
@@ -66,4 +68,47 @@ class WaitUntil(py_trees.behaviour.Behaviour):
         self._last_poll = now
         if self.condition():
             return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
+
+
+class CallAction(py_trees.behaviour.Behaviour):
+    """Sends a ROS 2 action goal on initialise(); RUNNING until a result
+    arrives, then SUCCESS/FAILURE based on it. `on_success` fires once,
+    exactly when the result is SUCCEEDED, before returning SUCCESS.
+    """
+
+    def __init__(self, name, node, action_type, action_name, goal_builder, on_success=None):
+        super().__init__(name)
+        self.node = node
+        self.goal_builder = goal_builder
+        self.on_success = on_success
+        self.client = ActionClient(node, action_type, action_name)
+        self._send_future = None
+        self._result_future = None
+
+    def initialise(self):
+        self._result_future = None
+        self._send_future = self.client.send_goal_async(self.goal_builder())
+
+    def update(self):
+        if self._send_future is not None:
+            if not self._send_future.done():
+                return py_trees.common.Status.RUNNING
+            goal_handle = self._send_future.result()
+            self._send_future = None
+            if not goal_handle.accepted:
+                return py_trees.common.Status.FAILURE
+            self._result_future = goal_handle.get_result_async()
+
+        if self._result_future is not None:
+            if not self._result_future.done():
+                return py_trees.common.Status.RUNNING
+            result = self._result_future.result()
+            self._result_future = None
+            if result.status == GoalStatus.STATUS_SUCCEEDED:
+                if self.on_success is not None:
+                    self.on_success()
+                return py_trees.common.Status.SUCCESS
+            return py_trees.common.Status.FAILURE
+
         return py_trees.common.Status.RUNNING

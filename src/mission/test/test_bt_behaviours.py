@@ -1,3 +1,5 @@
+import time
+
 import py_trees
 
 from mission.bt_behaviours import WaitUntil
@@ -93,3 +95,44 @@ def test_wait_until_does_not_poll_condition_before_poll_interval_elapses():
     node.update()  # poll_sec has now elapsed: condition gets called exactly once
 
     assert calls["count"] == 1
+
+
+import rclpy
+from nav2_msgs.action import NavigateToPose
+from rclpy.executors import SingleThreadedExecutor
+
+from mission.bt_behaviours import CallAction
+from mission.stub_action_servers import StubActionServers
+
+
+def test_call_action_reaches_success_and_fires_on_success_callback():
+    rclpy.init()
+    try:
+        server = StubActionServers(delay_sec=0.05)
+        client_node = rclpy.create_node("test_bt_client")
+        executor = SingleThreadedExecutor()
+        executor.add_node(server)
+        executor.add_node(client_node)
+
+        fired = {"value": False}
+        node = CallAction(
+            "navigate",
+            node=client_node,
+            action_type=NavigateToPose,
+            action_name="navigate_to_pose",
+            goal_builder=NavigateToPose.Goal,
+            on_success=lambda: fired.__setitem__("value", True),
+        )
+        node.client.wait_for_server(timeout_sec=5.0)
+        node.initialise()
+
+        status = py_trees.common.Status.RUNNING
+        deadline = time.monotonic() + 5.0
+        while status == py_trees.common.Status.RUNNING and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+            status = node.update()
+
+        assert status == py_trees.common.Status.SUCCESS
+        assert fired["value"] is True
+    finally:
+        rclpy.shutdown()
