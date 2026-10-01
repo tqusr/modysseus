@@ -13,14 +13,27 @@ MAP FORMAT - read this before pointing this at a different saved map.
 (arena.yaml/arena.pgm) that Task 2 produced with map_saver_cli. slam_toolbox's
 own `mode: localization` loads a SERIALIZED POSE GRAPH instead, which it reads
 as "<map_file_name>.posegraph" + "<map_file_name>.data" - a different,
-slam_toolbox-internal (karto) format. Those files did not exist after Task 2
-(which only ran map_saver_cli), so Task 3 re-ran mapping.launch.py unmodified
-and called the node's own `/slam_toolbox/serialize_map` service
-(filename=".../src/localization/maps/arena") to produce them alongside the
-pre-existing arena.yaml/.pgm. Without arena.posegraph/arena.data, on_configure
-fails to load a map and this node will not do anything useful - easy to
-mistake for the lifecycle-activation race below if you don't check for it
-first.
+slam_toolbox-internal (karto) format. Without arena.posegraph/arena.data,
+on_configure fails to load a map and this node will not do anything useful -
+easy to mistake for the lifecycle-activation race below if you don't check
+for it first.
+
+THE RULE, if you ever re-map this arena (not merely a note on how it was done
+this time): regenerate `arena.yaml`/`arena.pgm` (map_saver_cli) AND
+`arena.posegraph`/`arena.data` (serialize_map) from the SAME live mapping
+run, before tearing anything down - call both save services back-to-back
+against the one running slam_toolbox instance that just finished driving the
+arena. Never update one pair without the other. They are two different
+projections of the same pose graph, so a four-way byte-identical-run
+guarantee is what makes a downstream consumer (Task 7's Nav2 costmap loads
+arena.yaml while this launch's localizer loads arena.posegraph) see the same
+world geometry from both. Regenerating one pair from a fresh, independent
+mapping run while leaving the other pair in place silently reintroduces two
+copies of the arena that only agree by coincidence of start pose - with
+`do_loop_closing: false` (no global consistency correction), two independent
+passes drift differently even from an identical start, and nothing in either
+format's own self-consistency check (TF tree resolves, pixel grid looks
+sane) can detect that kind of cross-artifact disagreement.
 
 LIFECYCLE - identical reasoning and fix as mapping.launch.py; read that
 file's docstring for the full history. Short version: `*_slam_toolbox_node`

@@ -15,20 +15,27 @@ slam_toolbox:
   #    `mode: localization` loads a SERIALIZED POSE GRAPH via
   #    `serialization::read()`, which expects "<map_file_name>.posegraph" and
   #    "<map_file_name>.data" - a completely different, slam_toolbox-internal
-  #    (karto) format. These did not exist after Task 2 (which only ran
-  #    map_saver_cli), so this task re-ran mapping.launch.py unmodified
-  #    against the committed arena and called the node's own
-  #    `/slam_toolbox/serialize_map` service with
-  #    filename=".../src/localization/maps/arena" to produce
-  #    arena.posegraph/arena.data alongside the pre-existing arena.yaml/.pgm.
-  #    Without those two files, on_configure's loadPoseGraphByParams() fails
-  #    to find them and the node does not come up as a working localizer -
-  #    easy to mistake for another lifecycle-activation race, so written
-  #    down here for whoever hits it next.
-  # 2. The two world representations needed to be built from the SAME
-  #    simulated run (robot starting at the sim's true world origin, as
-  #    Task 2 established) so the pose graph's internal coordinate frame
-  #    lines up with the arena.yaml/.pgm raster already shipped from Task 2.
+  #    (karto) format. Without those two files, on_configure's
+  #    loadPoseGraphByParams() fails to find them and the node does not come
+  #    up as a working localizer - easy to mistake for another
+  #    lifecycle-activation race, so written down here for whoever hits it
+  #    next.
+  # 2. THE RULE, if you ever re-map this arena: regenerate
+  #    arena.yaml/arena.pgm (map_saver_cli) AND arena.posegraph/arena.data
+  #    (serialize_map) from the SAME live mapping run, before tearing
+  #    anything down. Never update one pair without the other - they must
+  #    represent identical world geometry, because Task 7's Nav2 costmap
+  #    loads arena.yaml while this launch's localizer loads arena.posegraph,
+  #    and the two need to agree on where the walls and docks are. It is not
+  #    enough for both pairs to start from the same pose (position AND
+  #    heading) - with `do_loop_closing: false` below (no global consistency
+  #    correction), two independently-run mapping passes drift differently
+  #    from each other even from an identical start, and nothing in either
+  #    format's own self-consistency check (TF tree resolves cleanly, pixel
+  #    grid looks sane) can detect that kind of cross-artifact disagreement
+  #    after the fact. Save both formats back-to-back against the one
+  #    slam_toolbox instance that just finished driving the arena, not from
+  #    two separate mapping runs even if both start at the same place.
   ros__parameters:
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
