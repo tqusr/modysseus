@@ -67,3 +67,23 @@ def test_server_url_trailing_slash_is_stripped(mock_get):
         headers={"Authorization": "Bearer secret-token"},
         timeout=0.5,
     )
+
+
+@patch("mission.saga_client.requests.get")
+def test_get_route_by_id_returns_the_route(mock_get):
+    mock_get.return_value = _fake_response({
+        "route_id": 1, "truck_id": 2, "source": {"letter": "E", "tag_id": 4},
+        "destination": {"letter": "H", "tag_id": 7}, "status": "unloading_complete",
+        "next_dock": None, "assigned_at": "2026-10-03T09:10:40.527Z",
+        "completed_at": "2026-10-03T09:15:02.113Z",
+    })
+
+    api = SagaApi("http://localhost:8000", "secret-token")
+    route = api.get_route_by_id(1)
+
+    assert route["status"] == "unloading_complete"
+    mock_get.assert_called_once_with(
+        "http://localhost:8000/api/v1/routes/1",
+        headers={"Authorization": "Bearer secret-token"},
+        timeout=0.5,
+    )

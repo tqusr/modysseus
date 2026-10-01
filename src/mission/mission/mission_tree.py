@@ -1,7 +1,14 @@
+import logging
+import math
+import time
+
 import py_trees
+from geometry_msgs.msg import Twist
 
 from mission.bt_behaviours import BlackboardFlagTrue, CallAction, SetBlackboardFlag, WaitUntil
 from nav2_msgs.action import DockRobot, NavigateToPose
+
+_logger = logging.getLogger('mission.mission_tree')
 
 BB_ROUTE_ID = "route_id"
 BB_SOURCE = "source_dock"
@@ -22,7 +29,8 @@ def _saga_status_is(saga_client, status):
     def check():
         try:
             return saga_client.get_status()["status"] == status
-        except Exception:
+        except Exception as error:
+            _logger.warning(f"Saga AI unreachable while polling status: {error}")
             return False
 
     return check
@@ -46,7 +54,8 @@ def _saga_route_is_unloaded(saga_client):
         try:
             route_id = blackboard.get(BB_ROUTE_ID)
             return saga_client.get_route_by_id(route_id)["status"] == "unloading_complete"
-        except Exception:
+        except Exception as error:
+            _logger.warning(f"Saga AI unreachable while polling status: {error}")
             return False
 
     return check
@@ -74,14 +83,17 @@ class GetRouteFromSaga(py_trees.behaviour.Behaviour):
     def update(self):
         try:
             route = self.saga_client.get_route()
-        except Exception as error:  # requests.RequestException in production
-            self.logger.warning(f"Saga AI unreachable: {error}")
+            if route is None:
+                return py_trees.common.Status.FAILURE
+            route_id = route["route_id"]
+            source = route["source"]["letter"]
+            destination = route["destination"]["letter"]
+        except Exception as error:  # requests.RequestException in production, or malformed route
+            self.logger.warning(f"Saga AI unreachable or malformed route: {error}")
             return py_trees.common.Status.FAILURE
-        if route is None:
-            return py_trees.common.Status.FAILURE
-        self.blackboard.set(BB_ROUTE_ID, route["route_id"])
-        self.blackboard.set(BB_SOURCE, route["source"]["letter"])
-        self.blackboard.set(BB_DESTINATION, route["destination"]["letter"])
+        self.blackboard.set(BB_ROUTE_ID, route_id)
+        self.blackboard.set(BB_SOURCE, source)
+        self.blackboard.set(BB_DESTINATION, destination)
         return py_trees.common.Status.SUCCESS
 
 
@@ -99,6 +111,45 @@ class ClearRoute(py_trees.behaviour.Behaviour):
         self.blackboard.set(BB_HOLDS_PACKAGE, False)
         self.blackboard.set(BB_PACKAGE_DELIVERED, False)
         return py_trees.common.Status.SUCCESS
+
+
+class StopRobot(py_trees.behaviour.Behaviour):
+    """Publishes a single zero-velocity Twist to /cmd_vel."""
+
+    def __init__(self, name, node):
+        super().__init__(name)
+        self._publisher = node.create_publisher(Twist, '/cmd_vel', 10)
+
+    def update(self):
+        self._publisher.publish(Twist())
+        return py_trees.common.Status.SUCCESS
+
+
+class ReportFaultToSaga(py_trees.behaviour.Behaviour):
+    """Saga AI has no report endpoint (truck is read-only) -- this just logs,
+    matching ReportRouteDone's pattern."""
+
+    def update(self):
+        self.logger.warning("Mission fault -- stopping and holding position")
+        return py_trees.common.Status.SUCCESS
+
+
+class Pause(py_trees.behaviour.Behaviour):
+    """RUNNING until duration_sec has elapsed since initialise(), then SUCCESS."""
+
+    def __init__(self, name, duration_sec, clock=time.monotonic):
+        super().__init__(name)
+        self.duration_sec = duration_sec
+        self.clock = clock
+        self._start_time = None
+
+    def initialise(self):
+        self._start_time = self.clock()
+
+    def update(self):
+        if self.clock() - self._start_time >= self.duration_sec:
+            return py_trees.common.Status.SUCCESS
+        return py_trees.common.Status.RUNNING
 
 
 class ReportRouteDone(py_trees.behaviour.Behaviour):
@@ -153,12 +204,19 @@ def build_goto_dock_subtree(node, dock_key, docks):
     def navigate_goal():
         dock = docks[position_writer.get(dock_key)]
         goal = NavigateToPose.Goal()
+        goal.pose.header.frame_id = 'map'
         goal.pose.pose.position.x = dock.staging_pose["x"]
         goal.pose.pose.position.y = dock.staging_pose["y"]
+        theta = dock.staging_pose["theta"]
+        goal.pose.pose.orientation.z = math.sin(theta / 2.0)
+        goal.pose.pose.orientation.w = math.cos(theta / 2.0)
         return goal
 
     def dock_goal():
-        return DockRobot.Goal()
+        dock = docks[position_writer.get(dock_key)]
+        goal = DockRobot.Goal()
+        goal.dock_id = dock.letter
+        return goal
 
     navigate = CallAction(
         "NavigateToPose(staging)", node=node, action_type=NavigateToPose,
@@ -225,8 +283,9 @@ def build_mission_tree(node, saga_client, docks):
     ])
 
     safe_stop = py_trees.composites.Sequence(name="Safe stop", memory=True, children=[
-        py_trees.behaviours.Success(name="StopRobot (stub)"),
-        py_trees.behaviours.Success(name="ReportFaultToSaga (log only)"),
+        StopRobot("StopRobot", node),
+        ReportFaultToSaga("ReportFaultToSaga"),
+        Pause("Sleep 2s", duration_sec=2.0),
     ])
 
     return py_trees.composites.Selector(name="Mission or safe stop", memory=False, children=[mission, safe_stop])
