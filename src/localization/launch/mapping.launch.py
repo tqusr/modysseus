@@ -14,18 +14,48 @@ distorted maps. `sync_slam_toolbox_node` processes scans synchronously with
 no async-queue pressure, which fits this one-time offline mapping pass fine,
 and proved stable where async did not.
 
-Lifecycle handling is done here with plain timers rather than by including
-slam_toolbox's shipped `online_sync_launch.py`. That launch file emits
-CONFIGURE, then relies on an `OnStateTransition(configuring -> inactive)`
-event handler to emit ACTIVATE. In this environment the node's `change_state`
-service response regularly times out ("failed to send response to
-/slam_toolbox/change_state (timeout)"), the transition event is therefore
-never observed by launch, the handler never fires, and the node sits in
-`inactive` for the entire run - silently processing zero scans. That was
-reproduced repeatedly. Firing CONFIGURE and then ACTIVATE on fixed timers
-does not depend on the response or the event arriving, and a redundant second
-ACTIVATE covers a slow configure (an ACTIVATE emitted when the node is already
-active is a no-op failure, not an error that affects mapping).
+LIFECYCLE - read this before adapting this launch file for Task 3.
+
+`*_slam_toolbox_node` is a managed lifecycle node: it processes no scans at
+all until CONFIGUREd and then ACTIVATEd. Getting it there is genuinely
+unreliable here, and every failure mode is silent - the launch looks healthy,
+`/map` is simply never published, and you only find out when a saved map
+comes back empty. Two distinct ways it has actually failed in this repo:
+
+1. slam_toolbox's shipped `online_sync_launch.py` emits CONFIGURE and then
+   waits on an `OnStateTransition(configuring -> inactive)` handler to emit
+   ACTIVATE. In this environment the node's `change_state` response is
+   regularly lost ("failed to send response to /slam_toolbox/change_state
+   (timeout)"), launch never observes the transition, the handler never
+   fires, and the node sits inactive for the entire run.
+2. Replacing that with fixed wall-clock timers (CONFIGURE at 3s, ACTIVATE at
+   10s) swaps one silent failure for another: the timers are independent, not
+   chained off CONFIGURE's actual result, so under the sustained ~15/16-core
+   load this sim stack produces, a slow CONFIGURE (node allocation, Ceres
+   solver init, parameter loading) means every ACTIVATE fires too early, gets
+   rejected, and the node again sits inactive.
+
+So this file uses three mechanisms, and critically does not assume any of
+them worked:
+
+- CONFIGURE on a short timer (the node must exist before it can be asked).
+- An `OnStateTransition` handler that emits ACTIVATE the moment the node is
+  actually observed reaching `inactive`. This is the fast path, and it is
+  correctly gated on the real transition - but it is the mechanism failure
+  mode 1 breaks, so it cannot be relied on alone.
+- `slam_lifecycle_watchdog.py`, which is the authority. It polls `get_state`
+  on a 1s interval, re-issues whatever transition the observed state calls
+  for, and never waits on a `change_state` response (a lost one just means
+  the next poll retries). It is therefore immune to both failure modes above,
+  it has no assumed window for CONFIGURE to finish within, and it FAILS
+  LOUDLY: if the node has not reached `active` within the timeout it logs an
+  ERROR saying so and exits non-zero, which this launch file surfaces again
+  as its own ERROR. Watch for "slam_toolbox is ACTIVE" in the launch output
+  before trusting a mapping run.
+
+Redundant ACTIVATEs are harmless - an ACTIVATE against an already-active node
+is a no-op that logs "No transition matching 3 found for current state
+active", not an error that affects mapping.
 """
 
 import os
@@ -33,11 +63,18 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import EmitEvent, TimerAction
+from launch.actions import (EmitEvent, ExecuteProcess, LogInfo,
+                            RegisterEventHandler, TimerAction)
+from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
 from launch_ros.actions import LifecycleNode
+from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
+
+#: Generous: it only bounds how long we wait before declaring the run dead,
+#: and a heavily loaded machine can take a while to initialise Ceres.
+ACTIVATION_TIMEOUT = 60.0
 
 
 def generate_launch_description():
@@ -62,9 +99,36 @@ def generate_launch_description():
             transition_id=transition_id,
         ))
 
+    # Fast path: react to the real transition the instant it is observed.
+    activate_on_configured = RegisterEventHandler(OnStateTransition(
+        target_lifecycle_node=slam_node,
+        start_state='configuring',
+        goal_state='inactive',
+        entities=[change_state(Transition.TRANSITION_ACTIVATE)],
+    ))
+
+    # Authority: polls get_state, retries as needed, and fails loudly.
+    watchdog = ExecuteProcess(
+        cmd=['ros2', 'run', 'localization', 'slam_lifecycle_watchdog.py',
+             '/slam_toolbox', str(ACTIVATION_TIMEOUT)],
+        output='screen',
+    )
+
+    report = RegisterEventHandler(OnProcessExit(
+        target_action=watchdog,
+        on_exit=lambda event, context: [LogInfo(msg=(
+            'slam_toolbox activation CONFIRMED - mapping is live.'
+            if event.returncode == 0 else
+            'ERROR: slam_toolbox never reached "active". It is processing NO '
+            'scans; any map saved from this run will be empty or partial. '
+            'Kill this launch, check the slam_toolbox log above, and retry.'
+        ))],
+    ))
+
     return LaunchDescription([
         slam_node,
+        activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
-        TimerAction(period=10.0, actions=[change_state(Transition.TRANSITION_ACTIVATE)]),
-        TimerAction(period=18.0, actions=[change_state(Transition.TRANSITION_ACTIVATE)]),
+        TimerAction(period=4.0, actions=[watchdog]),
+        report,
     ])
