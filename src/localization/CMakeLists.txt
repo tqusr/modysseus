@@ -3,7 +3,7 @@ project(localization)
 
 find_package(ament_cmake REQUIRED)
 
-install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch config maps DESTINATION share/${PROJECT_NAME})
 
 install(PROGRAMS scripts/slam_lifecycle_watchdog.py
         DESTINATION lib/${PROJECT_NAME})
