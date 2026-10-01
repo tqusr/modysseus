@@ -1,4 +1,8 @@
 slam_toolbox:
+  # Filename says "async" for historical reasons (this started as the async
+  # example config), but mapping.launch.py now points sync_slam_toolbox_node
+  # at this same file - see that launch file's docstring for why. The
+  # parameter schema is identical between the two node variants.
   ros__parameters:
 
     # Plugin params
@@ -43,8 +47,19 @@ slam_toolbox:
     min_laser_range: 0.02 #for rastering images
     max_laser_range: 12.0 #for rastering images
     minimum_time_interval: 0.5
-    transform_timeout: 0.2
-    tf_buffer_duration: 30.0
+    # Bumped from 0.2s: this sim has two ros_gz_bridge publishers on /clock,
+    # producing small millisecond-scale time jumps (confirmed in Task 1's
+    # review as "harmless" for the EKF, which only logged warnings, but for
+    # a node doing frequent TF lookups with a tight timeout over a multi-
+    # minute mapping run, those jumps caused real tf2::NoDataForExtrapolation
+    # crashes and - even when it didn't crash - plausibly caused occasional
+    # bad scan matches that produced severely distorted maps (13-15m instead
+    # of the real ~6m arena), since a dropped/late transform lookup can make
+    # slam_toolbox fall back to a worse pose guess for that scan. A more
+    # tolerant timeout lets it ride out the jitter instead of either crashing
+    # or silently degrading match quality.
+    transform_timeout: 1.0
+    tf_buffer_duration: 60.0
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
     enable_interactive_mode: true
 
@@ -52,7 +67,18 @@ slam_toolbox:
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_travel_distance: 0.5
-    minimum_travel_heading: 0.5
+    # Reduced from 0.5 rad (~28.6 deg): with do_loop_closing disabled (see
+    # below), a single weak link in the scan-matching chain can never be
+    # corrected afterward. The waypoint drive does several near-in-place
+    # rotations of 90+ degrees; at the old 0.5 rad threshold, slam_toolbox
+    # could skip straight past a large chunk of that rotation before
+    # inserting its next keyframe, leaving too little scan overlap with the
+    # previous one for a reliable match in this symmetric room - observed
+    # as a reproducible failure signature (map stretching to 13-15m instead
+    # of the real ~6m arena, always breaking around the same early turn).
+    # A tighter heading threshold forces more keyframes during rotation,
+    # keeping consecutive scans close enough to match reliably.
+    minimum_travel_heading: 0.15
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 10.0
@@ -78,7 +104,20 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # Correlation Parameters - Correlation Parameters
-    correlation_search_space_dimension: 0.5
+    # Widened from 0.5m: the scan matcher only searches within this window
+    # around the pose odometry predicts. A direct ground-truth check (gz's
+    # /world/demo/pose/info vs /odom, static after an in-place rotation)
+    # found odom's yaw matched true sim yaw to within 0.07deg - ruling out a
+    # systematic odometry angular-scale error as the cause of the repeated
+    # 13-15m map distortion seen in this investigation. But a narrow window
+    # is still fragile to any transient pose-seed error (e.g. from the known
+    # dual-/clock jitter affecting a scan's TF lookup mid-rotation even if
+    # odometry itself is fine once settled), and in a room this symmetric a
+    # narrow window that misses the true pose has nothing nearby-but-wrong
+    # to fall back on except another wall/dock that looks similar. Widening
+    # the search space gives the matcher room to find the true match even
+    # when the odometry-seeded center is off by more than 0.5m.
+    correlation_search_space_dimension: 2.0
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1 
 
