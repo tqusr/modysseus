@@ -34,6 +34,12 @@ class _FakeSagaApi:
     def get_status(self):
         return {"status": self._routes[self.route_index]["status"]}
 
+    def get_route_by_id(self, route_id):
+        for route in self._routes:
+            if route["route_id"] == route_id:
+                return route
+        raise ValueError(f"no such route {route_id}")
+
     def set_status(self, status):
         self._routes[self.route_index]["status"] = status
 

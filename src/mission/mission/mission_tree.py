@@ -28,6 +28,30 @@ def _saga_status_is(saga_client, status):
     return check
 
 
+def _saga_route_is_unloaded(saga_client):
+    """WaitUntil condition for "SagaUnloaded?": unlike loading_complete, the
+    real Saga AI server atomically reassigns the truck to its next route
+    (status back to "loading_pending") in the same action that applies
+    unloading_complete -- so that status is never observable through the
+    live get_status() endpoint. Reading the specific route by its own
+    route_id via get_route_by_id() instead returns that route's terminal
+    status even after the server has moved the truck on to a new route.
+    The route_id isn't known until GetRouteFromSaga runs, so it's read from
+    the blackboard at check time rather than captured at tree-build time."""
+
+    blackboard = py_trees.blackboard.Client(name="saga-unloaded-check")
+    blackboard.register_key(key=BB_ROUTE_ID, access=py_trees.common.Access.READ)
+
+    def check():
+        try:
+            route_id = blackboard.get(BB_ROUTE_ID)
+            return saga_client.get_route_by_id(route_id)["status"] == "unloading_complete"
+        except Exception:
+            return False
+
+    return check
+
+
 class HasRoute(py_trees.behaviour.Behaviour):
     def __init__(self, name):
         super().__init__(name)
@@ -180,7 +204,7 @@ def build_mission_tree(node, saga_client, docks):
         BlackboardFlagTrue("PackageDelivered?", key=BB_PACKAGE_DELIVERED),
         py_trees.composites.Sequence(name="Unload at destination", memory=True, children=[
             build_goto_dock_subtree(node, BB_DESTINATION, docks),
-            WaitUntil("SagaUnloaded?", condition=_saga_status_is(saga_client, "unloading_complete"),
+            WaitUntil("SagaUnloaded?", condition=_saga_route_is_unloaded(saga_client),
                       timeout_sec=300.0, poll_sec=1.0),
             SetBlackboardFlag("Set PackageDelivered", key=BB_PACKAGE_DELIVERED, value=True),
         ]),
