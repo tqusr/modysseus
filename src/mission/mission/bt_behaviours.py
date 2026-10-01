@@ -57,10 +57,13 @@ class WaitUntil(py_trees.behaviour.Behaviour):
         if now - self._start_time > self.timeout_sec:
             return py_trees.common.Status.FAILURE
         if self._last_poll is None:
+            # Force one RUNNING tick before ever checking the condition, so a
+            # condition that's already true doesn't resolve in a single tick.
             self._last_poll = now
             return py_trees.common.Status.RUNNING
+        if (now - self._last_poll) < self.poll_sec:
+            return py_trees.common.Status.RUNNING
+        self._last_poll = now
         if self.condition():
             return py_trees.common.Status.SUCCESS
-        if (now - self._last_poll) >= self.poll_sec:
-            self._last_poll = now
         return py_trees.common.Status.RUNNING
