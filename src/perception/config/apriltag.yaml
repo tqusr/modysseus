@@ -1,0 +1,33 @@
+### apriltag_ros (AprilTagNode) parameters
+#
+# Detects the dock AprilTags (family 36h11, 0.100 m edge, per the arena dock
+# model's own built-in comment) from the sim's OAK-D RGB camera.
+#
+# Uniform tag size: every dock tag (ids 0-7) is the same physical size, so a
+# single default `size` covers all of them. apriltag_ros's own shipped
+# example (tags_36h11.yaml) treats the `tag.ids`/`tag.sizes`/`tag.frames`
+# block as optional, used only to override individual tags (different size,
+# or a specific TF frame name) -- not needed here since all tags share one
+# size and the node's default per-id frame naming is fine.
+#
+# image topic / camera_info are remapped in launch/apriltag.launch.py, not
+# here -- apriltag_ros does not take topic names as ros__parameters.
+/**:
+    ros__parameters:
+        use_sim_time: true
+
+        image_transport: raw     # sim publishes raw (uncompressed) images
+        family: 36h11
+        size: 0.100               # meters
+        max_hamming: 0            # exact decode only
+        qos_profile: default
+
+        detector:
+            threads: 1
+            decimate: 1.0          # no decimation: tags are small/far in the arena
+            blur: 0.0
+            refine: true
+            sharpening: 0.25
+            debug: false
+
+        pose_estimation_method: "pnp"
