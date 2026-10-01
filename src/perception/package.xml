@@ -3,11 +3,13 @@
 <package format="3">
   <name>perception</name>
   <version>0.0.0</version>
-  <description>AprilTag detection against the simulated camera for Modysseus.</description>
+  <description>AprilTag detection and docking server bring-up for Modysseus.</description>
   <maintainer email="albin@stenboda.se">Albin</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <depend>apriltag_ros</depend>
+  <depend>opennav_docking</depend>
+  <exec_depend>localization</exec_depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>

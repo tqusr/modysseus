@@ -1,0 +1,134 @@
+### opennav_docking's `docking_server` (nav2_util::LifecycleNode) parameters.
+#
+# Dock x/y positions are hand-transcribed from `src/mission/config/docks.yaml`
+# (THAT FILE IS THE SOURCE OF TRUTH for the arena's real dock x/y). If you
+# change a dock's x/y there, update the matching `pose:` entry below. The
+# `docks:` list and each dock's `type`/`frame`/`pose`/`id` block here are
+# opennav_docking's own dock-database format (parsed by its own
+# `parseDockParams`), NOT the same YAML schema as mission's docks.yaml.
+#
+# IMPORTANT -- theta here is DELIBERATELY ROTATED BY PI FROM docks.yaml'S
+# theta FOR THE SAME DOCK. This isn't a bug; it's two different physical
+# quantities that happen to be measured from the same tag:
+#   - mission/config/docks.yaml's dock_pose.theta = the tag's own outward
+#     (room-facing) normal -- confirmed empirically (Task 4 + this task) by
+#     standing a robot at dock_pose.theta+pi and seeing the tag centered in
+#     its camera.
+#   - opennav_docking's dock pose.theta (below) = the robot's own final
+#     NOSE-FORWARD heading once docked, per its source
+#     (opennav_docking/src/docking_server.cpp's approachDock(): with
+#     dock_backwards=false the controller drives the robot's base_frame
+#     straight toward this pose, ending with this exact heading -- there is
+#     no internal flip in that code path, unlike the dock_backwards=true
+#     path which flips the *target* by pi internally for its own reverse-
+#     motion trick). For a robot that noses straight into a wall-mounted
+#     dock (this arena: all 8 docks sit flush against a wall, tag facing
+#     into the room), "final nose-forward heading" is necessarily INTO the
+#     wall -- i.e. the opposite of the tag's own outward normal. Hence
+#     pose.theta here = docks.yaml's dock_pose.theta + pi (normalized).
+#
+# Plugin choice: `opennav_docking::SimpleChargingDock` with
+# `use_external_detection_pose: false` -- i.e. FIXED-POSE docking against the
+# known world/map poses below, not vision-corrected (AprilTag) final
+# approach. opennav_docking *does* support vision correction (it subscribes
+# a single global `detected_dock_pose` topic, applying
+# `external_detection_translation_*`/`external_detection_rotation_*` offsets,
+# with no per-dock ID filtering in the plugin itself -- whatever PoseStamped
+# arrives there is trusted as the dock in view). Wiring that up for real
+# would need a new small node bridging apriltag_ros's `/detections`
+# (AprilTagDetectionArray, camera-optical-frame poses, Task 4) into that one
+# PoseStamped topic, which also means adding Python-node scaffolding to this
+# package (currently ament_cmake, config/launch only) and empirically
+# calibrating the external_detection_translation/rotation offsets against
+# the dock model's actual tag-mount geometry. The task brief explicitly
+# allows the fixed-pose fallback "if the AprilTag integration proves
+# complex", and the risk/time profile here (new node, new frame-transform
+# chain, calibration against an unknown tag-mount offset, on top of the
+# lifecycle-watchdog work this task already needs) outweighs the benefit
+# for this iteration: arena localization (Task 3) already gives a drift-
+# corrected `map` frame, and the docking_server transforms each dock's pose
+# from its own `frame` (map) into `fixed_frame` (odom) via tf2 every control
+# cycle regardless, so the fixed-pose approach still benefits from
+# localization corrections up to the point docking starts. Revisit this if
+# fixed-pose docking proves insufficiently precise in practice.
+#
+# dock_backwards: false (robot drives NOSE-FORWARD the whole approach,
+# constant heading) -- chosen after a real false-start in this task's
+# verification: an earlier config used `dock_backwards: true` with
+# `pose.theta` copied UNFLIPPED from docks.yaml and a `staging_yaw_offset`
+# chosen to patch the mismatch. That left the controller's internal target
+# orientation (docks.yaml's theta) inconsistent with the staging pose it
+# was actually driven to, which put the robot's whole straight-line approach
+# exactly on the dock's own axis of symmetry needing a disguised ~180 degree
+# reorientation mid-approach -- a known singular configuration for this
+# smooth pose-regulation controller (Astolfi/Samson-style; see `controller.
+# k_phi`/`k_delta`/`beta`/`lambda` below) that cannot resolve both position
+# and heading error from that exact line, and the robot span in place at
+# `v_angular_max` until `dock_approach_timeout` repeatedly, never docking.
+# With pose.theta correctly flipped (this file) and dock_backwards: false,
+# staging and dock_pose share the same heading by construction (see
+# staging_x_offset below) -- no reorientation needed anywhere in the
+# approach, no singularity.
+docking_server:
+    ros__parameters:
+        use_sim_time: true
+
+        controller_frequency: 50.0
+        initial_perception_timeout: 5.0
+        wait_charge_timeout: 5.0
+        dock_approach_timeout: 30.0
+        undock_linear_tolerance: 0.05
+        undock_angular_tolerance: 0.05
+        max_retries: 3
+        base_frame: "base_footprint"   # NOT base_link -- see repo-wide lesson
+        fixed_frame: "odom"
+        dock_backwards: false          # nose-forward, constant heading throughout (see header comment)
+        dock_prestaging_tolerance: 0.5
+
+        dock_plugins: ["arena_dock"]
+        arena_dock:
+            plugin: "opennav_docking::SimpleChargingDock"
+            use_battery_status: false       # sim has no battery topic
+            use_external_detection_pose: false   # fixed-pose fallback -- see header comment
+            docking_threshold: 0.05
+            # staging = dock_pose + staging_x_offset * (cos th, sin th);
+            # staging.theta = dock_pose.theta + staging_yaw_offset. Negative
+            # offset places staging BEHIND dock_pose along its own heading
+            # (th), matching opennav_docking's own documented convention
+            # ("staging pose offset forward (negative) of dock pose"), and
+            # a 0 yaw offset keeps staging.theta == dock_pose.theta so the
+            # robot never has to reorient during the approach.
+            staging_x_offset: -0.6
+            staging_yaw_offset: 0.0
+
+        # The 8 arena docks. `pose` is [x, y, theta] in `frame`. x/y copied
+        # verbatim from mission/config/docks.yaml's `dock_pose`; theta is
+        # that file's dock_pose.theta + pi, normalized to (-pi, pi] -- see
+        # header comment for why. `id` carries the AprilTag id (unused by
+        # SimpleChargingDock in fixed-pose mode; kept for documentation /
+        # future vision mode).
+        docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
+        A: {type: "arena_dock", frame: "map", pose: [2.992, -1.500, 0.0], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [2.992, 1.500, 0.0], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [1.500, 2.992, 1.5708], id: "2"}
+        D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.992, 1.5708], id: "3"}
+        E: {type: "arena_dock", frame: "map", pose: [-2.992, 1.500, 3.14159], id: "4"}
+        F: {type: "arena_dock", frame: "map", pose: [-2.992, -1.500, 3.14159], id: "5"}
+        G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.992, -1.5708], id: "6"}
+        H: {type: "arena_dock", frame: "map", pose: [1.500, -2.992, -1.5708], id: "7"}
+
+        # Default approach controller (opennav_docking's own defaults),
+        # except `use_collision_detection: false` -- its default (true)
+        # subscribes to a Nav2 local costmap (`local_costmap/costmap_raw`)
+        # that doesn't exist in this stack yet (no Nav2 bringup/costmaps as
+        # of this task). Revisit once Nav2 costmaps land.
+        controller:
+            use_collision_detection: false
+            k_phi: 3.0
+            k_delta: 2.0
+            beta: 0.4
+            lambda: 2.0
+            v_linear_min: 0.1
+            v_linear_max: 0.15
+            v_angular_max: 0.75
+            slowdown_radius: 0.25

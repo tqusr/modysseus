@@ -1,9 +1,58 @@
+# Real arena dock poses (world == `map` frame; see Task 3's arena localization,
+# which makes `map` coincide with the Gazebo world frame the sim spawns the
+# docks in). `dock_pose.theta` here is the dock/tag's own outward-facing
+# normal direction, as placed in `arena.sdf` -- the direction a robot
+# standing in front of the tag must face *back along* to look straight at
+# it. This is `mission`'s own schema (used only by `mission_tree.py`'s
+# NavigateToPose pre-positioning step, independent of opennav_docking's
+# internal approach control -- see perception/config/docking.yaml's header
+# comment for why that file deliberately stores a DIFFERENT, pi-rotated
+# theta for the same physical docks, and is not a simple transcription of
+# this file's numbers).
+#
+# staging_pose formula -- "robot facing the dock" per the task spec, i.e.
+# standing `d` meters out along the tag's own outward normal, looking back
+# at it:
+#
+#   staging_pose.x     = dock_pose.x + d * cos(dock_pose.theta)
+#   staging_pose.y     = dock_pose.y + d * sin(dock_pose.theta)
+#   staging_pose.theta = dock_pose.theta + pi   (normalized to (-pi, pi])
+#
+# where d = 0.6 m (within the spec's 0.5-0.7 m standoff range). This walks
+# `d` meters from the dock *along its own outward normal* (i.e. away from
+# the wall, further into the room -- never through the wall, since every
+# dock's theta points room-ward by construction), and faces the robot back
+# toward the dock (theta + pi) so its front-facing camera has the tag in
+# view, matching the task spec's "robot facing the dock" wording exactly.
+#
+# Empirical verification (dock A, this task): launched the sim
+# (world:=arena) + perception's apriltag.launch.py, drove the real robot
+# (open-loop /cmd_vel + /odom, no closed-loop controller available yet) to
+# within ~0.2 m / ~4 deg of the computed staging A pose (2.392, -1.500,
+# 0.0 -- i.e. dock_pose.theta=3.14159 + pi, normalized), and confirmed on
+# /detections: tag id 0 (dock A's tag) visible, hamming: 0 (exact decode),
+# decision_margin: 176.6 (strong/unambiguous), centre (869, 351) comfortably
+# inside the 1280x720 frame and near its center -- i.e. the tag was visible
+# and roughly centered facing the robot from the computed staging pose,
+# confirming both the formula's sign convention and that dock_pose.theta
+# really is the tag's outward (room-ward) normal. The other 7 staging poses
+# below are computed from the same formula, not re-driven individually
+# (identical geometric relationship, same dock model/tag setup per Task 4's
+# note that all 8 tags share one code path/config).
+#
+# NOTE for whoever next touches docking behavior: this file's staging/dock
+# convention ("facing the dock") is NOT what opennav_docking's own approach
+# controller wants internally (it needs the robot's *final* heading at
+# dock_pose, nose-forward into the charger, which for these wall-mounted
+# docks is dock_pose.theta + pi relative to this file's theta -- see
+# perception/config/docking.yaml's header comment for the full story,
+# including a real false-start this task hit by conflating the two).
 docks:
-  A: {tag_id: 0, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  B: {tag_id: 1, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  C: {tag_id: 2, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  D: {tag_id: 3, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  E: {tag_id: 4, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  F: {tag_id: 5, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  G: {tag_id: 6, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
-  H: {tag_id: 7, dock_pose: {x: 0.0, y: 0.0, theta: 0.0}, staging_pose: {x: 0.0, y: 0.0, theta: 0.0}}
+  A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}
+  B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: 1.500, theta: 0.0}}
+  C: {tag_id: 2, dock_pose: {x: 1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: 1.500, y: 2.392, theta: 1.5708}}
+  D: {tag_id: 3, dock_pose: {x: -1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: -1.500, y: 2.392, theta: 1.5708}}
+  E: {tag_id: 4, dock_pose: {x: -2.992, y: 1.500, theta: 0.0}, staging_pose: {x: -2.392, y: 1.500, theta: 3.14159}}
+  F: {tag_id: 5, dock_pose: {x: -2.992, y: -1.500, theta: 0.0}, staging_pose: {x: -2.392, y: -1.500, theta: 3.14159}}
+  G: {tag_id: 6, dock_pose: {x: -1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: -1.500, y: -2.392, theta: -1.5708}}
+  H: {tag_id: 7, dock_pose: {x: 1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: 1.500, y: -2.392, theta: -1.5708}}
