@@ -326,6 +326,61 @@ def test_call_action_cancel_reaches_a_real_action_server():
         rclpy.shutdown()
 
 
+def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal():
+    """The other half of the accept race, and the half that actually happens:
+    the send future has RESOLVED (the server accepted the goal) but no tick
+    has run since, so update() never moved the handle into _goal_handle.
+
+    This is the normal state for one full tick after every dispatch --
+    initialise() sends and update() runs in the same tick with no spin
+    between them, and the memory=False `Mission` Sequence then invalidates
+    the `route` subtree without ticking it again. Deferring the cancel onto
+    an already-done future (add_done_callback) would be too late to matter,
+    and the pre-fix `not done()` guard skipped the cancel entirely: the
+    server keeps driving the robot through the whole "safe stop".
+
+    Real rclpy plumbing and a real server, deliberately: the bug lives in
+    the interaction between the future's resolved state and terminate(), so
+    a hand-built Future would let a wrong fix pass."""
+    rclpy.init()
+    try:
+        server_node = rclpy.create_node("test_unharvested_server")
+        client_node = rclpy.create_node("test_unharvested_client")
+        executor = SingleThreadedExecutor()
+        executor.add_node(server_node)
+        executor.add_node(client_node)
+        server = _CancellableServer(server_node)
+
+        behaviour = CallAction(
+            "navigate", node=client_node, action_type=NavigateToPose,
+            action_name="navigate_to_pose", goal_builder=NavigateToPose.Goal,
+        )
+        assert behaviour.client.wait_for_server(timeout_sec=10.0)
+        behaviour.initialise()
+
+        # Spin until the server has accepted -- but NEVER call update(), so
+        # the handle is never harvested. This is the exact interleaving a
+        # safe stop hits on the tick after a dispatch.
+        deadline = time.monotonic() + 10.0
+        while not behaviour._send_future.done() and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+        assert behaviour._send_future.done(), "the server never answered the goal request"
+        assert behaviour._goal_handle is None, \
+            "fixture assumption broken: the handle must still be unharvested"
+
+        behaviour.terminate(py_trees.common.Status.INVALID)
+
+        deadline = time.monotonic() + 10.0
+        while not server.cancel_requests and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+
+        assert server.cancel_requests, \
+            ("an accepted-but-unharvested goal was abandoned without a cancel -- "
+             "the server keeps driving the robot through the safe stop")
+    finally:
+        rclpy.shutdown()
+
+
 def test_call_action_records_the_goal_handle_once_the_goal_is_accepted():
     """terminate() can only cancel what update() captured -- this is the
     other half of the fix, against a real action server."""

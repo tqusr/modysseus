@@ -72,11 +72,18 @@ class WaitUntil(py_trees.behaviour.Behaviour):
 
 
 def _cancel_once_accepted(send_future):
-    """done-callback for a send_goal_async future whose behaviour was already
-    invalidated before the goal handle came back: cancel the goal the moment
-    the server accepts it, so an abandoned goal can't keep driving the robot.
-    Without this, the window between "goal sent" and "goal handle received"
-    (at 1 Hz ticks, up to a full tick wide) would leak an uncancellable goal."""
+    """Cancel the goal behind a send_goal_async future whose behaviour was
+    already invalidated before update() harvested the goal handle, so an
+    abandoned goal can't keep driving the robot. Without this, the window
+    between "goal sent" and "goal handle harvested" (at 1 Hz ticks, up to a
+    full tick wide) would leak an uncancellable goal.
+
+    Used two ways by terminate(), because the future can be in either state
+    at invalidation time and BOTH must cancel (see terminate()):
+      - as a done-callback, when the server hasn't answered yet;
+      - called directly, when the future has already resolved but no tick
+        has run since to move the handle into _goal_handle.
+    Safe either way: it only touches the future's already-available result."""
     try:
         goal_handle = send_future.result()
     except Exception:  # future cancelled/errored -- nothing was ever accepted
@@ -178,8 +185,24 @@ class CallAction(py_trees.behaviour.Behaviour):
         if new_status == py_trees.common.Status.INVALID:
             if self._goal_handle is not None:
                 self._goal_handle.cancel_goal_async()
-            elif self._send_future is not None and not self._send_future.done():
-                self._send_future.add_done_callback(_cancel_once_accepted)
+            elif self._send_future is not None:
+                # Both halves of the accept race have to cancel, and the
+                # already-resolved half is the LIKELIER one, not an exotic
+                # corner: initialise() sends the goal and update() runs in
+                # the same tick with no spin in between, so the handle is
+                # never harvested on the dispatching tick; the executor then
+                # resolves the send future within milliseconds; and the next
+                # tick's failing VehicleStatusOK invalidates the `route`
+                # subtree through a memory=False Sequence, which stops
+                # children[index+1:] WITHOUT ticking them -- so update()
+                # never runs again and _goal_handle stays None. Checking only
+                # `not done()` here (what the first fix wave did) therefore
+                # issued no cancel at all for a full tick after every single
+                # goal dispatch.
+                if self._send_future.done():
+                    _cancel_once_accepted(self._send_future)
+                else:
+                    self._send_future.add_done_callback(_cancel_once_accepted)
             self._send_future = None
             self._result_future = None
             self._goal_handle = None
