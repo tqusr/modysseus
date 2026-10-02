@@ -71,10 +71,34 @@ class WaitUntil(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.RUNNING
 
 
+def _cancel_once_accepted(send_future):
+    """done-callback for a send_goal_async future whose behaviour was already
+    invalidated before the goal handle came back: cancel the goal the moment
+    the server accepts it, so an abandoned goal can't keep driving the robot.
+    Without this, the window between "goal sent" and "goal handle received"
+    (at 1 Hz ticks, up to a full tick wide) would leak an uncancellable goal."""
+    try:
+        goal_handle = send_future.result()
+    except Exception:  # future cancelled/errored -- nothing was ever accepted
+        return
+    if goal_handle is not None and goal_handle.accepted:
+        goal_handle.cancel_goal_async()
+
+
 class CallAction(py_trees.behaviour.Behaviour):
     """Sends a ROS 2 action goal on initialise(); RUNNING until a result
     arrives, then SUCCESS/FAILURE based on it. `on_success` fires once,
     exactly when the result is SUCCEEDED, before returning SUCCESS.
+
+    SAFETY: an action goal is state held by a *remote* server, not by this
+    behaviour. py_trees invalidating this behaviour (the root Selector
+    switching to `safe_stop`, or a reactive Sequence killing a dangling
+    runner -- see mission_tree.build_mission_tree) only drops this side's
+    futures; Nav2's controller_server / opennav_docking's docking_server go
+    right on executing the goal, i.e. right on driving the robot, with
+    nobody left watching. `terminate()` below closes that by actually
+    cancelling the goal on the server (both NavigateToPose and
+    DockRobot/UndockRobot support cancellation -- see its docstring).
     """
 
     def __init__(self, name, node, action_type, action_name, goal_builder, on_success=None):
@@ -85,9 +109,14 @@ class CallAction(py_trees.behaviour.Behaviour):
         self.client = ActionClient(node, action_type, action_name)
         self._send_future = None
         self._result_future = None
+        # The accepted goal's handle, held for exactly one reason: so
+        # terminate() can cancel the goal server-side. None whenever no goal
+        # of ours is in flight.
+        self._goal_handle = None
 
     def initialise(self):
         self._result_future = None
+        self._goal_handle = None
         self._send_future = self.client.send_goal_async(self.goal_builder())
 
     def update(self):
@@ -98,6 +127,7 @@ class CallAction(py_trees.behaviour.Behaviour):
             self._send_future = None
             if not goal_handle.accepted:
                 return py_trees.common.Status.FAILURE
+            self._goal_handle = goal_handle
             self._result_future = goal_handle.get_result_async()
 
         if self._result_future is not None:
@@ -105,6 +135,9 @@ class CallAction(py_trees.behaviour.Behaviour):
                 return py_trees.common.Status.RUNNING
             result = self._result_future.result()
             self._result_future = None
+            # The goal has reached a terminal state server-side; there is
+            # nothing left to cancel.
+            self._goal_handle = None
             if result.status == GoalStatus.STATUS_SUCCEEDED:
                 if self.on_success is not None:
                     self.on_success()
@@ -112,3 +145,41 @@ class CallAction(py_trees.behaviour.Behaviour):
             return py_trees.common.Status.FAILURE
 
         return py_trees.common.Status.RUNNING
+
+    def terminate(self, new_status):
+        """Cancel an in-flight goal when this behaviour is INVALIDATED.
+
+        INVALID (as opposed to SUCCESS/FAILURE, where update() has already
+        seen a terminal result and cleared the handle) is py_trees' "you are
+        no longer part of the active branch" signal -- for this tree, that's
+        the safe-stop path: VehicleStatusOK/Localize failing makes the
+        reactive `Mission` Sequence invalidate the whole `route` subtree
+        underneath it, which propagates down to whichever CallAction was
+        RUNNING. Letting that goal keep running would mean the behaviour
+        tree reports "stopped" while Nav2/opennav_docking is still actively
+        commanding velocity.
+
+        Cancellation is supported by every action type this class is used
+        with here (grep `CallAction(` in mission_tree.py: NavigateToPose,
+        DockRobot, UndockRobot -- all three), confirmed against the
+        installed Jazzy packages on this machine, not assumed:
+          - NavigateToPose: nav2_bt_navigator's BtActionServer polls
+            `action_server_->is_cancel_requested()` from its BT run loop and
+            halts the tree on a cancel, logging "Goal canceled"
+            (/opt/ros/jazzy/include/nav2_behavior_tree/
+            bt_action_server_impl.hpp, lines ~303-351).
+          - DockRobot/UndockRobot: opennav_docking's docking_server runs
+            `checkAndWarnIfCancelled(...)` every control cycle and publishes
+            zero velocity on its way out -- both template instantiations
+            (`...checkAndWarnIfCancelledI...DockRobot...` and
+            `...UndockRobot...`) are present in
+            /opt/ros/jazzy/lib/opennav_docking/opennav_docking.
+        """
+        if new_status == py_trees.common.Status.INVALID:
+            if self._goal_handle is not None:
+                self._goal_handle.cancel_goal_async()
+            elif self._send_future is not None and not self._send_future.done():
+                self._send_future.add_done_callback(_cancel_once_accepted)
+            self._send_future = None
+            self._result_future = None
+            self._goal_handle = None
