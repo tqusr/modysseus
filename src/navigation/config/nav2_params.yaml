@@ -1,0 +1,445 @@
+# Nav2 parameters for Modysseus, adapted from nav2_bringup's own shipped
+# example (/opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml) and the
+# collision_monitor package's own shipped example
+# (/opt/ros/jazzy/share/nav2_collision_monitor/params/collision_monitor_params.yaml).
+#
+# Deliberately NOT included (trimmed from the stock example):
+#   - amcl: slam_toolbox (Task 3, localize.launch.py) already publishes
+#     map->odom from a saved pose graph. A second localizer would fight it
+#     for the same TF edge, exactly the two-publisher TF problem Task 1 hit
+#     and documented for odom->base_footprint.
+#   - map_server: slam_toolbox's localization node already publishes /map
+#     (transient-local), which the static_layer below subscribes to
+#     directly. A second map_server publishing the same topic would race it.
+#   - smoother_server, waypoint_follower, route_server, docking_server: not
+#     needed for a bare NavigateToPose (the default
+#     navigate_to_pose_w_replanning_and_recovery.xml BT references none of
+#     their actions/services) and out of this task's scope (docking already
+#     has its own server from Task 5). Left out of the lifecycle node set in
+#     navigation.launch.py too, rather than carried as dead config.
+#
+# Frames: base_footprint everywhere (never base_link) - the binding TF
+# architecture decision from Task 1's report: the sim's own diff-drive
+# plugin owns odom->base_footprint, robot_state_publisher owns the static
+# base_footprint->base_link, and nothing else may publish either edge.
+#
+# Footprint: einride_mini_truck is a 6-wheel skid-steer, track 0.17452 m,
+# wheelbase 0.171 m (vendor docs / earlier task notes). Half-diagonal from
+# the base_footprint origin to a wheel-contact corner is
+# sqrt((0.171/2)^2 + (0.17452/2)^2) =~ 0.122 m; robot_radius: 0.18 below
+# adds a conservative ~0.06 m margin for the chassis body/bumper overhang
+# the wheel-only geometry doesn't capture, without tuning tightly (out of
+# scope per the brief - this only needs to work reliably, not quickly).
+# A circular footprint (radius, not a polygon) is used throughout: a
+# skid-steer turns by sliding wheels sideways and is expected to rotate
+# in place during recovery behaviors, so a direction-agnostic footprint is
+# the conservative choice over a tight rectangle.
+#
+# Sensors (from einride_mini_truck_bringup/launch/simulation.launch.py and
+# einride_mini_truck_description's model.sdf):
+#   - lidar: /scan (sensor_msgs/LaserScan, LD19 2D lidar)
+#   - camera: /oak/points (sensor_msgs/PointCloud2, coloured cloud built by
+#     simulation.launch.py's point_cloud_xyzrgb_node from the OAK-D Lite's
+#     depth+colour streams, already in a TF-resolvable frame via
+#     oak_calibration_tf). Costmap obstacle layers and the collision
+#     monitor both consume it directly as a PointCloud2 observation source
+#     - no separate conversion needed.
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.3
+      movement_time_allowance: 15.0
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: true
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 0.2
+
+    # Rotation shim wraps MPPI: on a new path it rotates in place to face the
+    # path's initial heading first, then hands off to MPPI for the rest of
+    # the follow - avoids MPPI's sampled trajectories fighting a large
+    # initial heading error on a skid-steer base. Per Nav2's own pattern,
+    # the wrapped controller's parameters live in this SAME "FollowPath"
+    # namespace alongside the shim's own - RotationShimController
+    # instantiates primary_controller under this same plugin name.
+    FollowPath:
+      plugin: "nav2_rotation_shim_controller::RotationShimController"
+      primary_controller: "nav2_mppi_controller::MPPIController"
+      angular_dist_threshold: 0.3
+      forward_sampling_distance: 0.3
+      rotate_to_heading_angular_vel: 1.0
+      max_angular_accel: 2.0
+      simulate_ahead_time: 1.0
+      rotate_to_goal_heading: false
+
+      # --- nav2_mppi_controller::MPPIController params (wrapped above) ---
+      time_steps: 56
+      model_dt: 0.05
+      batch_size: 1000
+      vx_max: 0.3
+      vx_min: -0.15
+      vy_max: 0.0
+      vy_min: 0.0
+      wz_max: 1.0
+      vx_std: 0.2
+      vy_std: 0.0
+      wz_std: 0.4
+      iteration_count: 1
+      prune_distance: 1.7
+      transform_tolerance: 0.1
+      temperature: 0.3
+      gamma: 0.015
+      motion_model: "DiffDrive"
+      visualize: true
+      regenerate_noises: true
+      TrajectoryVisualizer:
+        trajectory_step: 5
+        time_step: 3
+      critics: [
+        "ConstraintCritic", "CostCritic", "GoalCritic",
+        "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
+        "PathAngleCritic", "PreferForwardCritic"]
+      ConstraintCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 4.0
+      GoalCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 1.4
+      GoalAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.0
+        threshold_to_consider: 0.5
+      PreferForwardCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        threshold_to_consider: 0.5
+      CostCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 3.81
+        near_collision_cost: 253
+        critical_cost: 300.0
+        # false, not true: with a radius-only footprint (robot_radius below,
+        # no polygon), Costmap2DROS does not populate a footprint the
+        # critic can use - "true" here throws
+        # "Considering footprint in collision checking but no robot
+        # footprint provided in the costmap" out of configure() and aborts
+        # the whole lifecycle bringup (found during this task's own
+        # verification run). CostCritic still checks the costmap cost at
+        # the robot's center either way; per-point footprint checking is
+        # handled instead by inflation_layer's cost gradient sized around
+        # robot_radius.
+        consider_footprint: false
+        collision_cost: 1000000.0
+        near_goal_distance: 1.0
+        trajectory_point_step: 2
+      PathAlignCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 14.0
+        max_path_occupancy_ratio: 0.05
+        trajectory_point_step: 4
+        threshold_to_consider: 0.5
+        offset_from_furthest: 20
+        use_path_orientations: false
+      PathFollowCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 5.0
+        offset_from_furthest: 5
+        threshold_to_consider: 1.4
+      PathAngleCritic:
+        enabled: true
+        cost_power: 1
+        cost_weight: 2.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
+        max_angle_to_furthest: 1.0
+        mode: 0
+
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    costmap_update_timeout: 1.0
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      tolerance: 0.3
+      use_astar: false
+      allow_unknown: true
+
+behavior_server:
+  ros__parameters:
+    use_sim_time: true
+    local_costmap_topic: local_costmap/costmap_raw
+    global_costmap_topic: global_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: base_footprint
+    transform_tolerance: 0.1
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+bt_navigator:
+  ros__parameters:
+    use_sim_time: true
+    global_frame: map
+    robot_base_frame: base_footprint
+    # Fused estimate (Task 1's EKF), per the standing rule that anything
+    # wanting the corrected estimate must consume this topic - the EKF
+    # deliberately does not publish any TF (publish_tf: false), so there is
+    # no odom->base_footprint edge to prefer instead.
+    odom_topic: /odometry/filtered
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    action_server_result_timeout: 900.0
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
+    navigate_to_pose:
+      plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
+    # Defaults (unset): nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
+    # and navigate_through_poses_w_replanning_and_recovery.xml - these only
+    # call ComputePathToPose, FollowPath, and the spin/wait/backup recovery
+    # actions above; no smoother/waypoint/route/docking dependency.
+    error_code_names:
+      - compute_path_error_code
+      - follow_path_error_code
+
+velocity_smoother:
+  ros__parameters:
+    use_sim_time: true
+    smoothing_frequency: 20.0
+    stamp_smoothed_velocity_with_smoothing_time: false
+    scale_velocities: false
+    feedback: "OPEN_LOOP"
+    max_velocity: [0.3, 0.0, 1.0]
+    min_velocity: [-0.15, 0.0, -1.0]
+    max_accel: [1.5, 0.0, 2.0]
+    max_decel: [-1.5, 0.0, -2.0]
+    odom_topic: "/odometry/filtered"
+    odom_duration: 0.1
+    deadband_velocity: [0.0, 0.0, 0.0]
+    velocity_timeout: 1.0
+
+# Last stage before /cmd_vel. Input is velocity_smoother's output
+# (cmd_vel_smoothed, wired up in navigation.launch.py); output is the real
+# /cmd_vel the sim's diff-drive plugin consumes. Stop/slowdown zones are
+# centred on base_footprint and sized relative to the footprint above
+# (robot_radius 0.18) rather than only covering the front, since a
+# skid-steer can need to stop while rotating in place or reversing during a
+# recovery behavior, not only while driving forward.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: true
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel_smoothed"
+    cmd_vel_out_topic: "cmd_vel"
+    state_topic: "collision_monitor_state"
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    base_shift_correction: true
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop", "PolygonSlow"]
+    PolygonStop:
+      type: "polygon"
+      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      action_type: "stop"
+      min_points: 4
+      visualize: true
+      polygon_pub_topic: "polygon_stop"
+      enabled: true
+    PolygonSlow:
+      type: "polygon"
+      points: "[[0.4, 0.4], [0.4, -0.4], [-0.4, -0.4], [-0.4, 0.4]]"
+      action_type: "slowdown"
+      min_points: 4
+      slowdown_ratio: 0.5
+      visualize: true
+      polygon_pub_topic: "polygon_slowdown"
+      enabled: true
+    observation_sources: ["scan", "oak_cloud"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      min_height: 0.05
+      max_height: 1.0
+      enabled: true
+    oak_cloud:
+      type: "pointcloud"
+      topic: "/oak/points"
+      # 0.1, not 0.02: verified during this task's testing that the OAK-D
+      # Lite sim's depth cloud returns self-detection/near-field noise
+      # within ~10cm of the camera (seen as marked cells as close as 3.5cm
+      # from the robot's own origin in the costmap) - too low a height
+      # floor let that noise through as phantom "obstacles" immediately
+      # around the robot, which corrupted the planner's very first path
+      # segment on every 1 Hz replan and kept RotationShimController
+      # re-entering its rotate-in-place phase forever (robot would only
+      # ever spin, never drive, repeatedly failing progress_checker).
+      min_height: 0.1
+      max_height: 1.0
+      enabled: true
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: base_footprint
+      rolling_window: true
+      width: 3
+      height: 3
+      resolution: 0.05
+      robot_radius: 0.18
+      plugins: ["lidar_layer", "camera_layer", "inflation_layer"]
+      lidar_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: "scan"
+        scan:
+          topic: "/scan"
+          sensor_frame: ""
+          data_type: "LaserScan"
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          clearing: true
+          marking: true
+          inf_is_valid: false
+      camera_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: "oak_cloud"
+        oak_cloud:
+          topic: "/oak/points"
+          sensor_frame: ""
+          data_type: "PointCloud2"
+          # min_obstacle_height 0.1 (not 0.02) and obstacle_min_range 0.2
+          # (not 0.0): verified during this task's testing that the
+          # OAK-D Lite sim camera returns self-detection/near-field noise
+          # within a few cm of the robot's own origin - a low height floor
+          # and no range floor let that noise mark phantom "obstacles"
+          # immediately around the robot on every costmap update, which
+          # corrupted the planner's very first path segment on every 1 Hz
+          # replan and kept RotationShimController re-entering its
+          # rotate-in-place phase forever (robot only ever spun in place,
+          # repeatedly failing progress_checker, never actually driving).
+          min_obstacle_height: 0.1
+          max_obstacle_height: 2.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.3
+      always_send_full_costmap: true
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      robot_radius: 0.18
+      # Matches arena.yaml's own resolution (src/localization/maps/arena.yaml)
+      # so the static layer never has to resample the saved map.
+      resolution: 0.025
+      track_unknown_space: true
+      plugins: ["static_layer", "lidar_layer", "camera_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      lidar_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: "scan"
+        scan:
+          topic: "/scan"
+          sensor_frame: ""
+          data_type: "LaserScan"
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          clearing: true
+          marking: true
+          inf_is_valid: false
+      camera_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: "oak_cloud"
+        oak_cloud:
+          topic: "/oak/points"
+          sensor_frame: ""
+          data_type: "PointCloud2"
+          # min_obstacle_height 0.1 (not 0.02) and obstacle_min_range 0.2
+          # (not 0.0): verified during this task's testing that the
+          # OAK-D Lite sim camera returns self-detection/near-field noise
+          # within a few cm of the robot's own origin - a low height floor
+          # and no range floor let that noise mark phantom "obstacles"
+          # immediately around the robot on every costmap update, which
+          # corrupted the planner's very first path segment on every 1 Hz
+          # replan and kept RotationShimController re-entering its
+          # rotate-in-place phase forever (robot only ever spun in place,
+          # repeatedly failing progress_checker, never actually driving).
+          min_obstacle_height: 0.1
+          max_obstacle_height: 2.0
+          obstacle_max_range: 2.5
+          obstacle_min_range: 0.2
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.0
+          clearing: true
+          marking: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.3
+      always_send_full_costmap: true
