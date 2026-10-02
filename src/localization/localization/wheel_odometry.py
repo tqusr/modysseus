@@ -100,6 +100,26 @@ inherited from the driver's intent to mirror simulation's `/wheel_encoders`
 (where positive joint angle is forward rotation). If it is wrong, the symptom
 is unmistakable and is listed in this feature's report. The index order (left
 then right) IS documented, in both the node and `hardware.yaml`.
+
+UNRESOLVED: THE REAL ROBOT'S ENCODER DATA RUNS ~28-30x TOO FAST, CAUSE UNKNOWN.
+Live testing found the pose computed from real `/wheel_encoders` data advances
+roughly 28-30x faster than the robot's actual speed: the robot drives at
+roughly walking pace (~5 km/h, ~1.39 m/s) while this module's maths - fed the
+real recorded encoder samples unchanged - computed on the order of 40 m/s from
+the same data. That ratio comes from ONE live capture cross-referenced against
+the robot's known approximate real-world speed, NOT a bench calibration.
+
+The root cause is explicitly UNKNOWN and NOT guessed at here. Candidates were
+considered and discarded: a wrong pulses-per-revolution constant and a wrong
+`WHEEL_RADIUS_M` were both checked against the public Waveshare firmware this
+chassis is nominally built on, and neither gives anything close to a clean
+~29x factor - which suggests this robot's actual firmware differs from that
+public reference in some way nobody has pinned down yet.
+
+`ENCODER_SCALE_TEMP` below (and the `encoder_scale` parameter it feeds) is a
+ROUGH, TEMPORARY, UNCALIBRATED stand-in so testing can proceed while the real
+cause is investigated - see its own comment before touching it, and do not let
+it quietly become the permanent answer.
 """
 
 import math
@@ -123,6 +143,27 @@ SCRUB_FACTOR = 1.2435
 #: Effective wheel separation in metres: `GEOMETRIC_TRACK_M * SCRUB_FACTOR`,
 #: rounded as model.sdf spells it. This is the number to use.
 WHEEL_SEPARATION_M = 0.21701
+
+#: TEMPORARY, UNCALIBRATED correction for the real robot's encoder data
+#: running ~28-30x too fast - see the module docstring's "UNRESOLVED" section.
+#:
+#: This is a ROUGH stand-in derived from a single live comparison against the
+#: robot's approximate real-world speed (~5 km/h / ~1.39 m/s), NOT a measured
+#: or derived constant. It is a plain guess at the scale needed to make the
+#: numbers roughly sane, nothing more.
+#:
+#: The actual root cause of the ~28-30x discrepancy is UNKNOWN and is
+#: deliberately NOT being guessed at here. Wrong pulses-per-revolution and
+#: wrong wheel diameter were both considered against the public Waveshare
+#: firmware this chassis is nominally based on, and neither cleanly explains a
+#: ~29x factor - which points at this robot's actual firmware differing from
+#: that public reference somehow, not at a simple unit-conversion mistake.
+#:
+#: THIS VALUE MUST BE REPLACED WITH A PROPERLY MEASURED ONE before this
+#: odometry is trusted for anything beyond rough testing - in particular,
+#: before any real autonomous navigation or docking attempt on hardware. Do
+#: not let this default silently become permanent.
+ENCODER_SCALE_TEMP = 1.0 / 29.0
 
 #: Longest gap between two encoder samples that is still integrated as a
 #: single constant-curvature arc, in seconds. The link runs near 80 Hz
@@ -289,6 +330,13 @@ class WheelOdometry:
             See the module docstring before changing it.
         max_sample_gap_sec: see `MAX_SAMPLE_GAP_SEC`.
         max_wheel_speed: see `MAX_WHEEL_SPEED_MPS`.
+        encoder_scale: TEMPORARY multiplier applied to each side's displacement
+            before any kinematics, to correct for the still-unexplained
+            ~28-30x too-fast real encoder data - see the module docstring's
+            "UNRESOLVED" section and `ENCODER_SCALE_TEMP`. Defaults to `1.0`,
+            i.e. OFF: this class never applies a hidden correction unless a
+            caller explicitly asks for one. `wheel_odometry_node.py` is the
+            caller that defaults it to `ENCODER_SCALE_TEMP` instead.
 
     Raises:
         InvalidGeometry: either geometric value is not strictly positive.
@@ -298,7 +346,8 @@ class WheelOdometry:
                  wheel_radius=WHEEL_RADIUS_M,
                  wheel_separation=WHEEL_SEPARATION_M,
                  max_sample_gap_sec=MAX_SAMPLE_GAP_SEC,
-                 max_wheel_speed=MAX_WHEEL_SPEED_MPS):
+                 max_wheel_speed=MAX_WHEEL_SPEED_MPS,
+                 encoder_scale=1.0):
         if wheel_radius <= 0.0:
             raise InvalidGeometry(
                 'wheel_radius must be > 0, got {}'.format(wheel_radius))
@@ -309,6 +358,7 @@ class WheelOdometry:
         self.wheel_separation = wheel_separation
         self.max_sample_gap_sec = max_sample_gap_sec
         self.max_wheel_speed = max_wheel_speed
+        self.encoder_scale = encoder_scale
         self._pose = Pose2D()
         #: `(stamp_sec, left_angle, right_angle)` of the sample the next one is
         #: measured against, or None until the first sample arrives.
@@ -377,6 +427,12 @@ class WheelOdometry:
         d_left, d_right = side_displacements(
             (anchor_left, anchor_right), (left_angle, right_angle),
             self.wheel_radius)
+        # TEMPORARY correction - see ENCODER_SCALE_TEMP and the module
+        # docstring's "UNRESOLVED" section. A no-op at the class default of
+        # 1.0, applied here (before the plausibility guard and the kinematics)
+        # so both see the corrected, physically-meaningful displacement.
+        d_left *= self.encoder_scale
+        d_right *= self.encoder_scale
         if max(abs(d_left), abs(d_right)) > self.max_wheel_speed * dt:
             return Update(UPDATE_IMPLAUSIBLE, self._pose)
 
@@ -386,8 +442,8 @@ class WheelOdometry:
 
 
 __all__ = [
-    'GEOMETRIC_TRACK_M', 'InvalidGeometry', 'MAX_SAMPLE_GAP_SEC',
-    'MAX_WHEEL_SPEED_MPS', 'Pose2D', 'SCRUB_FACTOR',
+    'ENCODER_SCALE_TEMP', 'GEOMETRIC_TRACK_M', 'InvalidGeometry',
+    'MAX_SAMPLE_GAP_SEC', 'MAX_WHEEL_SPEED_MPS', 'Pose2D', 'SCRUB_FACTOR',
     'STRAIGHT_LINE_EPSILON_RAD', 'UPDATE_BACKWARD_TIME', 'UPDATE_FIRST_SAMPLE',
     'UPDATE_GAP', 'UPDATE_IMPLAUSIBLE', 'UPDATE_OK', 'Update',
     'WHEEL_RADIUS_M', 'WHEEL_SEPARATION_M', 'WheelOdometry', 'advance',

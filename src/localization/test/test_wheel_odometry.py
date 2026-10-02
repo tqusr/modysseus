@@ -24,7 +24,8 @@ import math
 
 import pytest
 
-from localization.wheel_odometry import (GEOMETRIC_TRACK_M, InvalidGeometry,
+from localization.wheel_odometry import (ENCODER_SCALE_TEMP,
+                                         GEOMETRIC_TRACK_M, InvalidGeometry,
                                          MAX_SAMPLE_GAP_SEC,
                                          MAX_WHEEL_SPEED_MPS, Pose2D,
                                          SCRUB_FACTOR, UPDATE_BACKWARD_TIME,
@@ -262,6 +263,11 @@ def test_wheel_odometry_defaults_to_the_robot_the_module_documents():
     assert odometry.wheel_separation == WHEEL_SEPARATION_M
     assert odometry.max_sample_gap_sec == MAX_SAMPLE_GAP_SEC
     assert odometry.max_wheel_speed == MAX_WHEEL_SPEED_MPS
+    # The class itself must stay neutral: the TEMPORARY encoder correction is
+    # something only wheel_odometry_node.py opts into, not a hidden default
+    # that would surprise a caller constructing WheelOdometry directly (e.g.
+    # these very tests).
+    assert odometry.encoder_scale == 1.0
 
 
 @pytest.mark.parametrize('radius, separation', [
@@ -540,3 +546,113 @@ def test_the_pose_survives_every_skipped_sample_unchanged():
                    odometry.update(5.01, _angle_for(99.0), _angle_for(99.0))):
         assert update.status != UPDATE_OK
         assert update.pose == good
+
+
+# --------------------------------------------------------------------------
+# WheelOdometry.update: encoder_scale (TEMPORARY, uncalibrated correction)
+#
+# See the module docstring's "UNRESOLVED" section and ENCODER_SCALE_TEMP:
+# real encoder data runs ~28-30x too fast for a reason that is not yet
+# understood, and encoder_scale is a stand-in correction, not a real fix.
+# These tests only pin down that the multiplier is wired in correctly -
+# they say nothing about whether 1/29 is the right number.
+# --------------------------------------------------------------------------
+
+def test_encoder_scale_defaults_to_a_no_op():
+    """Redundant with the construction test above, but explicit on purpose.
+
+    The whole point of defaulting `encoder_scale` to 1.0 is that nobody who
+    does not ask for it sees any behaviour change. This test would fail if
+    that default were ever accidentally flipped to ENCODER_SCALE_TEMP or
+    anything else non-neutral.
+    """
+    odometry = WheelOdometry()
+    assert odometry.encoder_scale == 1.0
+
+
+def test_encoder_scale_of_one_matches_every_existing_result_exactly():
+    """encoder_scale=1.0 must be byte-identical to not passing it at all.
+
+    Multiplying by 1.0 is exact in IEEE-754 for every finite float, so this
+    compares with `==`, not `pytest.approx`: anything less than an exact
+    match would mean encoder_scale was implemented as something other than a
+    plain multiplicative no-op at 1.0.
+    """
+    baseline = WheelOdometry()
+    scaled = WheelOdometry(encoder_scale=1.0)
+
+    baseline.update(0.0, 0.0, 0.0)
+    scaled.update(0.0, 0.0, 0.0)
+
+    # A mix of straight, turning and in-place-rotation samples, same as the
+    # scenarios already covered above.
+    samples = [
+        (0.1, _angle_for(0.02), _angle_for(0.02)),
+        (0.2, _angle_for(0.02) + _angle_for(-0.01),
+         _angle_for(0.02) + _angle_for(0.01)),
+        (0.3, _angle_for(0.03) + _angle_for(0.03),
+         _angle_for(0.03) + _angle_for(0.09)),
+    ]
+    for stamp, left, right in samples:
+        baseline_update = baseline.update(stamp, left, right)
+        scaled_update = scaled.update(stamp, left, right)
+        assert scaled_update.status == baseline_update.status
+        assert scaled_update.pose == baseline_update.pose
+        assert scaled_update.linear_velocity == baseline_update.linear_velocity
+        assert scaled_update.angular_velocity == baseline_update.angular_velocity
+
+
+def test_encoder_scale_scales_straight_line_displacement_exactly():
+    """A non-1.0 encoder_scale must scale the computed displacement by exactly
+    that factor - straight-line motion, where the relationship is linear and
+    unambiguous (no sin/cos of a scaled angle involved, unlike a turn)."""
+    raw = WheelOdometry()
+    corrected = WheelOdometry(encoder_scale=0.5)
+    raw.update(0.0, 0.0, 0.0)
+    corrected.update(0.0, 0.0, 0.0)
+
+    travelled = 0.02
+    raw_update = raw.update(0.1, _angle_for(travelled), _angle_for(travelled))
+    corrected_update = corrected.update(
+        0.1, _angle_for(travelled), _angle_for(travelled))
+
+    assert raw_update.status == UPDATE_OK
+    assert corrected_update.status == UPDATE_OK
+    assert corrected_update.pose.x == pytest.approx(0.5 * raw_update.pose.x)
+    assert corrected_update.pose.y == pytest.approx(0.0)
+    assert corrected_update.linear_velocity == pytest.approx(
+        0.5 * raw_update.linear_velocity)
+    assert corrected_update.angular_velocity == pytest.approx(0.0)
+
+
+def test_encoder_scale_scales_in_place_rotation_exactly():
+    """Same check, for yaw: an in-place turn where theta is linear in the
+    per-side displacement (ds stays zero either way, so no sin/cos coupling)."""
+    raw = WheelOdometry()
+    corrected = WheelOdometry(encoder_scale=0.5)
+    raw.update(0.0, 0.0, 0.0)
+    corrected.update(0.0, 0.0, 0.0)
+
+    half_arc = 0.01
+    raw_update = raw.update(
+        0.1, _angle_for(-half_arc), _angle_for(half_arc))
+    corrected_update = corrected.update(
+        0.1, _angle_for(-half_arc), _angle_for(half_arc))
+
+    assert raw_update.status == UPDATE_OK
+    assert corrected_update.status == UPDATE_OK
+    assert (corrected_update.pose.x, corrected_update.pose.y) == pytest.approx(
+        (0.0, 0.0))
+    assert corrected_update.pose.theta == pytest.approx(
+        0.5 * raw_update.pose.theta)
+    assert corrected_update.angular_velocity == pytest.approx(
+        0.5 * raw_update.angular_velocity)
+
+
+def test_encoder_scale_temp_is_the_documented_one_over_twenty_nine():
+    """Guards the shipped temporary constant against an accidental edit.
+
+    Not a claim that 1/29 is correct - see the module docstring - only that
+    whatever value is shipped as the default is the one actually reviewed.
+    """
+    assert ENCODER_SCALE_TEMP == pytest.approx(1.0 / 29.0)
