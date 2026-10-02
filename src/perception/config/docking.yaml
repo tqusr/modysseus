@@ -1,8 +1,13 @@
 ### opennav_docking's `docking_server` (nav2_util::LifecycleNode) parameters.
 #
-# Dock x/y positions are hand-transcribed from `src/mission/config/docks.yaml`
-# (THAT FILE IS THE SOURCE OF TRUTH for the arena's real dock x/y). If you
-# change a dock's x/y there, update the matching `pose:` entry below. The
+# Dock x/y positions are DERIVED from `src/mission/config/docks.yaml` (THAT
+# FILE IS THE SOURCE OF TRUTH for where the arena's docks physically are).
+# They are not a straight copy: each pose here is that dock's pose moved
+# 0.126 m outward along its own approach heading, because docks.yaml's
+# dock_pose is the dock's back WALL and this file's pose is where the ROBOT
+# must end up -- see the measured chassis-standoff note on the `docks:`
+# block below. If you change a dock's x/y in docks.yaml, re-derive the
+# matching `pose:` entry below with that same offset. The
 # `docks:` list and each dock's `type`/`frame`/`pose`/`id` block here are
 # opennav_docking's own dock-database format (parsed by its own
 # `parseDockParams`), NOT the same YAML schema as mission's docks.yaml.
@@ -101,21 +106,81 @@ docking_server:
             staging_x_offset: -0.6
             staging_yaw_offset: 0.0
 
-        # The 8 arena docks. `pose` is [x, y, theta] in `frame`. x/y copied
-        # verbatim from mission/config/docks.yaml's `dock_pose`; theta is
-        # that file's dock_pose.theta + pi, normalized to (-pi, pi] -- see
-        # header comment for why. `id` carries the AprilTag id (unused by
-        # SimpleChargingDock in fixed-pose mode; kept for documentation /
-        # future vision mode).
+        # The 8 arena docks. `pose` is [x, y, theta] in `frame`. theta is
+        # mission/config/docks.yaml's dock_pose.theta + pi, normalized to
+        # (-pi, pi] -- see header comment for why. `id` carries the AprilTag
+        # id (unused by SimpleChargingDock in fixed-pose mode; kept for
+        # documentation / future vision mode).
+        #
+        # ===== CHASSIS STANDOFF (0.126 m), MEASURED 2026-10-02 =====
+        #
+        # x/y are NOT a verbatim copy of docks.yaml's dock_pose any more.
+        # Each is that dock's pose moved 0.126 m OUTWARD, i.e. back along
+        # its own approach heading:
+        #
+        #     pose.x = docks.yaml dock_pose.x - 0.126 * cos(theta)
+        #     pose.y = docks.yaml dock_pose.y - 0.126 * sin(theta)
+        #
+        # (theta being this file's theta, the robot's nose-forward heading
+        # INTO the wall -- so subtracting along it walks back out into the
+        # room). Uniform across all 8; docks.yaml stays the source of truth
+        # for where the docks physically ARE.
+        #
+        # Why. docks.yaml's dock_pose is the arena.sdf dock model's own
+        # origin, which sits ON THE INNER FACE OF THE DOCK'S BACK WALL
+        # (arena.sdf: "Frame: origin at floor level on the centre of the
+        # back wall's inner face"). It is a wall, not a robot pose. The
+        # robot's chassis nose is 0.1231 m ahead of base_footprint
+        # (base_link.stl bbox x-max 0.12260 + base_link's own +0.00046 x
+        # offset, at z ~0.05 m, i.e. squarely inside the wall's 0-0.30 m
+        # height band), and dock_backwards is false, so base_footprint
+        # physically cannot get closer than ~0.123 m to that wall.
+        #
+        # Measured live, docked at dock A, both readings taken within
+        # seconds of "Robot is charging!":
+        #     Gazebo ground truth (gz model -p): x = 2.86604
+        #     TF map->base_footprint (SLAM):     x = 2.958
+        #     dock A's old configured pose:      x = 2.992
+        # Ground truth standoff = 2.992 - 2.86604 = 0.1260 m, and the nose
+        # tip lands at 2.8660 + 0.1231 = 2.9891, i.e. 3 mm short of the
+        # wall. So there is NO Gazebo wall penetration: the chassis stops
+        # against the wall exactly where the geometry says it must.
+        #
+        # What actually satisfied `docking_threshold: 0.05` before this
+        # change was a 0.092 m LOCALIZATION ERROR: the estimate (2.958) sat
+        # 9.2 cm ahead of the truth (2.866), leaving an apparent residual of
+        # 2.992 - 2.958 = 0.034 m < 0.05. That error is wheel odometry
+        # accumulated while the robot pushed its stalled, slipping drivetrain
+        # into the wall (it keeps commanding v_linear_min until it believes
+        # it has arrived). Docking "worked" on the strength of its own
+        # odometry drift -- stalling the motors against a wall for several
+        # seconds every single dock, with the estimate left ~9 cm wrong
+        # afterwards. Hence the offset: the target is now a pose the robot
+        # can actually reach, so it stops just short of contact instead of
+        # pushing.
         docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
-        A: {type: "arena_dock", frame: "map", pose: [2.992, -1.500, 0.0], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [2.992, 1.500, 0.0], id: "1"}
-        C: {type: "arena_dock", frame: "map", pose: [1.500, 2.992, 1.5708], id: "2"}
-        D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.992, 1.5708], id: "3"}
-        E: {type: "arena_dock", frame: "map", pose: [-2.992, 1.500, 3.14159], id: "4"}
-        F: {type: "arena_dock", frame: "map", pose: [-2.992, -1.500, 3.14159], id: "5"}
-        G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.992, -1.5708], id: "6"}
-        H: {type: "arena_dock", frame: "map", pose: [1.500, -2.992, -1.5708], id: "7"}
+        A: {type: "arena_dock", frame: "map", pose: [2.866, -1.500, 0.0], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [2.866, 1.500, 0.0], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [1.500, 2.866, 1.5708], id: "2"}
+        D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.866, 1.5708], id: "3"}
+        E: {type: "arena_dock", frame: "map", pose: [-2.866, 1.500, 3.14159], id: "4"}
+        F: {type: "arena_dock", frame: "map", pose: [-2.866, -1.500, 3.14159], id: "5"}
+        G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.866, -1.5708], id: "6"}
+        H: {type: "arena_dock", frame: "map", pose: [1.500, -2.866, -1.5708], id: "7"}
+        # Hand spot-check of the formula on a second, differently-oriented
+        # dock (G, on the -Y wall, theta -pi/2, approach heading -y):
+        #   pose.y = -2.992 - 0.126 * sin(-pi/2) = -2.992 + 0.126 = -2.866,
+        # and the nose then lands at -2.866 - 0.1231 = -2.9891, the same
+        # 3 mm short of dock G's own wall. Consistent.
+        #
+        # !!! UNVERIFIED ON REAL HARDWARE !!! This offset and the standoff
+        # behind it were measured in simulation only. If docking fails to
+        # reach `docking_threshold` on the physical robot, CHECK FOR
+        # CHASSIS-TO-WALL CONTACT BEFORE THE THRESHOLD IS REACHED first:
+        # this sim's exact contact/slip behaviour against a thin static wall
+        # (and the ~0.09 m odometry drift it produced) may not reproduce,
+        # and a real dock's physical geometry may differ from arena.sdf's by
+        # more than the 0.05 m threshold.
 
         # Approach controller. Mostly opennav_docking's own defaults; the
         # collision block is spelled out explicitly because it is the only
