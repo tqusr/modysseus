@@ -9,7 +9,7 @@ from rclpy.time import Time
 from std_srvs.srv import Trigger
 
 from mission.bt_behaviours import BlackboardFlagTrue, CallAction, SetBlackboardFlag, WaitUntil
-from nav2_msgs.action import DockRobot, NavigateToPose
+from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 
 _logger = logging.getLogger('mission.mission_tree')
 
@@ -329,6 +329,27 @@ def _at_position(name, dock_key, prefix):
     return _AtPosition()
 
 
+def _not_docked_anywhere(name):
+    """SUCCESS iff BB_CURRENT_POSITION is NOT "dock:<something>" -- i.e. the
+    robot is not currently sitting docked anywhere (unset, or "predock:...").
+    Used to gate UndockRobot: only call it when we're actually docked."""
+
+    class _NotDocked(py_trees.behaviour.Behaviour):
+        def __init__(self):
+            super().__init__(name)
+            self.blackboard = self.attach_blackboard_client(name=name)
+            self.blackboard.register_key(
+                key=BB_CURRENT_POSITION, access=py_trees.common.Access.READ)
+
+        def update(self):
+            current = self.blackboard.get(BB_CURRENT_POSITION) \
+                if self.blackboard.exists(BB_CURRENT_POSITION) else None
+            is_docked = isinstance(current, str) and current.startswith("dock:")
+            return py_trees.common.Status.FAILURE if is_docked else py_trees.common.Status.SUCCESS
+
+    return _NotDocked()
+
+
 def build_goto_dock_subtree(node, dock_key, docks):
     """dock_key is BB_SOURCE or BB_DESTINATION — resolved at tick time, so the
     same subtree definition serves both the Load and Deliver branches."""
@@ -342,6 +363,10 @@ def build_goto_dock_subtree(node, dock_key, docks):
 
     def mark_dock():
         position_writer.set(BB_CURRENT_POSITION, f"dock:{position_writer.get(dock_key)}")
+
+    def mark_undocked():
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
 
     at_dock = _at_position("At dock?", dock_key, "dock")
     at_predock = _at_position("At pre-dock?", dock_key, "predock")
@@ -375,7 +400,34 @@ def build_goto_dock_subtree(node, dock_key, docks):
         action_name="dock_robot", goal_builder=dock_goal, on_success=mark_dock,
     )
 
+    # Real-stack discovery (Task 8): opennav_docking parks the robot nose-first
+    # against the dock's wall, close enough that the LIDAR/camera obstacle
+    # layers mark the robot's own current cell as lethal/inflated in the
+    # global costmap -- NavigateToPose's planner then can never find a start
+    # pose within tolerance to plan FROM, forever, for any destination. There
+    # was no undock step anywhere in this tree before, so the first "dock,
+    # then navigate elsewhere" transition (never exercised end-to-end until
+    # Task 8's full route test) deadlocked the whole mission. Fixed by
+    # calling the real `/undock_robot` action (opennav_docking's own
+    # UndockRobot, live alongside dock_robot) before ever trying to navigate
+    # away from a dock -- it reverses the robot off the dock using local
+    # costmap/odometry control, not a global plan, so it doesn't hit the same
+    # chicken-and-egg problem. An empty goal is enough: the docking_server
+    # uses "current dock information from last docking request" per its own
+    # action definition, which is always this same dock since mark_dock just
+    # set it. Gated on _not_docked_anywhere so it's skipped (not just
+    # harmlessly retried) when the robot was never docked in the first place
+    # (e.g. the very first leg of the whole mission, spawning free).
+    undock = CallAction(
+        "UndockRobot", node=node, action_type=UndockRobot,
+        action_name="undock_robot", goal_builder=UndockRobot.Goal, on_success=mark_undocked,
+    )
+    ensure_undocked = py_trees.composites.Selector(
+        name="Not docked?", memory=False,
+        children=[_not_docked_anywhere("NotDockedAnywhere?"), undock])
+
     move_and_dock = py_trees.composites.Sequence(name="Move and dock", memory=True, children=[
+        ensure_undocked,
         py_trees.composites.Selector(name="At pre-dock?", memory=False, children=[at_predock, navigate]),
         dock_is_free,
         dock_action,

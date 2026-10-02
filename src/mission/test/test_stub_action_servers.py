@@ -1,5 +1,5 @@
 import rclpy
-from nav2_msgs.action import DockRobot, NavigateToPose
+from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 from rclpy.action import ActionClient
 from rclpy.executors import SingleThreadedExecutor
 
@@ -46,6 +46,24 @@ def test_dock_robot_succeeds():
 
         assert client.wait_for_server(timeout_sec=5.0)
         result = _call_action_and_wait(executor, client, DockRobot.Goal())
+
+        assert result.status == 4  # GoalStatus.STATUS_SUCCEEDED
+    finally:
+        rclpy.shutdown()
+
+
+def test_undock_robot_succeeds():
+    rclpy.init()
+    try:
+        server = StubActionServers(delay_sec=0.05)
+        client_node = rclpy.create_node("test_client")
+        client = ActionClient(client_node, UndockRobot, "undock_robot")
+        executor = SingleThreadedExecutor()
+        executor.add_node(server)
+        executor.add_node(client_node)
+
+        assert client.wait_for_server(timeout_sec=5.0)
+        result = _call_action_and_wait(executor, client, UndockRobot.Goal())
 
         assert result.status == 4  # GoalStatus.STATUS_SUCCEEDED
     finally:

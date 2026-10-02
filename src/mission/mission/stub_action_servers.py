@@ -1,15 +1,15 @@
 import time
 
 import rclpy
-from nav2_msgs.action import DockRobot, NavigateToPose
+from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 from rclpy.action import ActionServer
 from rclpy.node import Node
 
 
 class StubActionServers(Node):
-    """Stands in for Nav2's NavigateToPose and the docking server's DockRobot
-    until those owners' real implementations land. Accepts any goal, waits
-    `delay_sec`, succeeds.
+    """Stands in for Nav2's NavigateToPose and the docking server's
+    DockRobot/UndockRobot until those owners' real implementations land.
+    Accepts any goal, waits `delay_sec`, succeeds.
 
     Threading note: `ActionServer` schedules each goal's execute callback via
     `self._node.executor.create_task(...)` (rclpy/action/server.py), which just
@@ -35,6 +35,8 @@ class StubActionServers(Node):
             self, NavigateToPose, 'navigate_to_pose', self._execute_navigate)
         self._dock_server = ActionServer(
             self, DockRobot, 'dock_robot', self._execute_dock)
+        self._undock_server = ActionServer(
+            self, UndockRobot, 'undock_robot', self._execute_undock)
 
     def _execute_navigate(self, goal_handle):
         self.get_logger().info('Stub NavigateToPose: driving...')
@@ -47,6 +49,12 @@ class StubActionServers(Node):
         time.sleep(self.delay_sec)
         goal_handle.succeed()
         return DockRobot.Result()
+
+    def _execute_undock(self, goal_handle):
+        self.get_logger().info('Stub UndockRobot: undocking...')
+        time.sleep(self.delay_sec)
+        goal_handle.succeed()
+        return UndockRobot.Result()
 
 
 def main():

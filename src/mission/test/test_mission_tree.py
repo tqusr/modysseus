@@ -136,7 +136,9 @@ def test_mission_tree_completes_a_route_cycle():
 
         # Two full routes cross several real-time poll_sec=1.0 WaitUntil gates
         # (DockIsFree x2, SagaLoaded, SagaUnloaded) using the real wall clock,
-        # not a fake one -- give it real margin.
+        # not a fake one -- give it real margin. Also exercises UndockRobot
+        # (Task 8) three times (A->B, B->C across the route boundary, C->D),
+        # each a cheap extra CallAction round trip against the stub.
         deadline = time.monotonic() + 40.0
         route_ids_seen = set()
         route_id_existed = False
