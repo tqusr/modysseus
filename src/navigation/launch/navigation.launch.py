@@ -17,8 +17,23 @@ stock bringup's own wiring:
     collision_monitor  --(cmd_vel_in_topic=cmd_vel_smoothed, cmd_vel_out_topic=cmd_vel)--> /cmd_vel
 behavior_server's own cmd_vel (used by Spin/BackUp/DriveOnHeading) is
 remapped the same way, so recovery behaviors go through the same smoother
-and collision monitor as normal path following - nothing bypasses the chain
-to reach the robot directly.
+and collision monitor as normal path following - nothing in THIS launch file
+bypasses the chain to reach the robot directly.
+
+ONE KNOWN, DELIBERATE EXCEPTION, OUTSIDE THIS FILE: `docking_server`
+(perception/launch/docking.launch.py, opennav_docking) publishes /cmd_vel
+DIRECTLY during docking and undocking legs - it does not go through this
+velocity smoother or this collision monitor. So while a docking or undocking
+action is running, the chain above is not in the loop at all, and the
+polygons configured for collision_monitor in nav2_params.yaml are not
+protecting the robot. Collision protection during those legs comes solely
+from docking_server's own `controller.use_collision_detection`
+(perception/config/docking.yaml), enabled in the final-review fix wave,
+which checks its projected approach trajectory against this stack's
+local_costmap. Rerouting docking through this chain was considered and
+rejected as too risky to the proven live delivery routes: the stop polygon
+would trip on the dock's own back wall on every approach. See
+docking.launch.py's own docstring for the full rationale.
 
 Lifecycle: nav2_lifecycle_manager is Nav2's own purpose-built, widely-used
 manager for exactly this multi-node bring-up - unlike the vendor event-based

@@ -127,7 +127,11 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
-      visualize: true
+      # Debug-only: publishes the candidate-trajectory MarkerArray at the
+      # 20 Hz controller rate, which is real compute on the target Jetson
+      # Orin Nano (no GPU) for something only a human watching RViz ever
+      # reads. Set true temporarily when tuning critics.
+      visualize: false
       regenerate_noises: true
       TrajectoryVisualizer:
         trajectory_step: 5

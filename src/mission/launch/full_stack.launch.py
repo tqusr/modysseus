@@ -107,8 +107,12 @@ def generate_launch_description():
                                description='World file basename (without .sdf).'),
         DeclareLaunchArgument('headless', default_value='true',
                                description='Run the Gazebo server without the GUI.'),
-        DeclareLaunchArgument('rviz', default_value='true',
-                               description='Open RViz.'),
+        DeclareLaunchArgument('rviz', default_value='false',
+                               description='Open RViz. Off by default to '
+                                           'match headless and to keep the '
+                                           'compute budget for the stack '
+                                           'itself; pass rviz:=true on a dev '
+                                           'machine.'),
         DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
         DeclareLaunchArgument(
             'saga_token', default_value='',

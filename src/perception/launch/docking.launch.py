@@ -7,6 +7,32 @@ real arena dock poses (`config/docking.yaml`, itself hand-transcribed from
 staging-pose formula and why fixed-pose docking was chosen over a vision-
 corrected AprilTag approach for this iteration).
 
+KNOWN, DELIBERATE EXCEPTION TO THE "COLLISION MONITOR IS ALWAYS LAST" RULE.
+
+Everywhere else in this stack, a velocity command reaches the robot only
+through controller -> velocity_smoother -> nav2_collision_monitor ->
+`/cmd_vel` (see navigation/launch/navigation.launch.py, which remaps even
+the recovery behaviours' `cmd_vel` into that chain so nothing bypasses it).
+`docking_server` does NOT: it publishes `/cmd_vel` directly for the whole
+docking and undocking leg, bypassing both the velocity smoother and the
+standalone collision monitor.
+
+That is accepted on purpose, not an oversight. Rerouting docking's output
+through the chain was considered in the final-review fix wave and rejected
+as the higher-risk option against two proven live delivery routes: the
+collision monitor's stop polygon (+-0.25 m around base_footprint, see
+navigation/config/nav2_params.yaml) would fire on the dock's own back wall
+during every single approach, and the smoother's limits would fight the
+docking controller's own pose-regulation profile.
+
+Collision protection during docking/undocking therefore comes from exactly
+one place: `docking_server`'s own `controller.use_collision_detection`
+(config/docking.yaml), which is now ENABLED and checks the projected
+approach trajectory against Nav2's local costmap, with
+`dock_collision_threshold` carving out the dock structure itself. If that
+parameter is ever turned off again, docking legs run with no obstacle
+protection whatsoever.
+
 LIFECYCLE -- same issue class as Tasks 2/3's `slam_toolbox` nodes, confirmed
 (not assumed) before writing this file: `ros2 node info` against a running
 `opennav_docking` process shows `/docking_server/change_state` and

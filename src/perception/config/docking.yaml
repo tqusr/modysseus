@@ -117,13 +117,46 @@ docking_server:
         G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.992, -1.5708], id: "6"}
         H: {type: "arena_dock", frame: "map", pose: [1.500, -2.992, -1.5708], id: "7"}
 
-        # Default approach controller (opennav_docking's own defaults),
-        # except `use_collision_detection: false` -- its default (true)
-        # subscribes to a Nav2 local costmap (`local_costmap/costmap_raw`)
-        # that doesn't exist in this stack yet (no Nav2 bringup/costmaps as
-        # of this task). Revisit once Nav2 costmaps land.
+        # Approach controller. Mostly opennav_docking's own defaults; the
+        # collision block is spelled out explicitly because it is the only
+        # obstacle protection the robot has during a docking/undocking leg.
+        #
+        # COLLISION DETECTION (enabled in the final-review fix wave). This
+        # was `use_collision_detection: false` with a "no Nav2 costmaps in
+        # this stack yet, revisit once they land" note -- they landed in
+        # Task 6 and nobody revisited. It is on now, checking the projected
+        # approach trajectory against Nav2's local costmap.
+        #
+        # This matters more here than anywhere else in the stack:
+        # docking_server publishes /cmd_vel DIRECTLY during docking and
+        # undocking, bypassing the velocity smoother and the standalone
+        # nav2_collision_monitor that every other velocity command in this
+        # stack goes through (a deliberate, documented exception -- see the
+        # docstrings in perception/launch/docking.launch.py and
+        # navigation/launch/navigation.launch.py). So this parameter is not
+        # a redundant second layer; without it a docking leg has no
+        # obstacle protection at all.
+        #
+        # The topics are the defaults, repeated for visibility: both are
+        # published by navigation.launch.py's local_costmap in the global
+        # namespace (`local_costmap:` in navigation/config/nav2_params.yaml),
+        # which is where docking_server resolves these relative names too.
+        #
+        # dock_collision_threshold is the knob that keeps the dock itself
+        # from aborting its own approach: trajectory points within this
+        # distance of the dock pose are not collision-checked, which is
+        # necessary because the dock's back wall and wings ARE lethal cells
+        # in the local costmap by construction. 0.3 m (the stock Nav2
+        # default) was kept after live verification -- see the measurement
+        # note on the dock poses above/below.
         controller:
-            use_collision_detection: false
+            use_collision_detection: true
+            costmap_topic: "local_costmap/costmap_raw"
+            footprint_topic: "local_costmap/published_footprint"
+            transform_tolerance: 0.1
+            projection_time: 5.0
+            simulation_step: 0.1
+            dock_collision_threshold: 0.3
             k_phi: 3.0
             k_delta: 2.0
             beta: 0.4

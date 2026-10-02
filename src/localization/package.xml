@@ -3,7 +3,7 @@
 <package format="3">
   <name>localization</name>
   <version>0.0.0</version>
-  <description>EKF, SLAM mapping/localization, and AprilTag pose correction for Modysseus.</description>
+  <description>EKF sensor fusion and slam_toolbox mapping/localization for Modysseus. (No AprilTag pose correction: see perception/launch/apriltag.launch.py for why that was never wired up.)</description>
   <maintainer email="albin@stenboda.se">Albin</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
