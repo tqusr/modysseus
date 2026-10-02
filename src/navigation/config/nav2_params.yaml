@@ -38,12 +38,37 @@
 # Sensors (from einride_mini_truck_bringup/launch/simulation.launch.py and
 # einride_mini_truck_description's model.sdf):
 #   - lidar: /scan (sensor_msgs/LaserScan, LD19 2D lidar)
-#   - camera: /oak/points (sensor_msgs/PointCloud2, coloured cloud built by
-#     simulation.launch.py's point_cloud_xyzrgb_node from the OAK-D Lite's
-#     depth+colour streams, already in a TF-resolvable frame via
-#     oak_calibration_tf). Costmap obstacle layers and the collision
-#     monitor both consume it directly as a PointCloud2 observation source
-#     - no separate conversion needed.
+#   - camera: /oak/points_filtered (sensor_msgs/PointCloud2), NOT the raw
+#     /oak/points simulation.launch.py's point_cloud_xyzrgb_node builds from
+#     the OAK-D Lite's depth+colour streams. Verified during this task's own
+#     testing that the raw cloud carries self-detection/near-field noise
+#     within a few cm of the robot's own origin - marking phantom
+#     "obstacles" right around the robot corrupted the planner's path and
+#     stalled the controller entirely (see git history / task report for
+#     the full failure mode). The fix belongs in `perception`, not here: a
+#     pcl_ros CropBox filter
+#     (perception/launch/oak_points_filter.launch.py +
+#     perception/config/oak_points_filter.yaml) removes only points inside
+#     a region sized to the robot's own known body + camera mount geometry
+#     (verified empirically during this task's testing to need ~0.8 m
+#     across, not just the chassis footprint - see that file's own comment
+#     for why), republishing everything else untouched as
+#     /oak/points_filtered. obstacle_min_range below is back down to 0.0 -
+#     the crop filter, not a range floor here, is what excludes the robot's
+#     own body now.
+#
+#     min_obstacle_height/min_height below is a modest 0.05 m, not the 0.1 m
+#     an earlier iteration of this file used globally, and NOT 0.0/0.02:
+#     with the crop filter handling self-detection, retesting at a
+#     near-0 m floor (matching nav2_bringup's own stock LaserScan example)
+#     reproduced the same instability/never-progresses symptom again,
+#     traced to ordinary floor-plane depth-sensor noise elsewhere in the
+#     camera's field of view (not just around the robot) still getting
+#     marked and perturbing the planner's path on every 1 Hz replan. 0.05 m
+#     is a standard, modest floor against that near-universal depth-camera
+#     characteristic - well below any real low obstacle worth avoiding
+#     (a cable, a curb, a pallet lip), so it does not reintroduce the
+#     original blind-to-real-obstacles problem a 0.1 m global cut did.
 
 controller_server:
   ros__parameters:
@@ -301,17 +326,13 @@ collision_monitor:
       enabled: true
     oak_cloud:
       type: "pointcloud"
-      topic: "/oak/points"
-      # 0.1, not 0.02: verified during this task's testing that the OAK-D
-      # Lite sim's depth cloud returns self-detection/near-field noise
-      # within ~10cm of the camera (seen as marked cells as close as 3.5cm
-      # from the robot's own origin in the costmap) - too low a height
-      # floor let that noise through as phantom "obstacles" immediately
-      # around the robot, which corrupted the planner's very first path
-      # segment on every 1 Hz replan and kept RotationShimController
-      # re-entering its rotate-in-place phase forever (robot would only
-      # ever spin, never drive, repeatedly failing progress_checker).
-      min_height: 0.1
+      # Filtered, not raw /oak/points - see this file's header comment and
+      # perception/launch/oak_points_filter.launch.py. min_height 0.05 is a
+      # modest floor-plane-noise margin, not the self-detection fix (the
+      # CropBox filter handles that upstream) - see the header comment for
+      # why a near-zero value here reproduced the same instability.
+      topic: "/oak/points_filtered"
+      min_height: 0.05
       max_height: 1.0
       enabled: true
 
@@ -351,23 +372,24 @@ local_costmap:
         enabled: true
         observation_sources: "oak_cloud"
         oak_cloud:
-          topic: "/oak/points"
+          # Filtered, not raw /oak/points - see this file's header comment
+          # and perception/launch/oak_points_filter.launch.py. The CropBox
+          # filter there removes the camera's self-detection noise at the
+          # source (a region sized to the robot's own body/camera-mount
+          # geometry, obstacle_min_range stays 0.0 here because of it).
+          # min_obstacle_height 0.05 is a separate, modest floor-plane-noise
+          # margin (see this file's header comment for why a near-zero
+          # value here reproduced the same instability even with the crop
+          # filter in place) - still far below any real low obstacle worth
+          # avoiding, not the aggressive 0.1 m global cut an earlier
+          # iteration used.
+          topic: "/oak/points_filtered"
           sensor_frame: ""
           data_type: "PointCloud2"
-          # min_obstacle_height 0.1 (not 0.02) and obstacle_min_range 0.2
-          # (not 0.0): verified during this task's testing that the
-          # OAK-D Lite sim camera returns self-detection/near-field noise
-          # within a few cm of the robot's own origin - a low height floor
-          # and no range floor let that noise mark phantom "obstacles"
-          # immediately around the robot on every costmap update, which
-          # corrupted the planner's very first path segment on every 1 Hz
-          # replan and kept RotationShimController re-entering its
-          # rotate-in-place phase forever (robot only ever spun in place,
-          # repeatedly failing progress_checker, never actually driving).
-          min_obstacle_height: 0.1
+          min_obstacle_height: 0.05
           max_obstacle_height: 2.0
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.2
+          obstacle_min_range: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           clearing: true
@@ -417,23 +439,24 @@ global_costmap:
         enabled: true
         observation_sources: "oak_cloud"
         oak_cloud:
-          topic: "/oak/points"
+          # Filtered, not raw /oak/points - see this file's header comment
+          # and perception/launch/oak_points_filter.launch.py. The CropBox
+          # filter there removes the camera's self-detection noise at the
+          # source (a region sized to the robot's own body/camera-mount
+          # geometry, obstacle_min_range stays 0.0 here because of it).
+          # min_obstacle_height 0.05 is a separate, modest floor-plane-noise
+          # margin (see this file's header comment for why a near-zero
+          # value here reproduced the same instability even with the crop
+          # filter in place) - still far below any real low obstacle worth
+          # avoiding, not the aggressive 0.1 m global cut an earlier
+          # iteration used.
+          topic: "/oak/points_filtered"
           sensor_frame: ""
           data_type: "PointCloud2"
-          # min_obstacle_height 0.1 (not 0.02) and obstacle_min_range 0.2
-          # (not 0.0): verified during this task's testing that the
-          # OAK-D Lite sim camera returns self-detection/near-field noise
-          # within a few cm of the robot's own origin - a low height floor
-          # and no range floor let that noise mark phantom "obstacles"
-          # immediately around the robot on every costmap update, which
-          # corrupted the planner's very first path segment on every 1 Hz
-          # replan and kept RotationShimController re-entering its
-          # rotate-in-place phase forever (robot only ever spun in place,
-          # repeatedly failing progress_checker, never actually driving).
-          min_obstacle_height: 0.1
+          min_obstacle_height: 0.05
           max_obstacle_height: 2.0
           obstacle_max_range: 2.5
-          obstacle_min_range: 0.2
+          obstacle_min_range: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
           clearing: true
