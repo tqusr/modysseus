@@ -178,16 +178,41 @@ class StopRobot(py_trees.behaviour.Behaviour):
          behaviour-tree-visible part, and what the unit tests assert).
       2. The first such tick also starts a `publish_hz` ROS timer on the
          mission node that keeps republishing zero between ticks, which is
-         what actually holds the line against a 20 Hz publisher. It is torn
-         down in terminate(INVALID) -- i.e. the moment py_trees leaves the
-         safe-stop branch because `Mission` succeeded again -- so it can
-         never fight a healthy, resumed navigation.
+         what actually holds the line against a 20 Hz publisher.
+
+    That hold MUST be released the moment the tree leaves the safe-stop
+    branch, or it fights resumed navigation instead of protecting anything.
+    Two independent releases, because the first wave of this fix shipped
+    only the first one and it turned out not to be reached (see
+    build_mission_tree's safe-stop comment for the py_trees Selector
+    mechanism, re-reviewed and reproduced):
+      a. terminate(INVALID) -- the fast, exact path: py_trees invalidating
+         this behaviour means the branch lost. SUCCESS/FAILURE must NOT tear
+         the timer down, because StopRobot returns SUCCESS on every tick of
+         an ongoing safe stop.
+      b. a hold deadline refreshed by update(), checked by the timer
+         callback itself: if no tick has re-armed the hold within
+         hold_timeout_sec, the timer logs, stops publishing and destroys
+         itself. This is the backstop for ANY failure to deliver (a) --
+         whether a py_trees composite subtlety, a future tree
+         restructuring, or a tick loop that simply stopped. The failure it
+         exists to prevent is /cmd_vel pinned at zero for the life of the
+         process, which is unrecoverable and (measured, round 1) silently
+         degrades navigation by interleaving zeros with the controller's
+         commands.
+
+    Sizing hold_timeout_sec: `safe_stop` is a memory=True Sequence, so this
+    behaviour is ticked once per stop/report/pause cycle (~3 s of sim time,
+    up to ~6 s wall at the ~0.5x sim rate measured on this machine), NOT
+    once per tick -- so the timeout has to be generous enough never to fire
+    during a genuine ongoing stop. It is a backstop, not a rate limit.
 
     The real stop is still CallAction.terminate()'s goal cancellation (the
     server-side fix); this is the belt-and-braces cover for the window
     between "goal cancel requested" and "the server has actually wound
     down", and for anything commanding /cmd_vel that this tree never knew
-    about.
+    about. So releasing the hold on the deadline is safe even mid-stop: the
+    goal that was driving the robot is already cancelled.
     """
 
     #: Fast relative to Mission's 1 Hz tick, and to Nav2's 20 Hz controller
@@ -195,32 +220,58 @@ class StopRobot(py_trees.behaviour.Behaviour):
     #: be free on a Jetson Orin Nano.
     DEFAULT_PUBLISH_HZ = 10.0
 
-    def __init__(self, name, node, publish_hz=DEFAULT_PUBLISH_HZ):
+    #: How long the zero-velocity hold survives without being re-armed by a
+    #: tick before it expires itself. Must comfortably exceed the safe-stop
+    #: cycle (see the class docstring); 10 s of stale hold in exchange for
+    #: never pinning /cmd_vel forever.
+    DEFAULT_HOLD_TIMEOUT_SEC = 10.0
+
+    def __init__(self, name, node, publish_hz=DEFAULT_PUBLISH_HZ,
+                 hold_timeout_sec=DEFAULT_HOLD_TIMEOUT_SEC):
         super().__init__(name)
         self._node = node
         self._publisher = node.create_publisher(Twist, '/cmd_vel', 10)
         self._publish_hz = publish_hz
+        self._hold_timeout_sec = hold_timeout_sec
         self._timer = None
+        self._hold_deadline = None
 
     def update(self):
+        # Re-arm first: a tick is the only evidence this behaviour is still
+        # in the active branch.
+        self._hold_deadline = \
+            self._node.get_clock().now() + Duration(seconds=self._hold_timeout_sec)
         self._publish_zero()
         if self._timer is None:
-            self._timer = self._node.create_timer(1.0 / self._publish_hz, self._publish_zero)
+            self._timer = self._node.create_timer(1.0 / self._publish_hz, self._hold_zero)
         return py_trees.common.Status.SUCCESS
 
     def terminate(self, new_status):
-        # INVALID means the root Selector has switched back to `Mission`
-        # (py_trees invalidates the losing branch) -- stop holding /cmd_vel
-        # down so navigation can drive again. SUCCESS/FAILURE, by contrast,
-        # happen on every tick within an ongoing safe stop; the timer must
-        # survive those.
+        # INVALID means this branch lost -- the root Selector switched back
+        # to `Mission`, or `safe_stop`'s own Sequence re-initialised for a
+        # new cycle. Stop holding /cmd_vel down so navigation can drive
+        # again. SUCCESS/FAILURE, by contrast, happen on every tick within
+        # an ongoing safe stop; the timer must survive those.
         if new_status == py_trees.common.Status.INVALID:
             self._cancel_timer()
+
+    def _hold_zero(self):
+        """Timer callback: publish zero only while the hold is still armed."""
+        if self._hold_deadline is not None and \
+                self._node.get_clock().now() > self._hold_deadline:
+            self.logger.warning(
+                f"zero-velocity hold expired after {self._hold_timeout_sec}s without a "
+                "tick -- releasing /cmd_vel (the safe-stop branch should have been "
+                "invalidated; see StopRobot's docstring)")
+            self._cancel_timer()
+            return
+        self._publish_zero()
 
     def _publish_zero(self):
         self._publisher.publish(Twist())
 
     def _cancel_timer(self):
+        self._hold_deadline = None
         if self._timer is not None:
             self._timer.cancel()
             self._node.destroy_timer(self._timer)
@@ -746,4 +797,47 @@ def build_mission_tree(node, saga_client, docks):
         Pause("Sleep 2s", duration_sec=2.0),
     ])
 
-    return py_trees.composites.Selector(name="Mission or safe stop", memory=False, children=[mission, safe_stop])
+    # The safe-stop branch must never report a TERMINAL status to the root
+    # Selector below. This is not stylistic -- it is the fix for a Critical
+    # re-review finding, and the reason is a real asymmetry in py_trees
+    # 2.5.0's Selector.tick() (/opt/ros/jazzy/lib/python3.12/site-packages/
+    # py_trees/composites.py:372-447), read and reproduced rather than
+    # assumed:
+    #
+    #   * A displaced child is invalidated only via the priority-interrupt
+    #     path at composites.py:424-431, which is guarded by
+    #     `previous != self.current_child`.
+    #   * `previous` is sampled at line 417, AFTER the `self.status !=
+    #     RUNNING` reset at lines 384-388 has already set
+    #     `current_child = children[0]`.
+    #
+    # So on the tick after the Selector itself returned a terminal status,
+    # `previous == current_child == mission`, the guard is false, and the
+    # lower-priority `safe_stop` subtree is NEVER stop(INVALID)-ed --
+    # Composite.stop() only cascades INVALID (composites.py:169-173), so a
+    # SUCCESS does not clean up either. Concretely, before this wrapper:
+    # `safe_stop` ended every cycle with SUCCESS (its Pause completing),
+    # which made the root Selector SUCCESS, so a recovery landing on the
+    # very next tick left StopRobot's zero-/cmd_vel timer running for the
+    # life of the process -- roughly a coin flip per recovery, measured.
+    # Recovery landing mid-cycle (root still RUNNING on safe_stop) took the
+    # correct path, which is exactly why the first fix wave's unit tests and
+    # live runs both missed it.
+    #
+    # Keeping this branch permanently non-terminal means the root Selector
+    # stays RUNNING on it while it is engaged, so leaving it can only ever
+    # happen through the priority-interrupt path -- which cascades INVALID
+    # down the whole subtree (Decorator.stop forwards it, decorators.py:
+    # 150-151), tearing down StopRobot's timer AND cancelling any future
+    # CallAction placed under safe_stop. Both terminal statuses are mapped,
+    # not just the SUCCESS that bit us: FAILURE is unreachable with today's
+    # three children, and "unreachable by construction" is precisely the
+    # assumption that failed here.
+    safe_stop_held = py_trees.decorators.SuccessIsRunning(
+        name="Hold safe stop",
+        child=py_trees.decorators.FailureIsRunning(
+            name="Safe stop never terminal", child=safe_stop),
+    )
+
+    return py_trees.composites.Selector(
+        name="Mission or safe stop", memory=False, children=[mission, safe_stop_held])
