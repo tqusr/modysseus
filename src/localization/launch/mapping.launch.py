@@ -1,9 +1,25 @@
-"""Run slam_toolbox in mapping mode against the sim's /scan topic.
+"""Run slam_toolbox in mapping mode against /scan.
 
 One-time data-collection launch: drive the robot around the arena while this
 runs, then save the resulting map with nav2_map_server's map_saver_cli. Task
 3's localization launch is the long-running counterpart that consumes the
 saved map instead of building one.
+
+SIM OR HARDWARE, decided by the `use_sim_time` argument. It defaults to true,
+because the simulator is what this file was written against and what every
+existing caller means; `mapping_mission_hardware.launch.py` is the one that
+passes false. The argument exists at all because
+`mapper_params_online_async.yaml` hardcodes `use_sim_time: true`, and a node
+left at true with no /clock publisher sits at time zero forever and looks
+exactly like a hang (the same trap common.launch.py's own `use_sim_time`
+comment describes in the vendor repo). The dict passed after the config file
+below overrides that YAML key - launch applies parameter sources in order and
+the last one wins - so the YAML can stay as it is while this launch still
+decides the clock.
+
+Nothing else in this file differs between the two modes: the lifecycle dance,
+the watchdog and the sync-vs-async choice are all about this node, not about
+where its scans come from.
 
 Uses `sync_slam_toolbox_node`, not the async variant: this sim has two
 ros_gz_bridge publishers on /clock, producing small time jumps. Over a
@@ -63,10 +79,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (EmitEvent, ExecuteProcess, LogInfo,
-                            RegisterEventHandler, TimerAction)
+from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
+                            LogInfo, RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -90,7 +107,14 @@ def generate_launch_description():
         name='slam_toolbox',
         namespace='',
         output='screen',
-        parameters=[config, {'use_lifecycle_manager': False, 'use_sim_time': True}],
+        parameters=[config, {
+            'use_lifecycle_manager': False,
+            # Overrides the YAML's hardcoded `use_sim_time: true` - parameter
+            # sources are applied in order and the last one wins. The bare
+            # LaunchConfiguration is enough: launch_ros parses an untyped
+            # substitution by YAML rules, so 'true'/'false' arrive as a bool.
+            'use_sim_time': LaunchConfiguration('use_sim_time'),
+        }],
     )
 
     def change_state(transition_id):
@@ -126,6 +150,16 @@ def generate_launch_description():
     ))
 
     return LaunchDescription([
+        # Defaulted, unlike the vendor repo's common.launch.py, which
+        # deliberately leaves this argument with no default so every entry
+        # point has to state its mode. Here the default is the backward
+        # compatibility: `ros2 launch localization mapping_mission.launch.py`
+        # and every other existing caller means simulation and must keep
+        # behaving exactly as before. mapping_mission_hardware.launch.py is
+        # the one caller that passes false, and it does so explicitly.
+        DeclareLaunchArgument('use_sim_time', default_value='true',
+                              description='Take time from /clock. True in '
+                                          'simulation, false on hardware.'),
         slam_node,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
