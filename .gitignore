@@ -1,6 +1,10 @@
 devel/
 logs/
+# colcon writes its build logs to ./log/ in whatever directory it is run
+# from, i.e. the repo root for this workspace's documented build command.
+log/
 build/
+install/
 bin/
 lib/
 msg_gen/
