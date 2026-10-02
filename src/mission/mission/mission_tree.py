@@ -3,12 +3,25 @@ import math
 import time
 
 import py_trees
+import tf2_ros
 from geometry_msgs.msg import Twist
+from rclpy.time import Time
+from std_srvs.srv import Trigger
 
 from mission.bt_behaviours import BlackboardFlagTrue, CallAction, SetBlackboardFlag, WaitUntil
 from nav2_msgs.action import DockRobot, NavigateToPose
 
 _logger = logging.getLogger('mission.mission_tree')
+
+# How stale a TF lookup can be before it's treated as "not actually live" --
+# e.g. slam_toolbox or the odom->base_footprint broadcaster has died but the
+# last transform is still sitting in the tf2 buffer.
+MAX_TF_AGE_SEC = 2.0
+
+# nav2_lifecycle_manager's own health-check service for the navigation stack
+# (navigation.launch.py's `lifecycle_manager_navigation`) -- a std_srvs/Trigger
+# that returns success=True only while all of its managed nodes are active.
+LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE = '/lifecycle_manager_navigation/is_active'
 
 BB_ROUTE_ID = "route_id"
 BB_SOURCE = "source_dock"
@@ -166,6 +179,121 @@ class ReportRouteDone(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
 
+def _transform_is_recent(tf_buffer, node, target_frame, source_frame, max_age_sec=MAX_TF_AGE_SEC):
+    """True iff target_frame<-source_frame resolves in tf_buffer right now,
+    and the resolved transform's own stamp is within max_age_sec of the
+    node's current clock -- i.e. some live broadcaster is actually still
+    publishing it, not just a stale entry left over in the tf2 cache.
+
+    `rclpy.time.Time()` (zero) is tf2's own convention for "the latest
+    transform available", not a literal timestamp to match.
+
+    Only the UPPER bound on age is enforced. Confirmed against the real
+    stack (not assumed): slam_toolbox's localization node here consistently
+    publishes map->odom stamped ~0.9s AHEAD of the node's own clock sample
+    (i.e. age_sec came out around -0.9, not ~0), every single tick -- this
+    is deliberate on slam_toolbox's part, not jitter or a bug, matching
+    localization_params.yaml's own `transform_timeout: 1.0` (stamping
+    slightly into the future is a standard tf2 technique to keep consumers
+    from hitting "extrapolation into the past" given this sim's known dual-
+    /clock-publisher jumps -- see this stack's shared lessons). A transform
+    stamped in the future is, if anything, MORE current than "now", never
+    staler, so rejecting negative age here would misread a healthy,
+    continuously-republished transform as a dropout.
+    """
+    try:
+        transform = tf_buffer.lookup_transform(target_frame, source_frame, Time())
+    except tf2_ros.TransformException as error:
+        _logger.warning(f"TF lookup {target_frame}<-{source_frame} failed: {error}")
+        return False
+    stamp = Time.from_msg(transform.header.stamp)
+    age_sec = (node.get_clock().now() - stamp).nanoseconds / 1e9
+    return age_sec <= max_age_sec
+
+
+class VehicleStatusOK(py_trees.behaviour.Behaviour):
+    """General vehicle health gate feeding Mission's safe-stop branch.
+
+    SUCCESS only while, at minimum:
+      - nav2_lifecycle_manager reports its managed navigation nodes active
+        (polled via its own is_active std_srvs/Trigger service), and
+      - slam_toolbox is actively publishing map->odom (TF lookup, rejecting
+        anything older than max_tf_age_sec).
+    FAILURE otherwise -- including while the lifecycle-manager service
+    simply isn't up yet, which is the correct read for "status not OK".
+    """
+
+    def __init__(self, name, node, tf_buffer, tf_listener,
+                 lifecycle_manager_service=LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
+                 max_tf_age_sec=MAX_TF_AGE_SEC):
+        super().__init__(name)
+        self.node = node
+        self.tf_buffer = tf_buffer
+        # Not otherwise referenced -- held here purely so the listener (and
+        # its tf/tf_static subscriptions) outlives this call and isn't
+        # garbage-collected once build_mission_tree() returns.
+        self._tf_listener = tf_listener
+        self.max_tf_age_sec = max_tf_age_sec
+        self._client = node.create_client(Trigger, lifecycle_manager_service)
+        self._future = None
+        # Latched, not reset to False while a fresh poll is merely in flight --
+        # see _lifecycle_manager_reports_active's docstring for why.
+        self._last_known_active = False
+
+    def update(self):
+        if not self._lifecycle_manager_reports_active():
+            return py_trees.common.Status.FAILURE
+        if not _transform_is_recent(self.tf_buffer, self.node, 'map', 'odom', self.max_tf_age_sec):
+            return py_trees.common.Status.FAILURE
+        return py_trees.common.Status.SUCCESS
+
+    def _lifecycle_manager_reports_active(self):
+        """Non-blocking, like CallAction: tree.tick() must never block on a
+        service response, so this polls via a cached async future instead of
+        rclpy.spin_until_future_complete -- but unlike CallAction (a one-shot
+        goal with no notion of "still fine from last time"), this repolls
+        forever, so the cached *last confirmed* result is returned while a
+        fresh poll is in flight, rather than provisionally reporting False
+        for the tick(s) it takes that poll to resolve. Without that latch,
+        a request fired on tick N (which can't possibly resolve until tick
+        N+1's spin_once has run) would make VehicleStatusOK flicker FAILURE
+        on every tick a new poll happens to be outstanding, tripping the
+        safe-stop branch and invalidating -- and resetting the progress of
+        -- whatever in the `route` subtree was RUNNING, even though nothing
+        actually became unhealthy."""
+        if self._future is None:
+            if self._client.service_is_ready():
+                self._future = self._client.call_async(Trigger.Request())
+            return self._last_known_active
+        if not self._future.done():
+            return self._last_known_active
+        future, self._future = self._future, None
+        try:
+            self._last_known_active = bool(future.result().success)
+        except Exception as error:
+            self.logger.warning(f"{self._client.srv_name} call failed: {error}")
+            self._last_known_active = False
+        return self._last_known_active
+
+
+class Localize(py_trees.behaviour.Behaviour):
+    """Narrower than VehicleStatusOK: specifically "are we localized," not
+    general system health. SUCCESS iff map->base_footprint resolves and is
+    recent (per the established convention, base_frame is base_footprint,
+    not base_link -- see localization/config's own header comments)."""
+
+    def __init__(self, name, node, tf_buffer, max_tf_age_sec=MAX_TF_AGE_SEC):
+        super().__init__(name)
+        self.node = node
+        self.tf_buffer = tf_buffer
+        self.max_tf_age_sec = max_tf_age_sec
+
+    def update(self):
+        is_localized = _transform_is_recent(
+            self.tf_buffer, self.node, 'map', 'base_footprint', self.max_tf_age_sec)
+        return py_trees.common.Status.SUCCESS if is_localized else py_trees.common.Status.FAILURE
+
+
 def _at_position(name, dock_key, prefix):
     class _AtPosition(py_trees.behaviour.Behaviour):
         def __init__(self):
@@ -240,8 +368,13 @@ def build_goto_dock_subtree(node, dock_key, docks):
 
 
 def build_mission_tree(node, saga_client, docks):
-    vehicle_status_ok = py_trees.behaviours.Success(name="VehicleStatusOK (stub)")
-    localize = py_trees.behaviours.Success(name="Localize (stub)")
+    # Single shared Buffer/TransformListener for both health-check behaviours
+    # below, rather than one pair each -- avoids duplicate /tf, /tf_static
+    # subscriptions on the same node for the same data.
+    tf_buffer = tf2_ros.Buffer()
+    tf_listener = tf2_ros.TransformListener(tf_buffer, node, spin_thread=False)
+    vehicle_status_ok = VehicleStatusOK("VehicleStatusOK", node, tf_buffer, tf_listener)
+    localize = Localize("Localize", node, tf_buffer)
 
     have_route = py_trees.composites.Selector(name="Have route", memory=False, children=[
         HasRoute("HasRoute?"),
