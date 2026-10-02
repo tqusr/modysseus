@@ -34,6 +34,14 @@ FUTURE_TF_TOLERANCE_SEC = 2.0
 # that returns success=True only while all of its managed nodes are active.
 LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE = '/lifecycle_manager_navigation/is_active'
 
+# Ground-truth radius (meters) for "is the robot currently sitting at a dock
+# pose" per the TF-based fallback in _not_docked_anywhere, below -- generous
+# above the ~0.03-0.04m docking precision Tasks 5/7/8 have all independently
+# measured, tight enough that merely driving past/near a dock (staging
+# poses are 0.6m out, per mission/config/docks.yaml's own header comment)
+# doesn't false-positive.
+DOCK_PROXIMITY_TOLERANCE_M = 0.3
+
 BB_ROUTE_ID = "route_id"
 BB_SOURCE = "source_dock"
 BB_DESTINATION = "destination_dock"
@@ -228,6 +236,66 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame,
     return -future_tolerance_sec <= age_sec <= max_age_sec
 
 
+def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M):
+    """Ground-truth fallback for "is the robot currently docked somewhere",
+    independent of mission_node's own in-memory blackboard (Task 8 review
+    finding #1): reads the LATEST available map->base_footprint transform
+    and checks it against every known dock's own dock_pose (not staging_pose)
+    within tolerance_m.
+
+    Deliberately does NOT itself re-check TF recency/staleness the way
+    _transform_is_recent does: by the time build_goto_dock_subtree's
+    `ensure_undocked` gate (the only caller of this) is ever ticked,
+    Mission's own root Sequence has already required `VehicleStatusOK` and
+    `Localize` to both SUCCEED that same tick (see build_mission_tree) --
+    i.e. a live, recent map->base_footprint is already guaranteed upstream,
+    so re-deriving that guarantee here would be redundant, not safer.
+
+    Why this exists at all: BB_CURRENT_POSITION is pure in-process
+    behaviour-tree state. If mission_node itself crashes or is manually
+    relaunched while the robot is physically still sitting docked, that
+    blackboard resets to unset -- read alone, _not_docked_anywhere would
+    wrongly conclude "not docked", skip UndockRobot, and silently
+    reintroduce the exact planner deadlock Task 8's own fix exists to
+    prevent, with nothing in the logs pointing at the real cause (the
+    planner failure looks identical either way). This TF check is a second,
+    independent signal from the one piece of state that DOES survive a
+    mission_node restart: the robot's real physical pose.
+
+    Calling UndockRobot speculatively when this (or the blackboard) is
+    wrong is intentionally not a safety concern: opennav_docking's own
+    undockRobot() throws DockNotValid (caught internally, zero velocity
+    published, result.success=False) when it has no stashed dock to undock
+    from -- confirmed against the real source
+    (nav2_docking/opennav_docking/src/docking_server.cpp's undockRobot(),
+    `ChargingDock::Ptr dock = dock_db_->findDockPlugin(dock_type); if
+    (!dock) { throw opennav_docking_core::DockNotValid(...); }` with
+    dock_type falling back to the server's own curr_dock_type_, which is
+    empty until a dock request ever stashes one) -- so a false-positive
+    "docked" reading here costs one harmless failed action call, never
+    robot motion. docking_server is a separate long-running process
+    (docking.launch.py) whose own curr_dock_type_ survives a mission_node-
+    only restart intact and correct, which is the realistic restart
+    scenario this guards -- see the Task 8 report for the one scenario this
+    genuinely cannot cover (docking_server itself also losing its stashed
+    dock, e.g. a full-stack restart while physically docked), which is an
+    opennav_docking API limitation (UndockRobot's goal carries a dock
+    *type*, not a specific dock id/pose) outside what this client can fix.
+    """
+    try:
+        transform = tf_buffer.lookup_transform('map', 'base_footprint', Time())
+    except tf2_ros.TransformException as error:
+        _logger.warning(f"TF lookup map<-base_footprint failed while checking "
+                         f"dock proximity: {error}")
+        return False
+    x = transform.transform.translation.x
+    y = transform.transform.translation.y
+    return any(
+        math.hypot(x - dock.dock_pose["x"], y - dock.dock_pose["y"]) <= tolerance_m
+        for dock in docks.values()
+    )
+
+
 class VehicleStatusOK(py_trees.behaviour.Behaviour):
     """General vehicle health gate feeding Mission's safe-stop branch.
 
@@ -329,10 +397,29 @@ def _at_position(name, dock_key, prefix):
     return _AtPosition()
 
 
-def _not_docked_anywhere(name):
-    """SUCCESS iff BB_CURRENT_POSITION is NOT "dock:<something>" -- i.e. the
-    robot is not currently sitting docked anywhere (unset, or "predock:...").
-    Used to gate UndockRobot: only call it when we're actually docked."""
+def _not_docked_anywhere(name, tf_buffer, docks):
+    """SUCCESS iff NEITHER signal says the robot is currently docked
+    somewhere -- a fail-safe OR of two independent checks (Task 8 review
+    finding #1):
+
+      1. BB_CURRENT_POSITION == "dock:<something>" -- the normal, fast path:
+         this tree's own record of having just completed a DockRobot call.
+      2. _near_any_dock_pose(tf_buffer, docks) -- a TF ground-truth fallback
+         that does NOT depend on this process's own in-memory state, so it
+         still catches "docked" correctly even if BB_CURRENT_POSITION was
+         reset by a mission_node crash/restart while the robot was
+         physically still sitting docked. See _near_any_dock_pose's own
+         docstring for why speculatively firing UndockRobot off this signal
+         alone is safe (opennav_docking fails it harmlessly, never moves
+         the robot, if there's nothing to undock from).
+
+    Either signal alone is enough to conclude "docked" (OR, not AND) --
+    this check only needs to decide whether to ATTEMPT an undock, not to
+    prove definitively that one is needed; a false positive costs one cheap
+    failed action call (see _near_any_dock_pose), while a false negative
+    reintroduces the exact planner deadlock this whole mechanism exists to
+    prevent. Used to gate UndockRobot: only call it when something says
+    we're actually docked."""
 
     class _NotDocked(py_trees.behaviour.Behaviour):
         def __init__(self):
@@ -344,15 +431,47 @@ def _not_docked_anywhere(name):
         def update(self):
             current = self.blackboard.get(BB_CURRENT_POSITION) \
                 if self.blackboard.exists(BB_CURRENT_POSITION) else None
-            is_docked = isinstance(current, str) and current.startswith("dock:")
-            return py_trees.common.Status.FAILURE if is_docked else py_trees.common.Status.SUCCESS
+            blackboard_says_docked = isinstance(current, str) and current.startswith("dock:")
+            if blackboard_says_docked or _near_any_dock_pose(tf_buffer, docks):
+                return py_trees.common.Status.FAILURE
+            return py_trees.common.Status.SUCCESS
 
     return _NotDocked()
 
 
-def build_goto_dock_subtree(node, dock_key, docks):
+def build_ensure_undocked(node, tf_buffer, docks, position_writer):
+    """Selector: SUCCESS immediately if _not_docked_anywhere says we're not
+    currently docked; otherwise fires a real UndockRobot action call before
+    returning (RUNNING while in flight, SUCCESS/FAILURE on its result).
+
+    Extracted as its own top-level function (rather than inlined in
+    build_goto_dock_subtree, where it originally lived) specifically so it
+    can be unit-tested in isolation -- see
+    test_mission_tree.py's test_ensure_undocked_* tests, which tick this
+    directly against a counting fake `undock_robot` action server and
+    assert it fires/doesn't fire under each of the blackboard/TF signal
+    combinations, independent of the full dock/navigate/undock subtree.
+    """
+
+    def mark_undocked():
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
+
+    undock = CallAction(
+        "UndockRobot", node=node, action_type=UndockRobot,
+        action_name="undock_robot", goal_builder=UndockRobot.Goal, on_success=mark_undocked,
+    )
+    return py_trees.composites.Selector(
+        name="Not docked?", memory=False,
+        children=[_not_docked_anywhere("NotDockedAnywhere?", tf_buffer, docks), undock])
+
+
+def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
     """dock_key is BB_SOURCE or BB_DESTINATION — resolved at tick time, so the
-    same subtree definition serves both the Load and Deliver branches."""
+    same subtree definition serves both the Load and Deliver branches.
+    `tf_buffer` is build_mission_tree's own shared tf2_ros.Buffer (same one
+    VehicleStatusOK/Localize use) -- threaded through to
+    build_ensure_undocked's TF ground-truth check, not a new subscription."""
 
     position_writer = py_trees.blackboard.Client(name=f"position-writer-{dock_key}")
     position_writer.register_key(key=dock_key, access=py_trees.common.Access.READ)
@@ -363,10 +482,6 @@ def build_goto_dock_subtree(node, dock_key, docks):
 
     def mark_dock():
         position_writer.set(BB_CURRENT_POSITION, f"dock:{position_writer.get(dock_key)}")
-
-    def mark_undocked():
-        if position_writer.exists(BB_CURRENT_POSITION):
-            position_writer.unset(BB_CURRENT_POSITION)
 
     at_dock = _at_position("At dock?", dock_key, "dock")
     at_predock = _at_position("At pre-dock?", dock_key, "predock")
@@ -412,19 +527,13 @@ def build_goto_dock_subtree(node, dock_key, docks):
     # UndockRobot, live alongside dock_robot) before ever trying to navigate
     # away from a dock -- it reverses the robot off the dock using local
     # costmap/odometry control, not a global plan, so it doesn't hit the same
-    # chicken-and-egg problem. An empty goal is enough: the docking_server
-    # uses "current dock information from last docking request" per its own
-    # action definition, which is always this same dock since mark_dock just
-    # set it. Gated on _not_docked_anywhere so it's skipped (not just
-    # harmlessly retried) when the robot was never docked in the first place
-    # (e.g. the very first leg of the whole mission, spawning free).
-    undock = CallAction(
-        "UndockRobot", node=node, action_type=UndockRobot,
-        action_name="undock_robot", goal_builder=UndockRobot.Goal, on_success=mark_undocked,
-    )
-    ensure_undocked = py_trees.composites.Selector(
-        name="Not docked?", memory=False,
-        children=[_not_docked_anywhere("NotDockedAnywhere?"), undock])
+    # chicken-and-egg problem. Gated on build_ensure_undocked's fail-safe-OR
+    # check (blackboard state OR live TF ground truth -- see that function
+    # and _not_docked_anywhere's docstrings) so it's skipped only when
+    # NEITHER signal says we're docked (e.g. the very first leg of the whole
+    # mission, spawning free), not just on this process's own possibly-stale
+    # blackboard record.
+    ensure_undocked = build_ensure_undocked(node, tf_buffer, docks, position_writer)
 
     move_and_dock = py_trees.composites.Sequence(name="Move and dock", memory=True, children=[
         ensure_undocked,
@@ -453,7 +562,7 @@ def build_mission_tree(node, saga_client, docks):
     load = py_trees.composites.Selector(name="Load", memory=False, children=[
         BlackboardFlagTrue("HoldsPackage?", key=BB_HOLDS_PACKAGE),
         py_trees.composites.Sequence(name="Load at source", memory=True, children=[
-            build_goto_dock_subtree(node, BB_SOURCE, docks),
+            build_goto_dock_subtree(node, BB_SOURCE, docks, tf_buffer),
             WaitUntil("SagaLoaded?", condition=_saga_status_is(saga_client, "loading_complete"),
                       timeout_sec=300.0, poll_sec=1.0),
             SetBlackboardFlag("Set HoldsPackage", key=BB_HOLDS_PACKAGE, value=True),
@@ -463,7 +572,7 @@ def build_mission_tree(node, saga_client, docks):
     deliver = py_trees.composites.Selector(name="Deliver", memory=False, children=[
         BlackboardFlagTrue("PackageDelivered?", key=BB_PACKAGE_DELIVERED),
         py_trees.composites.Sequence(name="Unload at destination", memory=True, children=[
-            build_goto_dock_subtree(node, BB_DESTINATION, docks),
+            build_goto_dock_subtree(node, BB_DESTINATION, docks, tf_buffer),
             WaitUntil("SagaUnloaded?", condition=_saga_route_is_unloaded(saga_client),
                       timeout_sec=300.0, poll_sec=1.0),
             SetBlackboardFlag("Set PackageDelivered", key=BB_PACKAGE_DELIVERED, value=True),

@@ -4,6 +4,8 @@ import py_trees
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
+from nav2_msgs.action import UndockRobot
+from rclpy.action import ActionServer
 from rclpy.duration import Duration
 from rclpy.executors import SingleThreadedExecutor
 from std_srvs.srv import Trigger
@@ -14,11 +16,13 @@ from mission.mission_tree import (
     BB_DESTINATION,
     BB_ROUTE_ID,
     BB_SOURCE,
+    DOCK_PROXIMITY_TOLERANCE_M,
     FUTURE_TF_TOLERANCE_SEC,
     LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
     MAX_TF_AGE_SEC,
     Localize,
     VehicleStatusOK,
+    build_ensure_undocked,
     build_mission_tree,
 )
 from mission.stub_action_servers import StubActionServers
@@ -50,6 +54,18 @@ def _stamped_transform(stamp_msg, parent, child):
     transform.header.frame_id = parent
     transform.child_frame_id = child
     transform.transform.rotation.w = 1.0
+    return transform
+
+
+def _stamped_transform_at(stamp_msg, parent, child, x, y):
+    """Like _stamped_transform, but at an explicit (x, y) translation --
+    needed for the UndockRobot TF-ground-truth tests below, where the
+    robot's position relative to specific dock poses is exactly what's
+    under test (unlike _stamped_transform's implicit (0, 0, 0), which
+    would silently coincide with whatever dock sits at the origin)."""
+    transform = _stamped_transform(stamp_msg, parent, child)
+    transform.transform.translation.x = x
+    transform.transform.translation.y = y
     return transform
 
 
@@ -104,6 +120,57 @@ def _docks():
                      staging_pose={"x": 0.0, "y": 0.0, "theta": 0.0})
         for i, letter in enumerate("ABCD")
     }
+
+
+def _dock_pose_docks():
+    """Unlike _docks() above (every letter at the same (0,0,0), fine for
+    tests that don't care about specific dock geometry), the UndockRobot
+    ground-truth tests below need well-separated dock poses so a TF
+    position can be placed unambiguously "at dock B" vs "nowhere near any
+    dock"."""
+    return {
+        letter: Dock(letter=letter, tag_id=i,
+                     dock_pose={"x": float(i * 10), "y": float(i * 10), "theta": 0.0},
+                     staging_pose={"x": float(i * 10) - 1.0, "y": float(i * 10), "theta": 0.0})
+        for i, letter in enumerate("ABCD")
+    }
+
+
+class _CountingUndockServer:
+    """Lightweight fake for just the `undock_robot` action -- always
+    succeeds immediately, counting how many goals it actually received.
+    Deliberately NOT the full StubActionServers (which also stands up
+    navigate_to_pose/dock_robot, irrelevant noise for these focused gating
+    tests -- see Task 8 review finding #2: the point here is to prove
+    _not_docked_anywhere/build_ensure_undocked's own gating logic fires (or
+    doesn't) correctly, independent of the rest of the dock/navigate
+    subtree)."""
+
+    def __init__(self, node):
+        self.goal_count = 0
+        self._server = ActionServer(node, UndockRobot, 'undock_robot', self._execute)
+
+    def _execute(self, goal_handle):
+        self.goal_count += 1
+        goal_handle.succeed()
+        return UndockRobot.Result()
+
+
+def _tick_until_settled(tree, executor, deadline_sec=5.0):
+    """Ticks `tree` (wrapping a build_ensure_undocked subtree), draining the
+    executor between ticks so CallAction's async action futures actually
+    get a chance to resolve, until the root settles on SUCCESS/FAILURE (not
+    RUNNING) or deadline_sec elapses."""
+    deadline = time.monotonic() + deadline_sec
+    status = py_trees.common.Status.RUNNING
+    while time.monotonic() < deadline:
+        _spin_and_drain(executor, 0.05)
+        tree.tick()
+        status = tree.root.status
+        if status != py_trees.common.Status.RUNNING:
+            return status
+        time.sleep(0.02)
+    return status
 
 
 def test_mission_tree_completes_a_route_cycle():
@@ -377,5 +444,179 @@ def test_localize_fails_when_tf_is_stamped_too_far_in_the_future():
         behaviour = Localize("Localize", node, tf_buffer)
 
         assert behaviour.update() == py_trees.common.Status.FAILURE
+    finally:
+        rclpy.shutdown()
+
+
+def test_ensure_undocked_fires_when_blackboard_says_docked():
+    """The normal, fast path: BB_CURRENT_POSITION == "dock:<letter>" alone
+    (TF placed far from every known dock, isolating this to the blackboard
+    signal) is enough to trigger a real UndockRobot call, and a successful
+    one clears BB_CURRENT_POSITION afterward."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_undock_bb_docked")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        undock_server = _CountingUndockServer(node)
+
+        docks = _dock_pose_docks()
+        tf_buffer = tf2_ros.Buffer()
+        now = node.get_clock().now().to_msg()
+        tf_buffer.set_transform(
+            _stamped_transform_at(now, 'map', 'base_footprint', 1000.0, 1000.0), "test")
+
+        position_writer = py_trees.blackboard.Client(name="test-position-writer-a")
+        position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
+        position_writer.set(BB_CURRENT_POSITION, "dock:A")
+
+        root = build_ensure_undocked(node, tf_buffer, docks, position_writer)
+        tree = py_trees.trees.BehaviourTree(root)
+        tree.setup(node=node, timeout=5.0)
+
+        status = _tick_until_settled(tree, executor)
+
+        assert undock_server.goal_count == 1, "UndockRobot should have fired exactly once"
+        assert status == py_trees.common.Status.SUCCESS
+        assert not position_writer.exists(BB_CURRENT_POSITION), \
+            "a successful UndockRobot should have cleared BB_CURRENT_POSITION"
+    finally:
+        rclpy.shutdown()
+
+
+def test_ensure_undocked_fires_from_tf_ground_truth_when_blackboard_is_unset():
+    """Task 8 review finding #1's restart-recovery scenario: BB_CURRENT_
+    POSITION is unset -- exactly as it would be right after mission_node
+    crashes/restarts -- but the robot's real TF position sits at a known
+    dock pose. The independent TF ground-truth signal must still trigger
+    UndockRobot; relying on the blackboard alone would silently skip it and
+    reintroduce the planner deadlock this whole mechanism exists to
+    prevent."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_undock_tf_ground_truth")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        undock_server = _CountingUndockServer(node)
+
+        docks = _dock_pose_docks()
+        dock_b = docks["B"]
+        tf_buffer = tf2_ros.Buffer()
+        now = node.get_clock().now().to_msg()
+        tf_buffer.set_transform(
+            _stamped_transform_at(now, 'map', 'base_footprint',
+                                   dock_b.dock_pose["x"], dock_b.dock_pose["y"]),
+            "test")
+
+        position_writer = py_trees.blackboard.Client(name="test-position-writer-b")
+        position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
+        # Explicitly unset (py_trees' Blackboard storage is a process-wide
+        # global, shared across every Client regardless of name -- confirmed
+        # directly, not assumed -- so a prior test, e.g. the full-route
+        # integration test above, can leave this set; relying on it being
+        # "naturally" absent would make this test's isolation depend on
+        # pytest's execution order).
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
+        # Left unset from here on -- simulates the mission_node restart.
+
+        root = build_ensure_undocked(node, tf_buffer, docks, position_writer)
+        tree = py_trees.trees.BehaviourTree(root)
+        tree.setup(node=node, timeout=5.0)
+
+        status = _tick_until_settled(tree, executor)
+
+        assert undock_server.goal_count == 1, \
+            "TF ground truth alone should have triggered UndockRobot despite an unset blackboard"
+        assert status == py_trees.common.Status.SUCCESS
+    finally:
+        rclpy.shutdown()
+
+
+def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
+    """The common case this must NOT regress: the very first leg of a fresh
+    mission (or any leg where the robot genuinely isn't docked anywhere) --
+    neither the blackboard nor TF ground truth says "docked" -- must resolve
+    immediately with NO UndockRobot call at all, not just "eventually
+    succeeds after a harmless extra call". Confirms the gate is still a
+    real gate, not a change that fires unconditionally."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_undock_neither_signal")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        undock_server = _CountingUndockServer(node)
+
+        docks = _dock_pose_docks()
+        tf_buffer = tf2_ros.Buffer()
+        now = node.get_clock().now().to_msg()
+        tf_buffer.set_transform(
+            _stamped_transform_at(now, 'map', 'base_footprint', 1000.0, 1000.0), "test")
+
+        position_writer = py_trees.blackboard.Client(name="test-position-writer-c")
+        position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
+        # Explicitly unset -- see test_ensure_undocked_fires_from_tf_ground_
+        # truth_when_blackboard_is_unset's comment on why this can't just be
+        # assumed absent. Left unset from here on, like a fresh mission
+        # that's never docked anywhere yet.
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
+
+        root = build_ensure_undocked(node, tf_buffer, docks, position_writer)
+        tree = py_trees.trees.BehaviourTree(root)
+        tree.setup(node=node, timeout=5.0)
+
+        status = _tick_until_settled(tree, executor, deadline_sec=2.0)
+
+        assert undock_server.goal_count == 0, \
+            "UndockRobot must NOT be called when neither signal indicates docked"
+        assert status == py_trees.common.Status.SUCCESS
+    finally:
+        rclpy.shutdown()
+
+
+def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
+    """Sanity bound on DOCK_PROXIMITY_TOLERANCE_M itself: a position roughly
+    midway between two docks placed 10m apart (well outside the configured
+    tolerance) must NOT read as "docked" via the TF ground-truth check --
+    guards against the tolerance constant ever being accidentally set to
+    something so large it stops discriminating "docked" from "just
+    somewhere in the arena"."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_undock_tolerance_sanity")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        undock_server = _CountingUndockServer(node)
+
+        docks = _dock_pose_docks()  # A=(0,0), B=(10,10), ...
+        tf_buffer = tf2_ros.Buffer()
+        now = node.get_clock().now().to_msg()
+        # Comfortably farther from every dock than DOCK_PROXIMITY_TOLERANCE_M,
+        # but still well inside the arena's own coordinate range (unlike the
+        # other tests' deliberately absurd (1000, 1000) "nowhere" position).
+        midpoint = 5.0
+        assert midpoint > DOCK_PROXIMITY_TOLERANCE_M * 5, \
+            "test fixture assumption broken: tighten the midpoint or the docks spacing"
+        tf_buffer.set_transform(
+            _stamped_transform_at(now, 'map', 'base_footprint', midpoint, midpoint), "test")
+
+        position_writer = py_trees.blackboard.Client(name="test-position-writer-d")
+        position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
+        # Explicitly unset -- see test_ensure_undocked_fires_from_tf_ground_
+        # truth_when_blackboard_is_unset's comment on why this can't just be
+        # assumed absent.
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
+
+        root = build_ensure_undocked(node, tf_buffer, docks, position_writer)
+        tree = py_trees.trees.BehaviourTree(root)
+        tree.setup(node=node, timeout=5.0)
+
+        status = _tick_until_settled(tree, executor, deadline_sec=2.0)
+
+        assert undock_server.goal_count == 0, \
+            "a position merely between two docks must not read as docked"
+        assert status == py_trees.common.Status.SUCCESS
     finally:
         rclpy.shutdown()
