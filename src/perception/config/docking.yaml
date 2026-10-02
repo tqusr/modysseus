@@ -173,6 +173,26 @@ docking_server:
         # and the nose then lands at -2.866 - 0.1231 = -2.9891, the same
         # 3 mm short of dock G's own wall. Consistent.
         #
+        # MARGIN WARNING, for whoever tunes this next: the 0.126 m offset was
+        # derived from the measured CONTACT position (2.992 - 2.86604), so
+        # the new target IS the wall-contact pose, not a standoff from it --
+        # the nose lands 3 mm short of the wall if the robot reaches the
+        # target exactly. There is therefore effectively ZERO designed
+        # clearance margin, and the live residuals after the change show it:
+        # 0.026 m at dock G, but 0.0478 m at dock C against a
+        # `docking_threshold` of 0.05 -- 96% of the budget on one of two
+        # samples. `max_retries: 3` absorbed it and 3/3 docks succeeded, so
+        # this is tuned, not broken.
+        #
+        # So if docking starts occasionally failing to declare success while
+        # physically parking fine, do NOT go looking for a broken mechanism
+        # first: the honest reading is that this offset removed the
+        # wall-pushing stall, not the contact, and the margin is thin by
+        # construction. The two cheap levers are a slightly larger offset
+        # (0.15-0.17, still inside the threshold) or a slightly larger
+        # `docking_threshold` (0.07). Both are deliberately NOT applied here,
+        # because the current values are the ones actually measured live.
+        #
         # !!! UNVERIFIED ON REAL HARDWARE !!! This offset and the standoff
         # behind it were measured in simulation only. If docking fails to
         # reach `docking_threshold` on the physical robot, CHECK FOR
@@ -238,14 +258,77 @@ docking_server:
         # absorb localization jitter and the dock wings (nearest wing corner
         # is ~0.37 m from the dock pose, at a different bearing).
         #
-        # What this buys and what it does not: with staging 0.6 m out
-        # (staging_x_offset), the checked part of a docking approach is the
-        # outer ~0.40-0.60 m band of the bay, plus the undock reverse once
-        # the robot is more than 0.40 m clear. An obstacle INSIDE the last
-        # 0.40 m of a dock bay is not detectable this way -- geometrically,
-        # it is indistinguishable from the dock. That is the honest limit of
-        # fixed-pose docking with a 0.6 m standoff; a larger standoff or
-        # vision-corrected docking is what would shrink it.
+        # What this buys and what it does not, for the DOCK APPROACH: with
+        # staging 0.6 m out (staging_x_offset), the checked part of an
+        # approach is the outer ~0.40-0.60 m band of the bay. An obstacle
+        # INSIDE the last 0.40 m of a dock bay is not detectable this way --
+        # geometrically, it is indistinguishable from the dock. That is the
+        # honest limit of fixed-pose docking with a 0.6 m standoff; a larger
+        # standoff or vision-corrected docking is what would shrink it.
+        #
+        # KNOWN, DELIBERATE SAFETY EXCEPTION: AT 0.65 THE UNDOCK REVERSE IS
+        # NOT COLLISION-CHECKED AT ALL. Not "less checked" -- the check never
+        # fires once during an undock. An earlier version of this comment
+        # claimed the opposite ("plus the undock reverse once the robot is
+        # more than 0.40 m clear"); that was wrong in both its numbers and
+        # its conclusion, and this is the correction.
+        #
+        # Verified against opennav_docking 1.3.13's own source (the version
+        # installed here; only headers ship in /opt/ros/jazzy, so
+        # Controller::isTrajectoryCollisionFree and DockingServer::undockRobot
+        # were read from upstream at that exact tag). The carve-out distance
+        # is measured by a DIFFERENT rule depending on direction:
+        #
+        #   is_docking == true :  euclidean_distance(target_pose, next_pose)
+        #                         -> distance to the dock target (itself
+        #                            projected 0.25 m past the dock pose)
+        #   is_docking == false:  std::hypot(next_pose.x, next_pose.y)
+        #                         -> each projected point's distance from the
+        #                            robot's CURRENT pose (next_pose is
+        #                            integrated in base_frame from the
+        #                            origin), recomputed every control cycle
+        #
+        # and the 0.25 m `backward_projection` does NOT apply to undocking --
+        # it is applied only inside approachDock. So during an undock the
+        # rolled-out trajectory converges on the staging pose 0.6 m away,
+        # meaning no projected point is ever more than ~0.6 m from the robot,
+        # meaning `dock_collision_distance > dock_collision_threshold` (0.65)
+        # is never true, meaning isCollisionFree is never called. At the
+        # stock 0.3 the outer part of the reverse WAS checked, so this is a
+        # real protection regression introduced by the tuning above, not a
+        # pre-existing gap.
+        #
+        # Why it is not split instead: there is no undock-specific
+        # parameter to split. opennav_docking's Controller holds a single
+        # `dock_collision_threshold_` (controller.hpp:134) and passes it
+        # through the same comparison for both directions -- the only
+        # difference is the `is_docking` flag selecting the distance rule
+        # above.
+        #
+        # Why no single value protects both: the dock approach needs
+        # >= 0.55 (the measured 0.30 m worst-case flagged distance plus the
+        # 0.25 m backward_projection), and 0.65 is that plus 0.10 m of
+        # margin -- 0.5 demonstrably aborted every attempt. The undock needs
+        # < 0.6 to check anything at all, and materially less than that to
+        # check a useful portion of a 0.6 m manoeuvre. The two windows do not
+        # overlap with any margin: 0.55-0.59 would leave the approach with
+        # 0.00-0.04 m over its measured worst case (i.e. back to aborting
+        # through all max_retries) while still only checking the last few
+        # centimetres of the undock rollout. So this is a genuine either/or,
+        # and the approach -- which is the leg that failed live, repeatedly,
+        # and the longer of the two -- wins.
+        #
+        # Why that is acceptable here, explicitly: the undock reverse is
+        # 0.6 m straight back along the corridor the robot itself drove in
+        # through seconds earlier, and the arena design keeps dock approach
+        # corridors clear of props. It is NOT acceptable as a general
+        # property of the stack. If undock-time obstacles ever become a real
+        # risk (a moving robot behind us, a prop placed during the dwell),
+        # the fix is NOT this threshold -- lowering it re-breaks docking.
+        # The fix is to give the undock leg protection that does not share
+        # this knob: route docking_server's /cmd_vel through
+        # nav2_collision_monitor with a dock-aware polygon, or add a
+        # rear-facing stop polygon active only during undocking.
         controller:
             use_collision_detection: true
             costmap_topic: "local_costmap/costmap_raw"
