@@ -11,6 +11,17 @@
   <depend>slam_toolbox</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <!-- NOT declared: a dependency on `perception`, even though
+       mapping_mission.launch.py includes its apriltag.launch.py. perception
+       already exec_depends on localization (its docking.launch.py runs
+       `ros2 run localization slam_lifecycle_watchdog.py`), so the reverse edge
+       would be a circular dependency colcon refuses to order. Both packages
+       live in this one workspace, so the include resolves at runtime; a
+       missing perception is reported by launch as a plain
+       PackageNotFoundError.
+       mapping_mission.launch.py also tells the operator to run
+       teleop_twist_keyboard, which is a separate process in its own terminal
+       and not launched from here, hence not a dependency either. -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>
