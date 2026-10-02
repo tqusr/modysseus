@@ -2,6 +2,13 @@
 
     ros2 launch localization mapping_mission.launch.py
 
+THIS FILE IS THE SIMULATION ENTRY POINT. On the real robot use
+`mapping_mission_hardware.launch.py` instead, which starts the hardware
+wheel-odometry node this file does not need (the simulator's DiffDrive plugin
+provides `/odom` and the `odom -> base_footprint` TF) and leaves AprilTag
+detection out, so it maps with the lidar only. The two files share
+`mapping.launch.py`.
+
 WHY THIS EXISTS. `mission/config/docks.yaml`'s 8 dock poses were computed from
 `arena.sdf`'s model origins -- from the SIMULATED world file. There is no
 arena.sdf on real hardware: the docks are wherever somebody physically put

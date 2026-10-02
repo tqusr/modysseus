@@ -1,0 +1,224 @@
+"""Mapping mission on the REAL robot: wheel odometry + SLAM in mapping mode.
+
+    ros2 launch localization mapping_mission_hardware.launch.py
+
+The hardware counterpart to `mapping_mission.launch.py`, which is
+simulation's. Separate files rather than one file with a mode argument,
+following the split the vendor repo already uses
+(`einride_mini_truck_bringup`'s `simulation.launch.py` versus
+`hardware.launch.py`): the two modes genuinely start different things, and a
+single file would hide that behind conditions. `mapping.launch.py` is the
+shared half and is INCLUDED by both, so the lifecycle watchdog, the
+sync-vs-async choice and the reasoning behind both stay in exactly one place.
+
+WHY THIS EXISTS. `mapper_params_online_async.yaml` sets `odom_frame: odom`,
+so slam_toolbox looks up an `odom -> base_footprint` transform for every
+scan - and until this launch, NOTHING published that transform on hardware.
+There was no wheel odometry node at all. Mapping on the real robot was
+therefore not merely degraded, it was broken: every scan's transform lookup
+would fail, continuously, with no map to show for the drive.
+
+WHAT NOW PUBLISHES IT: REAL WHEEL ODOMETRY, NOT A STUB. `wheel_odometry_node`
+integrates the `/wheel_encoders` stream the vendor's `ugv02_serial_node`
+publishes - accumulated distance per side, straight off the chassis MCU - into
+a pose, and both publishes `/odom` and broadcasts the `odom -> base_footprint`
+TF. That is exactly the role Gazebo's DiffDrive plugin fills in simulation,
+down to the topic and the frame names, which is why `ekf.yaml` can keep
+`publish_tf: false` unchanged in both modes.
+
+  THE TURN CALIBRATION IS INHERITED FROM SIMULATION. The node's
+  `wheel_separation` defaults to 0.21701 m, which is NOT this chassis's
+  geometric track (0.17452 m). A skid-steer has to scrub its wheels sideways
+  to rotate, so the ideal differential model over-predicts yaw rate; 0.21701
+  is the geometric track times a measured scrub factor of 1.2435. That factor
+  comes from the simulated DiffDrive plugin's own configuration - see
+  `einride_mini_truck_description`'s `model.sdf` around its
+  `<wheel_separation>` tag, and the vendor repo's `docs/simulation.md`, which
+  carries the measurement. DO NOT re-derive it and do not "fix" it back to the
+  geometric value.
+
+  But do not trust it blindly either: `docs/simulation.md` opens with "This
+  page covers the simulation only", so that factor was measured against the
+  SIMULATED robot's physics, and real scrub depends on real tyres on a real
+  floor. If the map comes out rotationally wrong - corridors meeting at the
+  wrong angle, a square room closing as a parallelogram - this parameter is
+  the first suspect, and it is a parameter precisely so it can be
+  recalibrated without a rebuild:
+
+      ros2 launch localization mapping_mission_hardware.launch.py \\
+          wheel_separation:=0.23
+
+  This feature's report has the measure-a-turn procedure.
+
+  ONLY TWO OF THE FOUR DRIVEN WHEELS ARE SENSED. The chassis is 6-wheel, 4WD
+  with the front and rear pairs driven, and only the front axle is
+  instrumented - the same limitation `hardware.launch.py`'s
+  `joint_state_relay` comment describes. So this is real odometry, not perfect
+  odometry: it cannot see a rear wheel slipping differently from the front one
+  on the same side, and skid-steer scrub guarantees some slip. It is still a
+  real motion prior, which is what slam_toolbox needs to seed each scan match,
+  and incomparably better than the nothing that was there before.
+
+LIDAR ONLY. NO APRILTAG, DELIBERATELY. `mapping_mission.launch.py` runs
+apriltag_ros alongside mapping so one drive both builds the map and captures
+the arena's real dock poses. This file does not, and the dock-capture half of
+that mission is simply not available here yet: a hardware AprilTag variant is
+its own task (the camera's frames come from the device's EEPROM calibration on
+hardware, not from `model.sdf`, and the tag-orientation convention has never
+been confirmed against a live detection - see `perception/perception/
+dock_capture.py`'s "STILL UNVERIFIED AGAINST A LIVE TAG" note). Mapping does
+not depend on it, so it is left out rather than half-wired.
+
+NO SIM BRING-UP, AND NO DEVICE DRIVERS. This launch starts odometry and SLAM,
+nothing else. The robot's own drivers - the serial link that produces
+`/wheel_encoders` and accepts `/cmd_vel`, the lidar that produces `/scan`, and
+RViz - come from the vendor's `hardware.launch.py`, which you are already
+running in its own terminal to drive the robot at all. Nothing here would work
+without it, and nothing here should restart it.
+
+THE PARAMS FILE WAS TUNED IN SIMULATION. `mapper_params_online_async.yaml` is
+used as-is, and several of its values were chosen against the simulator's
+specific problems: `transform_timeout: 1.0` for the sim's dual-/clock jitter,
+`minimum_travel_heading: 0.15` and `do_loop_closing: false` for a 6x6 m
+symmetric arena mapped in sim. Read that file's comments before changing
+anything; on hardware the generous transform timeout is now doing different
+but still useful work, absorbing the ~12 ms the encoder stamps are back-dated
+by.
+
+THE TERMINALS, in the order they have to start.
+
+  0. The robot itself, which you already have running:
+
+         ros2 launch einride_mini_truck_bringup hardware.launch.py
+
+  1. This launch - wheel odometry + SLAM in mapping mode:
+
+         ros2 launch localization mapping_mission_hardware.launch.py
+
+     Wait for "slam_toolbox is ACTIVE" / "slam_toolbox activation CONFIRMED"
+     before driving anywhere. `mapping.launch.py`'s watchdog prints it, and a
+     mapping run that never reaches `active` silently maps nothing - see that
+     file's docstring, which is where the lifecycle story lives.
+
+  2. Teleop - drive the robot:
+
+         ros2 run teleop_twist_keyboard teleop_twist_keyboard
+
+     This terminal must keep focus to steer. No `use_sim_time` here: there is
+     no /clock on hardware and the default is already false.
+
+     DRIVE SLOWLY AND SMOOTHLY. Wheel odometry on a skid-steer is at its worst
+     exactly where it is pushed hardest: fast turns and sharp direction
+     changes scrub the most, and scrub is the part of the motion the wheels
+     cannot see. Every metre of error it makes is a metre of error in the pose
+     slam_toolbox seeds its scan match from.
+
+  3. Save the map when the drive is done, exactly as for a sim mapping run:
+
+         ros2 run nav2_map_server map_saver_cli -f src/localization/maps/arena
+
+WATCHING THE MAP GROW IN RVIZ. The vendor's `hardware.launch.py` already
+starts RViz, but its config
+(`einride_mini_truck_bringup/config/einride_mini_truck.rviz`) has NO Map
+display - checked, it carries Grid, RobotModel, TF, LaserScan, PointCloud2,
+Odometry and three Image displays and nothing else. Add one by hand in the
+running RViz: Displays panel -> "Add" -> "By topic" -> `/map` -> Map.
+
+Also change Global Options -> Fixed Frame from `base_footprint` to `map`.
+`hardware.launch.py` passes `fixed_frame: base_footprint` to the vendor's
+`common.launch.py` because until now hardware had no `odom` frame at all (its
+comment says to change it "in the same commit that starts publishing it" -
+which is this one, in this repo, so that vendor-side default is now stale).
+With the fixed frame left at `base_footprint` the robot stays nailed to the
+centre of the screen and the world slides around underneath it, which makes a
+growing map very hard to read.
+
+WHAT THIS LAUNCH DOES NOT INCLUDE, and why.
+
+  - EKF / `localize.launch.py` / Nav2 / docking / mission. Mapping mode and
+    localization mode are mutually exclusive (both publish map->odom), and
+    nothing on the autonomy side should be driving while a human is. The EKF
+    additionally has nothing to add yet: it would fuse this `/odom` with
+    `/imu`, which is the hardware odometry phase's own next step.
+  - `oak_points_filter`. It feeds Nav2's collision monitor, which is not
+    running here.
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+#: There is no /clock on a real robot.
+#:
+#: Spelled twice, because the two places it goes want different TYPES and
+#: getting that wrong does not degrade anything - it stops the node starting.
+#: A launch ARGUMENT is text, so the include below gets the string; a node
+#: PARAMETER is typed, and launch_ros passes a plain Python `str` straight
+#: through as a string parameter rather than applying YAML rules to it (only
+#: an unannotated *substitution* gets those). rclpy's own TimeSource has
+#: already declared `use_sim_time` as a bool by then, so a string override is
+#: rejected as a type mismatch and the node dies on construction. The vendor
+#: repo's hardware.launch.py makes the same distinction - a `'false'` string
+#: in its `launch_arguments`, a `False` bool in every `parameters`.
+USE_SIM_TIME = False
+USE_SIM_TIME_ARG = 'false'
+
+
+def generate_launch_description():
+    mapping_path = os.path.join(
+        get_package_share_directory('localization'), 'launch',
+        'mapping.launch.py')
+
+    # mapping.launch.py defaults use_sim_time to true, for simulation's sake;
+    # this is the one caller that says otherwise. A node left at true with no
+    # /clock publisher sits at time zero forever and looks exactly like a hang.
+    mapping = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(mapping_path),
+        launch_arguments={'use_sim_time': USE_SIM_TIME_ARG}.items())
+
+    # The real odometry source, and the reason this launch can work at all.
+    # See the docstring above for the wheel_separation calibration caveat and
+    # the two-of-four-wheels limitation, and
+    # localization/localization/wheel_odometry.py for the maths and the input
+    # contract. Started before SLAM so the odom -> base_footprint edge is
+    # already in TF when slam_toolbox's first scan lookup happens.
+    wheel_odometry = Node(
+        package='localization',
+        executable='wheel_odometry_node.py',
+        name='wheel_odometry_node',
+        output='screen',
+        parameters=[{
+            'use_sim_time': USE_SIM_TIME,
+            'wheel_separation': LaunchConfiguration('wheel_separation'),
+        }],
+    )
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'wheel_separation', default_value='0.21701',
+            description='EFFECTIVE wheel separation in metres: the geometric '
+                        'track (0.17452) times a scrub factor measured in '
+                        'SIMULATION (1.2435). Raise it if the map comes out '
+                        'under-rotated, lower it if over-rotated. Not the '
+                        'geometric track - see this launch file\'s docstring.'),
+
+        LogInfo(msg=(
+            'mapping_mission_hardware: wheel odometry + SLAM (mapping mode), '
+            'lidar only - no AprilTag, no dock capture. The robot\'s own '
+            'drivers come from einride_mini_truck_bringup hardware.launch.py, '
+            'which must already be running. Drive with `ros2 run '
+            'teleop_twist_keyboard teleop_twist_keyboard` in another '
+            'terminal, SLOWLY and SMOOTHLY - the odometry is skid-steer wheel '
+            'odometry and scrub is what it cannot see. Wait for slam_toolbox '
+            'ACTIVE below before driving. To watch the map grow, add a Map '
+            'display on /map in RViz and set Fixed Frame to `map`.')),
+
+        wheel_odometry,
+        mapping,
+    ])
