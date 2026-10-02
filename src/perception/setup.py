@@ -24,4 +24,9 @@ setup(
     description='AprilTag detection and docking server bring-up for Modysseus.',
     license='Apache-2.0',
     tests_require=['pytest'],
+    entry_points={
+        'console_scripts': [
+            'capture_dock_pose = perception.capture_dock_pose:main',
+        ],
+    },
 )
