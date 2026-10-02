@@ -339,6 +339,40 @@ collision_monitor:
       min_height: 0.05
       max_height: 1.0
       enabled: true
+      # Per-source override of the node-level `source_timeout: 1.0` above.
+      # The lidar `scan` source deliberately KEEPS 1.0 - this loosening
+      # applies only to the camera, which is the supplementary source (low
+      # obstacles the 2D lidar cannot see), never the primary one.
+      #
+      # Justified by measurement, not guessed, and only AFTER the real
+      # latency cause was fixed upstream. The camera cloud's own inter-message
+      # gap, sampled in sim time at a subscriber over 100 s of continuous
+      # navigation (which is exactly what the monitor compares its clock
+      # against):
+      #
+      #   /oak/points_filtered   median 0.099 s   p95 0.396 s   max 0.990 s
+      #   /oak/points (upstream)  median 0.099 s   p95 0.429 s   max 1.255 s
+      #
+      # The excursions come from /oak/points, i.e. from the ONE remaining
+      # 29.5 MB/message hop in the chain: the 1280x720 organized cloud
+      # depth_image_proc builds in the vendor sim's own simulation.launch.py,
+      # upstream of anything this repo launches (perception's filter chain now
+      # voxel-downsamples immediately, see
+      # perception/config/oak_points_filter.yaml). 2.0 s clears the measured
+      # 1.255 s worst case with ~0.75 s of margin; 1.5 s would have left only
+      # 0.25 s and kept firing.
+      #
+      # Why tolerating a briefly-stale camera cloud is safe HERE specifically:
+      # `base_shift_correction: true` above means the monitor re-projects an
+      # old cloud into the current base frame through TF at the message stamp
+      # rather than reusing it naively, so robot motion since the stamp is
+      # compensated and the residual error is only from MOVING obstacles -
+      # and the arena's obstacles are static. Set against that, the behaviour
+      # this replaces was strictly worse than a slightly stale cloud: the
+      # monitor discarded the source entirely (no camera input at all) and,
+      # with no valid source left, additionally commanded "Robot to stop due
+      # to invalid source" - a spurious stop, several times a minute.
+      source_timeout: 2.0
 
 local_costmap:
   local_costmap:

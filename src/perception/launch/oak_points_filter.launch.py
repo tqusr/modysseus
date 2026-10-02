@@ -22,9 +22,14 @@ this filtered topic instead of raw /oak/points, with its own height/range
 thresholds reverted back down near stock values now that self-returns are
 handled here instead.
 
-Not a lifecycle node (pcl_ros::CropBox / filter_crop_box_node is a plain
-node, confirmed via its own package contents - no change_state/get_state
-services to manage), so this is a single plain Node, no watchdog needed.
+Not lifecycle nodes (pcl_ros's filter_* executables are plain nodes,
+confirmed via its own package contents - no change_state/get_state services
+to manage), so these are plain Nodes, no watchdog needed.
+
+A voxel downsample now runs AHEAD of the crop box. That stage is a latency
+fix, not a filtering one - the raw cloud's 29.5 MB/message volume was
+starving nav2_collision_monitor's camera source of data fresh enough to pass
+its `source_timeout`. config/oak_points_filter.yaml has the measurements.
 """
 
 import os
@@ -40,6 +45,30 @@ def generate_launch_description():
         get_package_share_directory('perception'), 'config', 'oak_points_filter.yaml')
 
     return LaunchDescription([
+        # Stage 1: voxel downsample. /oak/points is a 1280x720 ORGANIZED
+        # cloud -- 921,600 points, 29.5 MB per message at a nominal 30 Hz
+        # (measured off the topic). Carrying that volume all the way to
+        # collision_monitor and both costmap layers starved the camera source
+        # of fresh data: nav2_collision_monitor was discarding `oak_cloud`
+        # against its own `source_timeout: 1.0` several times a second and
+        # falling back to lidar-only safety stopping. See
+        # config/oak_points_filter.yaml for the full measurement and why a
+        # 0.03 m leaf discards nothing any consumer could represent.
+        Node(
+            package='pcl_ros',
+            executable='filter_voxel_grid_node',
+            name='filter_voxel_grid_node',
+            output='screen',
+            parameters=[config],
+            remappings=[
+                ('input', '/oak/points'),
+                ('output', '/oak/points_voxel'),
+            ],
+        ),
+        # Stage 2: the self-filter crop box. Reads the downsampled cloud, so
+        # its base_footprint TF transform runs over a few thousand points
+        # rather than 921,600. Still publishes /oak/points_filtered, which is
+        # what navigation/config/nav2_params.yaml points at.
         Node(
             package='pcl_ros',
             executable='filter_crop_box_node',
@@ -47,7 +76,7 @@ def generate_launch_description():
             output='screen',
             parameters=[config],
             remappings=[
-                ('input', '/oak/points'),
+                ('input', '/oak/points_voxel'),
                 ('output', '/oak/points_filtered'),
             ],
         ),

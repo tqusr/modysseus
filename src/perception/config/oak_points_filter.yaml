@@ -43,9 +43,71 @@
 # obstacle anywhere else in the camera's field of view -- including low
 # ones, or ones close to the robot but outside this box (e.g. at a dock
 # during final approach) -- passes through untouched.
+# STAGE 1 of 2: voxel downsample, ahead of the CropBox below.
+#
+# Why this stage exists (it is a LATENCY fix, not a filtering one): the sim's
+# OAK-D Lite depth and colour streams are both declared at 1280x720 (see
+# einride_mini_truck_description's model.sdf and the bridge config's note on
+# why depth carries the colour camera's resolution), so the /oak/points
+# depth_image_proc builds from them is a 1280x720 ORGANIZED cloud: 921,600
+# points at point_step 32 = 29.5 MB per message, nominal 30 Hz. Measured, not
+# estimated -- `width/height/point_step/len(data)` straight off the topic.
+#
+# Nothing downstream could move that. Before this stage, /oak/points_filtered
+# came out at ~506,000 points / 16.2 MB per message with THREE subscribers on
+# it (local_costmap, global_costmap, collision_monitor -- `ros2 topic info -v`),
+# and the CropBox below had to TF-transform all 921,600 points into
+# base_footprint before it could crop any of them. The chain's delivered rate
+# at collision_monitor's `oak_cloud` source collapsed to well under 1 Hz in
+# sim time, so for most of each inter-message gap the newest sample was older
+# than nav2_params.yaml's `source_timeout: 1.0` and the monitor discarded the
+# source outright -- logging "[oak_cloud]: Latest source and current collision
+# monitor node timestamps differ on 1.x seconds. Ignoring the source." several
+# times a second, and, with no valid source left, also "Robot to stop due to
+# invalid source". I.e. the camera obstacle data was not merely late, it was
+# being thrown away, leaving safety stopping/slowing on the lidar alone.
+#
+# This was NOT global CPU starvation: measured under full navigating load the
+# machine sat at ~62% idle across 16 cores, with apriltag_node (the obvious
+# suspect, since it runs full-res and unconsumed) taking only ~26% of ONE
+# core. The limit was single-node throughput and DDS bulk transport of
+# tens-of-MB samples, which idle cores do not help.
+#
+# leaf_size 0.03 m is deliberately FINER than anything downstream can
+# represent, so this discards no information any consumer could have used:
+# both costmaps run `resolution: 0.05` (nav2_params.yaml), and
+# collision_monitor's PolygonStop/PolygonSlow are 0.5 m / 0.8 m squares
+# needing `min_points: 4` -- a 3 cm grid still returns many points for any
+# obstacle big enough to matter there, with margin over the 5 cm the costmap
+# would have quantized to anyway. It is purely a density cut, not a
+# field-of-view or height cut: no point is removed for WHERE it is, only
+# merged with its 3 cm neighbours.
+#
+# Runs in the cloud's own frame (oak_rgb_camera_optical_frame) on purpose --
+# this node type declares no input_frame/output_frame, and that is what we
+# want: voxelising first means the CropBox below does its base_footprint
+# transform on a few thousand points instead of 921,600.
+filter_voxel_grid_node:
+  ros__parameters:
+    use_sim_time: true
+    leaf_size: 0.03
+    # Keep only the newest pending cloud. The default 3 lets a slow consumer
+    # build a backlog and then serve collision_monitor a sample that is
+    # already several frames old -- the exact staleness this stage exists to
+    # kill. Depth 1 drops old frames instead of queueing them, so worst-case
+    # staleness is bounded by one processing period rather than by the queue.
+    max_queue_size: 1
+
+# STAGE 2 of 2: the self-filter crop box. Unchanged in behaviour -- it now
+# just operates on the downsampled cloud from stage 1 rather than the raw
+# 921,600-point one, and still publishes /oak/points_filtered, so no
+# downstream config changes.
 filter_crop_box_node:
   ros__parameters:
     use_sim_time: true
+    # Same rationale as stage 1's: never hand collision_monitor a queued,
+    # already-stale cloud.
+    max_queue_size: 1
     min_x: -0.40
     max_x: 0.40
     min_y: -0.40
