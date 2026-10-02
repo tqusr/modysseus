@@ -6,12 +6,38 @@
   <description>AprilTag detection and docking server bring-up for Modysseus.</description>
   <maintainer email="albin@stenboda.se">Albin</maintainer>
   <license>Apache-2.0</license>
-  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- ament_python, not ament_cmake: this package was config/launch only until
+       capture_dock_pose (the mapping-mission dock-pose capture tool) added a
+       Python node with a `ros2 run perception capture_dock_pose` console
+       script. Nothing here is compiled, so the build type carries no cost, and
+       launch/ plus config/ install exactly as before via setup.py's
+       data_files. -->
   <depend>apriltag_ros</depend>
   <depend>opennav_docking</depend>
   <depend>pcl_ros</depend>
+
+  <!-- capture_dock_pose's own runtime dependencies. -->
+  <depend>rclpy</depend>
+  <depend>tf2_ros</depend>
+  <depend>apriltag_msgs</depend>
+
   <exec_depend>localization</exec_depend>
+  <!-- NOT declared: a dependency on `mission`, even though capture_dock_pose
+       rewrites mission/config/docks.yaml. It finds that file by walking up to
+       the workspace SOURCE tree from this package's own share directory, and
+       deliberately never through mission's share directory or its Python
+       package, because mission already exec_depends on perception
+       (full_stack.launch.py includes this package's launch files); declaring
+       the reverse edge would make that a circular dependency colcon refuses
+       to order. -->
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
   <export>
-    <build_type>ament_cmake</build_type>
+    <build_type>ament_python</build_type>
   </export>
 </package>
