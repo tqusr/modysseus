@@ -5,6 +5,7 @@ import time
 import py_trees
 import tf2_ros
 from geometry_msgs.msg import Twist
+from rclpy.duration import Duration
 from rclpy.time import Time
 from std_srvs.srv import Trigger
 
@@ -33,6 +34,14 @@ FUTURE_TF_TOLERANCE_SEC = 2.0
 # (navigation.launch.py's `lifecycle_manager_navigation`) -- a std_srvs/Trigger
 # that returns success=True only while all of its managed nodes are active.
 LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE = '/lifecycle_manager_navigation/is_active'
+
+# How long a single outstanding is_active poll may stay unanswered before
+# VehicleStatusOK abandons it and sends a fresh one. Generous next to the
+# service's normal sub-millisecond answer (it has been observed taking >15s
+# on a heavily loaded machine mid-route, so this must not be tight), but
+# finite: see _lifecycle_manager_reports_active for the permanent-safe_stop
+# wedge an unbounded wait causes when a response is dropped.
+LIFECYCLE_POLL_TIMEOUT_SEC = 30.0
 
 # Ground-truth radius (meters) for "is the robot currently sitting at a dock
 # pose" per the TF-based fallback in _not_docked_anywhere, below -- generous
@@ -375,7 +384,8 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
 
     def __init__(self, name, node, tf_buffer, tf_listener,
                  lifecycle_manager_service=LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
-                 max_tf_age_sec=MAX_TF_AGE_SEC):
+                 max_tf_age_sec=MAX_TF_AGE_SEC,
+                 poll_timeout_sec=LIFECYCLE_POLL_TIMEOUT_SEC):
         super().__init__(name)
         self.node = node
         self.tf_buffer = tf_buffer
@@ -384,8 +394,10 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
         # garbage-collected once build_mission_tree() returns.
         self._tf_listener = tf_listener
         self.max_tf_age_sec = max_tf_age_sec
+        self.poll_timeout_sec = poll_timeout_sec
         self._client = node.create_client(Trigger, lifecycle_manager_service)
         self._future = None
+        self._future_deadline = None
         # Latched, not reset to False while a fresh poll is merely in flight --
         # see _lifecycle_manager_reports_active's docstring for why.
         self._last_known_active = False
@@ -410,14 +422,40 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
         on every tick a new poll happens to be outstanding, tripping the
         safe-stop branch and invalidating -- and resetting the progress of
         -- whatever in the `route` subtree was RUNNING, even though nothing
-        actually became unhealthy."""
+        actually became unhealthy.
+
+        The outstanding poll is bounded by poll_timeout_sec, and that bound
+        is load-bearing, not defensive decoration: a dropped service
+        RESPONSE leaves the future pending forever, and with no timeout this
+        behaviour would then return its latched value (False, in the common
+        case where the drop happens on the first poll after a restart)
+        FOREVER -- mission wedged in safe_stop, never recovering, with a
+        perfectly healthy Nav2 sitting right there. That is not theoretical:
+        this environment drops service responses under load often enough
+        that Nav2's own lifecycle manager logs it ("failed to send response
+        to /planner_server/change_state (timeout): client will not receive
+        response"), and it was observed wedging mission exactly this way
+        during the final-review fix wave's live testing. On timeout the
+        request is abandoned (and removed from the client's pending map, so
+        it doesn't leak) and a fresh poll goes out on the next tick."""
         if self._future is None:
             if self._client.service_is_ready():
                 self._future = self._client.call_async(Trigger.Request())
+                self._future_deadline = \
+                    self.node.get_clock().now() + Duration(seconds=self.poll_timeout_sec)
             return self._last_known_active
         if not self._future.done():
+            if self._future_deadline is not None and \
+                    self.node.get_clock().now() > self._future_deadline:
+                self.logger.warning(
+                    f"{self._client.srv_name} did not answer within "
+                    f"{self.poll_timeout_sec}s -- abandoning that poll and retrying")
+                self._client.remove_pending_request(self._future)
+                self._future = None
+                self._future_deadline = None
             return self._last_known_active
         future, self._future = self._future, None
+        self._future_deadline = None
         try:
             self._last_known_active = bool(future.result().success)
         except Exception as error:

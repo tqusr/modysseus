@@ -8,6 +8,7 @@ from nav2_msgs.action import UndockRobot
 from rclpy.action import ActionServer
 from rclpy.duration import Duration
 from rclpy.executors import SingleThreadedExecutor
+from rclpy.task import Future
 from std_srvs.srv import Trigger
 
 from mission.docks import Dock
@@ -580,6 +581,61 @@ def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
         assert undock_server.goal_count == 0, \
             "UndockRobot must NOT be called when neither signal indicates docked"
         assert status == py_trees.common.Status.SUCCESS
+    finally:
+        rclpy.shutdown()
+
+
+def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
+    """A dropped service RESPONSE (this environment does drop them under
+    load -- Nav2's own lifecycle manager logs it) leaves the is_active future
+    pending forever. Without a bound on that wait, VehicleStatusOK keeps
+    returning its latched False and mission stays in safe_stop for good, with
+    a healthy Nav2 right there. The poll must time out and be re-sent.
+
+    The client is faked rather than the server: rclpy's own service plumbing
+    refuses to "just not answer" (a callback returning None raises), and what
+    is under test is purely the client-side bound -- requests go out, a
+    response never comes back, so a new request must eventually go out."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_vsok_poll_timeout")
+
+        class _NeverAnsweringClient:
+            srv_name = LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE
+
+            def __init__(self):
+                self.requests = []
+                self.abandoned = []
+
+            def service_is_ready(self):
+                return True
+
+            def call_async(self, request):
+                future = Future()  # never resolved: the response was "lost"
+                self.requests.append(future)
+                return future
+
+            def remove_pending_request(self, future):
+                self.abandoned.append(future)
+
+        # Tiny timeout so the test doesn't have to wait the production 30s.
+        behaviour = VehicleStatusOK("VehicleStatusOK", node, tf2_ros.Buffer(),
+                                     tf_listener=None, poll_timeout_sec=0.2)
+        client = _NeverAnsweringClient()
+        behaviour._client = client
+
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and len(client.requests) < 2:
+            behaviour.update()
+            time.sleep(0.05)
+
+        assert len(client.requests) >= 2, \
+            ("VehicleStatusOK never re-polled: one lost response would wedge it "
+             f"in safe_stop forever (requests seen: {len(client.requests)})")
+        assert client.abandoned, \
+            "the timed-out request must be removed from the client's pending map"
+        assert behaviour.update() == py_trees.common.Status.FAILURE, \
+            "an unanswered lifecycle-manager poll must still read as NOT ok"
     finally:
         rclpy.shutdown()
 
