@@ -99,6 +99,7 @@ def test_wait_until_does_not_poll_condition_before_poll_interval_elapses():
 
 import rclpy
 from nav2_msgs.action import NavigateToPose
+from rclpy.action import ActionServer, CancelResponse
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.task import Future
 
@@ -252,6 +253,75 @@ def test_call_action_terminate_invalid_cancels_a_goal_still_being_accepted():
         send_future.set_result(goal_handle)
 
         assert goal_handle.cancel_calls == 1
+    finally:
+        rclpy.shutdown()
+
+
+class _CancellableServer:
+    """A real action server that accepts goals, never finishes them, and
+    records cancel requests.
+
+    Deferred execution (`handle_accepted_callback` that only stashes the
+    handle) is what makes this usable on a SingleThreadedExecutor: an
+    execute callback that looped waiting for a cancel would block the one
+    executor thread and never service the cancel request itself."""
+
+    def __init__(self, node):
+        self.accepted_goals = []
+        self.cancel_requests = []
+        self._server = ActionServer(
+            node, NavigateToPose, 'navigate_to_pose',
+            execute_callback=self._execute,
+            handle_accepted_callback=self.accepted_goals.append,
+            cancel_callback=self._cancel,
+        )
+
+    def _execute(self, goal_handle):  # pragma: no cover - never invoked
+        goal_handle.succeed()
+        return NavigateToPose.Result()
+
+    def _cancel(self, goal_handle):
+        self.cancel_requests.append(goal_handle)
+        return CancelResponse.ACCEPT
+
+
+def test_call_action_cancel_reaches_a_real_action_server():
+    """End-to-end over real rclpy action plumbing, not a fake handle: tick
+    CallAction until it holds an accepted goal, invalidate it the way
+    py_trees does on a safe stop, and assert the SERVER actually receives
+    the cancel request. This is the behaviour the whole safe-stop fix rests
+    on -- Nav2/opennav_docking keep driving the robot until this request
+    arrives."""
+    rclpy.init()
+    try:
+        server_node = rclpy.create_node("test_cancellable_server")
+        client_node = rclpy.create_node("test_cancel_client")
+        executor = SingleThreadedExecutor()
+        executor.add_node(server_node)
+        executor.add_node(client_node)
+        server = _CancellableServer(server_node)
+
+        behaviour = CallAction(
+            "navigate", node=client_node, action_type=NavigateToPose,
+            action_name="navigate_to_pose", goal_builder=NavigateToPose.Goal,
+        )
+        assert behaviour.client.wait_for_server(timeout_sec=10.0)
+        behaviour.initialise()
+
+        deadline = time.monotonic() + 10.0
+        while behaviour._goal_handle is None and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+            assert behaviour.update() == py_trees.common.Status.RUNNING
+        assert behaviour._goal_handle is not None, "goal was never accepted"
+
+        behaviour.terminate(py_trees.common.Status.INVALID)
+
+        deadline = time.monotonic() + 10.0
+        while not server.cancel_requests and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+
+        assert server.cancel_requests, \
+            "the action SERVER never received a cancel request -- it would keep driving"
     finally:
         rclpy.shutdown()
 

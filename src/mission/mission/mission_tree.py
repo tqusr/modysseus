@@ -351,10 +351,12 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
     the undock manoeuvre bounded by docking.yaml's staging offset (0.6 m).
 
     docking_server is a separate long-running process (docking.launch.py)
-    whose own curr_dock_type_ survives a mission_node-only restart intact
-    and correct, which is the realistic restart scenario this guards; with
-    `dock_type` now always sent, the fuller "docking_server also lost its
-    stashed dock" restart is covered too.
+    whose own docked-state stash survives a mission_node-only restart intact
+    and correct, which is the realistic restart scenario this guards. The
+    fuller "docking_server ALSO lost its stash" restart (e.g. a full-stack
+    restart while physically docked) is still not recoverable -- confirmed
+    live, see undock_goal() in build_ensure_undocked for the measurement and
+    why sending dock_type doesn't close it.
     """
     try:
         transform = tf_buffer.lookup_transform('map', 'base_footprint', Time())
@@ -571,14 +573,32 @@ def build_ensure_undocked(node, tf_buffer, docks, position_writer):
             to dock, server will use current dock information from last
             docking request.
 
-        Leaving it empty (what this tree did before) therefore depends on
-        docking_server's in-process `curr_dock_type_`, which is empty after
-        a docking_server restart -- exactly the scenario Task 8's report
-        logged as an accepted limitation. Setting it explicitly removes that
-        dependency on server-side memory and is a no-op when the stash is
-        valid (same plugin either way). "arena_dock" is the only entry in
-        `dock_plugins` in perception/config/docking.yaml; keep the two in
-        sync.
+        Leaving it empty (what this tree did before) makes the server fall
+        back to its own in-process `curr_dock_type_`, which is empty after a
+        docking_server restart -- so the goal is then rejected outright with
+        DockNotValid ("No dock information to undock from!"). Sending the
+        type removes that one dependency on server-side memory, and is a
+        no-op when the stash is valid (same plugin either way). "arena_dock"
+        is the only entry in `dock_plugins` in
+        perception/config/docking.yaml; keep the two in sync.
+
+        WHAT THIS DOES NOT FIX, measured live 2026-10-02, do not assume
+        otherwise: it does NOT make undocking work after a docking_server
+        restart. Verified against the running stack by restarting
+        docking_server while the robot sat physically docked at A and
+        watching every subsequent UndockRobot goal abort with "Robot is not
+        in the dock, no need to undock". opennav_docking's undockRobot()
+        gates on `dock->isCharger() && (!dock->isDocked() &&
+        !dock->isCharging())` BEFORE it uses dock_type for anything, and
+        SimpleChargingDock::isDocked() measures against the dock pose it
+        stashed during its own approach -- also lost in the restart, with no
+        parameter to supply it and no `is_charger: false` escape hatch in
+        Jazzy's plugin (its declared params are use_battery_status,
+        use_external_detection_pose, external_detection_*, filter_coef,
+        charging_threshold, use_stall_detection, stall_*, docking_threshold,
+        staging_*). So Task 8's "full-stack restart while physically docked"
+        limitation stands; it is an opennav_docking design constraint, not
+        something this client can send its way out of.
         """
         goal = UndockRobot.Goal()
         goal.dock_type = DOCK_PLUGIN_TYPE
