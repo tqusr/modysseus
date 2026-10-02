@@ -18,6 +18,17 @@ _logger = logging.getLogger('mission.mission_tree')
 # last transform is still sitting in the tf2 buffer.
 MAX_TF_AGE_SEC = 2.0
 
+# How far into the FUTURE a transform's own stamp is allowed to be, relative
+# to this node's clock, before it's treated as suspect rather than live.
+# Generous above slam_toolbox's observed ~0.9s deliberate look-ahead (see
+# _transform_is_recent's docstring), but still a real, finite ceiling: an
+# unbounded allowance here would wave through exactly the failure mode this
+# whole check exists to catch -- e.g. some upstream node in the TF chain
+# missing use_sim_time:true (this task's own mission_node hit that bug) and
+# stamping with real wall-clock time while everything else runs on sim time,
+# which would show up as an enormous, nonsensical negative age_sec.
+FUTURE_TF_TOLERANCE_SEC = 2.0
+
 # nav2_lifecycle_manager's own health-check service for the navigation stack
 # (navigation.launch.py's `lifecycle_manager_navigation`) -- a std_srvs/Trigger
 # that returns success=True only while all of its managed nodes are active.
@@ -179,7 +190,8 @@ class ReportRouteDone(py_trees.behaviour.Behaviour):
         return py_trees.common.Status.SUCCESS
 
 
-def _transform_is_recent(tf_buffer, node, target_frame, source_frame, max_age_sec=MAX_TF_AGE_SEC):
+def _transform_is_recent(tf_buffer, node, target_frame, source_frame,
+                          max_age_sec=MAX_TF_AGE_SEC, future_tolerance_sec=FUTURE_TF_TOLERANCE_SEC):
     """True iff target_frame<-source_frame resolves in tf_buffer right now,
     and the resolved transform's own stamp is within max_age_sec of the
     node's current clock -- i.e. some live broadcaster is actually still
@@ -188,7 +200,7 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame, max_age_se
     `rclpy.time.Time()` (zero) is tf2's own convention for "the latest
     transform available", not a literal timestamp to match.
 
-    Only the UPPER bound on age is enforced. Confirmed against the real
+    Both directions are bounded, asymmetrically. Confirmed against the real
     stack (not assumed): slam_toolbox's localization node here consistently
     publishes map->odom stamped ~0.9s AHEAD of the node's own clock sample
     (i.e. age_sec came out around -0.9, not ~0), every single tick -- this
@@ -196,10 +208,15 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame, max_age_se
     localization_params.yaml's own `transform_timeout: 1.0` (stamping
     slightly into the future is a standard tf2 technique to keep consumers
     from hitting "extrapolation into the past" given this sim's known dual-
-    /clock-publisher jumps -- see this stack's shared lessons). A transform
-    stamped in the future is, if anything, MORE current than "now", never
-    staler, so rejecting negative age here would misread a healthy,
-    continuously-republished transform as a dropout.
+    /clock-publisher jumps -- see this stack's shared lessons). So a small
+    future stamp is allowed and is NOT treated as staleness. But the future
+    allowance is still a real, finite ceiling (`future_tolerance_sec`), not
+    unbounded: an arbitrarily-far-future stamp is exactly what a desynced or
+    wrongly-configured clock somewhere in the TF chain would produce (e.g. a
+    node missing use_sim_time:true, stamping with wall-clock time while
+    everything else runs on sim time -- this task's own mission_node hit
+    that exact bug on itself), and that failure mode is precisely what this
+    health check exists to catch, not wave through.
     """
     try:
         transform = tf_buffer.lookup_transform(target_frame, source_frame, Time())
@@ -208,7 +225,7 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame, max_age_se
         return False
     stamp = Time.from_msg(transform.header.stamp)
     age_sec = (node.get_clock().now() - stamp).nanoseconds / 1e9
-    return age_sec <= max_age_sec
+    return -future_tolerance_sec <= age_sec <= max_age_sec
 
 
 class VehicleStatusOK(py_trees.behaviour.Behaviour):
