@@ -36,9 +36,32 @@ would trip on the dock's own back wall on every approach. See
 docking.launch.py's own docstring for the full rationale.
 
 Lifecycle: nav2_lifecycle_manager is Nav2's own purpose-built, widely-used
-manager for exactly this multi-node bring-up - unlike the vendor event-based
-launch activation that bit slam_toolbox hard in Tasks 2/3, this is not an
-ad-hoc launch-file event handler. Verify with
+manager for exactly this multi-node bring-up, rather than an ad-hoc
+launch-file event handler like the vendor event-based activation that bit
+slam_toolbox hard in Tasks 2/3.
+
+That does NOT make it immune to the same underlying failure class, and an
+earlier version of this docstring wrongly implied it did. The failure is in
+the transport, not in who drives the transition: this environment drops
+`change_state` service RESPONSES under load (Nav2's own manager logs
+"failed to send response to /planner_server/change_state (timeout): client
+will not receive response"), and a manager waiting on a response that was
+lost never completes bring-up. OBSERVED HERE, not theorised: 1 of 4
+full-stack launches during the final-review fix wave wedged on exactly that
+signature and never reached `active`; the documented kill-and-relaunch got
+past it.
+
+So the same mitigation that localization uses (localization/scripts/
+slam_lifecycle_watchdog.py - poll the node's state directly and retry,
+instead of trusting the response) is warranted for nav2_lifecycle_manager
+too. It is deliberately NOT implemented here yet: it is tracked as its own
+follow-up item because generalising that watchdog across a 6-node managed
+set is real work, not a docstring fix. Until then this is an operational
+procedure, not an automatic recovery: if the stack has not logged "Managed
+nodes are active" within ~30 s of this launch file starting, kill the whole
+launch and relaunch rather than waiting it out.
+
+Verify with
 `ros2 service call /lifecycle_manager_navigation/is_active \
 std_srvs/srv/Trigger` or `ros2 service call /<node>/get_state
 lifecycle_msgs/srv/GetState` per node, same as it's verified in this task's
