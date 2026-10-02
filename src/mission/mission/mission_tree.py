@@ -42,6 +42,11 @@ LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE = '/lifecycle_manager_navigation/is_active'
 # doesn't false-positive.
 DOCK_PROXIMITY_TOLERANCE_M = 0.3
 
+# The single dock plugin configured in perception/config/docking.yaml
+# (`dock_plugins: ["arena_dock"]`). Sent as UndockRobot.Goal.dock_type -- see
+# build_ensure_undocked's undock_goal() for why that matters.
+DOCK_PLUGIN_TYPE = "arena_dock"
+
 BB_ROUTE_ID = "route_id"
 BB_SOURCE = "source_dock"
 BB_DESTINATION = "destination_dock"
@@ -146,15 +151,71 @@ class ClearRoute(py_trees.behaviour.Behaviour):
 
 
 class StopRobot(py_trees.behaviour.Behaviour):
-    """Publishes a single zero-velocity Twist to /cmd_vel."""
+    """Holds /cmd_vel at zero for as long as the safe-stop branch is active.
 
-    def __init__(self, name, node):
+    NOT a single publish (what this was originally, and a real final-review
+    finding): /cmd_vel has other publishers -- nav2_collision_monitor, the
+    last link in the navigation chain, pushes ~20 Hz, and docking_server
+    publishes there directly during a docking/undocking leg (see
+    perception/launch/docking.launch.py's documented exception). One zero
+    Twist from here is simply overwritten by the next message from either of
+    them, so the robot never actually stops. Worse, Mission ticks at 1 Hz
+    (mission_node.py) and `safe_stop` is a memory=True Sequence, so this
+    behaviour is only *ticked* about once per three-second stop/report/pause
+    cycle -- ticking alone can't hold anything down.
+
+    So two mechanisms, deliberately:
+      1. update() publishes a zero Twist on EVERY tick it gets (the
+         behaviour-tree-visible part, and what the unit tests assert).
+      2. The first such tick also starts a `publish_hz` ROS timer on the
+         mission node that keeps republishing zero between ticks, which is
+         what actually holds the line against a 20 Hz publisher. It is torn
+         down in terminate(INVALID) -- i.e. the moment py_trees leaves the
+         safe-stop branch because `Mission` succeeded again -- so it can
+         never fight a healthy, resumed navigation.
+
+    The real stop is still CallAction.terminate()'s goal cancellation (the
+    server-side fix); this is the belt-and-braces cover for the window
+    between "goal cancel requested" and "the server has actually wound
+    down", and for anything commanding /cmd_vel that this tree never knew
+    about.
+    """
+
+    #: Fast relative to Mission's 1 Hz tick, and to Nav2's 20 Hz controller
+    #: rate -- high enough to dominate the gap between ticks, low enough to
+    #: be free on a Jetson Orin Nano.
+    DEFAULT_PUBLISH_HZ = 10.0
+
+    def __init__(self, name, node, publish_hz=DEFAULT_PUBLISH_HZ):
         super().__init__(name)
+        self._node = node
         self._publisher = node.create_publisher(Twist, '/cmd_vel', 10)
+        self._publish_hz = publish_hz
+        self._timer = None
 
     def update(self):
-        self._publisher.publish(Twist())
+        self._publish_zero()
+        if self._timer is None:
+            self._timer = self._node.create_timer(1.0 / self._publish_hz, self._publish_zero)
         return py_trees.common.Status.SUCCESS
+
+    def terminate(self, new_status):
+        # INVALID means the root Selector has switched back to `Mission`
+        # (py_trees invalidates the losing branch) -- stop holding /cmd_vel
+        # down so navigation can drive again. SUCCESS/FAILURE, by contrast,
+        # happen on every tick within an ongoing safe stop; the timer must
+        # survive those.
+        if new_status == py_trees.common.Status.INVALID:
+            self._cancel_timer()
+
+    def _publish_zero(self):
+        self._publisher.publish(Twist())
+
+    def _cancel_timer(self):
+        if self._timer is not None:
+            self._timer.cancel()
+            self._node.destroy_timer(self._timer)
+            self._timer = None
 
 
 class ReportFaultToSaga(py_trees.behaviour.Behaviour):
@@ -262,25 +323,29 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
     independent signal from the one piece of state that DOES survive a
     mission_node restart: the robot's real physical pose.
 
-    Calling UndockRobot speculatively when this (or the blackboard) is
-    wrong is intentionally not a safety concern: opennav_docking's own
-    undockRobot() throws DockNotValid (caught internally, zero velocity
-    published, result.success=False) when it has no stashed dock to undock
-    from -- confirmed against the real source
-    (nav2_docking/opennav_docking/src/docking_server.cpp's undockRobot(),
-    `ChargingDock::Ptr dock = dock_db_->findDockPlugin(dock_type); if
-    (!dock) { throw opennav_docking_core::DockNotValid(...); }` with
-    dock_type falling back to the server's own curr_dock_type_, which is
-    empty until a dock request ever stashes one) -- so a false-positive
-    "docked" reading here costs one harmless failed action call, never
-    robot motion. docking_server is a separate long-running process
-    (docking.launch.py) whose own curr_dock_type_ survives a mission_node-
-    only restart intact and correct, which is the realistic restart
-    scenario this guards -- see the Task 8 report for the one scenario this
-    genuinely cannot cover (docking_server itself also losing its stashed
-    dock, e.g. a full-stack restart while physically docked), which is an
-    opennav_docking API limitation (UndockRobot's goal carries a dock
-    *type*, not a specific dock id/pose) outside what this client can fix.
+    What a false positive now costs (CHANGED by the final-review fix wave,
+    read this before reusing the old reasoning): this used to be free,
+    because UndockRobot.Goal was sent with an empty `dock_type`, so a
+    docking_server with nothing stashed threw DockNotValid internally
+    (zero velocity published, result.success=False) and nothing moved.
+    build_ensure_undocked now sets `dock_type: "arena_dock"` explicitly
+    (see undock_goal() there, and the Task 8 limitation it closes), so the
+    plugin always resolves and a false positive costs one real, short
+    reverse undock manoeuvre instead of a free failed call. That trade is
+    deliberate and still the right one: the alternative failure mode is the
+    robot being unable to undock at all after a docking_server restart,
+    which deadlocks the whole mission (the exact deadlock this mechanism
+    exists to prevent), whereas a false positive requires the robot to be
+    within DOCK_PROXIMITY_TOLERANCE_M (0.3 m) of a real dock pose while not
+    actually docked -- and that is a dock approach corridor, kept clear of
+    props by the arena design (see arena.sdf's own prop-layout notes), with
+    the undock manoeuvre bounded by docking.yaml's staging offset (0.6 m).
+
+    docking_server is a separate long-running process (docking.launch.py)
+    whose own curr_dock_type_ survives a mission_node-only restart intact
+    and correct, which is the realistic restart scenario this guards; with
+    `dock_type` now always sent, the fuller "docking_server also lost its
+    stashed dock" restart is covered too.
     """
     try:
         transform = tf_buffer.lookup_transform('map', 'base_footprint', Time())
@@ -457,9 +522,33 @@ def build_ensure_undocked(node, tf_buffer, docks, position_writer):
         if position_writer.exists(BB_CURRENT_POSITION):
             position_writer.unset(BB_CURRENT_POSITION)
 
+    def undock_goal():
+        """UndockRobot.Goal with `dock_type` explicitly set.
+
+        nav2_msgs/action/UndockRobot.action's own comment:
+
+            If initialized on a dock so the server doesn't know what type of
+            dock its on, you must specify what dock it is to know where to
+            stage for undocking. [...] If not set & server instance was used
+            to dock, server will use current dock information from last
+            docking request.
+
+        Leaving it empty (what this tree did before) therefore depends on
+        docking_server's in-process `curr_dock_type_`, which is empty after
+        a docking_server restart -- exactly the scenario Task 8's report
+        logged as an accepted limitation. Setting it explicitly removes that
+        dependency on server-side memory and is a no-op when the stash is
+        valid (same plugin either way). "arena_dock" is the only entry in
+        `dock_plugins` in perception/config/docking.yaml; keep the two in
+        sync.
+        """
+        goal = UndockRobot.Goal()
+        goal.dock_type = DOCK_PLUGIN_TYPE
+        return goal
+
     undock = CallAction(
         "UndockRobot", node=node, action_type=UndockRobot,
-        action_name="undock_robot", goal_builder=UndockRobot.Goal, on_success=mark_undocked,
+        action_name="undock_robot", goal_builder=undock_goal, on_success=mark_undocked,
     )
     return py_trees.composites.Selector(
         name="Not docked?", memory=False,

@@ -3,7 +3,7 @@ import time
 import py_trees
 import rclpy
 import tf2_ros
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Twist
 from nav2_msgs.action import UndockRobot
 from rclpy.action import ActionServer
 from rclpy.duration import Duration
@@ -16,11 +16,13 @@ from mission.mission_tree import (
     BB_DESTINATION,
     BB_ROUTE_ID,
     BB_SOURCE,
+    DOCK_PLUGIN_TYPE,
     DOCK_PROXIMITY_TOLERANCE_M,
     FUTURE_TF_TOLERANCE_SEC,
     LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
     MAX_TF_AGE_SEC,
     Localize,
+    StopRobot,
     VehicleStatusOK,
     build_ensure_undocked,
     build_mission_tree,
@@ -148,10 +150,12 @@ class _CountingUndockServer:
 
     def __init__(self, node):
         self.goal_count = 0
+        self.dock_types = []
         self._server = ActionServer(node, UndockRobot, 'undock_robot', self._execute)
 
     def _execute(self, goal_handle):
         self.goal_count += 1
+        self.dock_types.append(goal_handle.request.dock_type)
         goal_handle.succeed()
         return UndockRobot.Result()
 
@@ -480,6 +484,11 @@ def test_ensure_undocked_fires_when_blackboard_says_docked():
         assert status == py_trees.common.Status.SUCCESS
         assert not position_writer.exists(BB_CURRENT_POSITION), \
             "a successful UndockRobot should have cleared BB_CURRENT_POSITION"
+        # An empty dock_type makes the server fall back to its own stashed
+        # state, which is gone after a docking_server restart -- see
+        # build_ensure_undocked's undock_goal().
+        assert undock_server.dock_types == [DOCK_PLUGIN_TYPE], \
+            "UndockRobot goal must name the dock plugin explicitly"
     finally:
         rclpy.shutdown()
 
@@ -571,6 +580,101 @@ def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
         assert undock_server.goal_count == 0, \
             "UndockRobot must NOT be called when neither signal indicates docked"
         assert status == py_trees.common.Status.SUCCESS
+    finally:
+        rclpy.shutdown()
+
+
+def _count_cmd_vel_messages(node, received):
+    return node.create_subscription(
+        Twist, '/cmd_vel', lambda msg: received.append(msg), 10)
+
+
+def test_stop_robot_publishes_a_zero_twist_on_every_tick():
+    """The safe-stop fix: a SINGLE zero Twist (what this used to publish) is
+    simply overwritten by the next message from collision_monitor or
+    docking_server, both of which publish /cmd_vel far faster than Mission
+    ticks. Every tick must publish, and every published command must be
+    zero."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_stop_robot_per_tick")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        received = []
+        _count_cmd_vel_messages(node, received)
+
+        # publish_hz effectively disabled, so this test measures ONLY the
+        # per-tick publishes (the timer gets its own test below).
+        behaviour = StopRobot("StopRobot", node, publish_hz=0.001)
+
+        for _ in range(3):
+            assert behaviour.update() == py_trees.common.Status.SUCCESS
+            _spin_and_drain(executor, 0.1)
+
+        assert len(received) >= 3, \
+            f"expected at least one zero Twist per tick, got {len(received)}"
+        assert all(msg.linear.x == 0.0 and msg.angular.z == 0.0 for msg in received)
+    finally:
+        rclpy.shutdown()
+
+
+def test_stop_robot_keeps_publishing_between_ticks_and_stops_when_invalidated():
+    """Mission ticks at 1 Hz and `safe_stop` is a memory=True Sequence, so
+    ticking alone leaves multi-second holes against a 20 Hz publisher. The
+    behaviour starts a timer on its first tick to fill them -- and must tear
+    that timer down when py_trees invalidates it (the root Selector switching
+    back to `Mission`), or it would fight healthy navigation forever."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_stop_robot_timer")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        received = []
+        _count_cmd_vel_messages(node, received)
+
+        behaviour = StopRobot("StopRobot", node, publish_hz=20.0)
+        behaviour.update()  # one tick only -- the rest must come from the timer
+        _spin_and_drain(executor, 0.5)
+
+        during_stop = len(received)
+        assert during_stop > 2, \
+            f"timer should have republished zero between ticks, got {during_stop}"
+
+        behaviour.terminate(py_trees.common.Status.INVALID)
+        # Drain whatever was already in flight when the timer was cancelled
+        # (a message published a moment before the cancel still gets
+        # delivered), THEN measure a clean window.
+        _spin_and_drain(executor, 0.2)
+        received.clear()
+        _spin_and_drain(executor, 0.5)
+
+        assert received == [], \
+            "StopRobot must stop publishing once the safe-stop branch is invalidated"
+    finally:
+        rclpy.shutdown()
+
+
+def test_stop_robot_keeps_its_timer_across_an_ongoing_safe_stop():
+    """terminate() fires on ordinary SUCCESS too (py_trees calls
+    stop(SUCCESS) from tick()) -- tearing the timer down there would undo
+    the whole point, since StopRobot returns SUCCESS on every single tick of
+    an active safe stop."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_stop_robot_timer_survives_success")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        received = []
+        _count_cmd_vel_messages(node, received)
+
+        behaviour = StopRobot("StopRobot", node, publish_hz=20.0)
+        behaviour.update()
+        behaviour.terminate(py_trees.common.Status.SUCCESS)
+        received.clear()
+        _spin_and_drain(executor, 0.5)
+
+        assert len(received) > 2, \
+            "the holding timer must survive a SUCCESS terminate, only INVALID stops it"
     finally:
         rclpy.shutdown()
 
