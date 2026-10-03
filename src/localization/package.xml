@@ -12,6 +12,7 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>robot_localization</depend>
   <depend>slam_toolbox</depend>
+  <exec_depend>laser_filters</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
   <!-- wheel_odometry_node.py: it consumes sensor_msgs/JointState, publishes

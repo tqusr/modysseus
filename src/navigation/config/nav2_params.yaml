@@ -37,7 +37,7 @@
 #
 # Sensors (from einride_mini_truck_bringup/launch/simulation.launch.py and
 # einride_mini_truck_description's model.sdf):
-#   - lidar: /scan (sensor_msgs/LaserScan, LD19 2D lidar)
+#   - lidar: /scan_filtered (sensor_msgs/LaserScan, LD19 2D lidar)
 #   - camera: /oak/points_filtered (sensor_msgs/PointCloud2), NOT the raw
 #     /oak/points simulation.launch.py's point_cloud_xyzrgb_node builds from
 #     the OAK-D Lite's depth+colour streams. Verified during this task's own
@@ -324,7 +324,7 @@ collision_monitor:
     observation_sources: ["scan", "oak_cloud"]
     scan:
       type: "scan"
-      topic: "/scan"
+      topic: "/scan_filtered"
       min_height: 0.05
       max_height: 1.0
       enabled: true
@@ -393,7 +393,7 @@ local_costmap:
         enabled: true
         observation_sources: "scan"
         scan:
-          topic: "/scan"
+          topic: "/scan_filtered"
           sensor_frame: ""
           data_type: "LaserScan"
           min_obstacle_height: 0.0
@@ -460,7 +460,7 @@ global_costmap:
         enabled: true
         observation_sources: "scan"
         scan:
-          topic: "/scan"
+          topic: "/scan_filtered"
           sensor_frame: ""
           data_type: "LaserScan"
           min_obstacle_height: 0.0

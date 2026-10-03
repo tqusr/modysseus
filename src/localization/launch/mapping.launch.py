@@ -1,4 +1,4 @@
-"""Run slam_toolbox in mapping mode against /scan.
+"""Run slam_toolbox in mapping mode against /scan_filtered (antennas removed).
 
 One-time data-collection launch: drive the robot around the arena while this
 runs, then save the resulting map with nav2_map_server's map_saver_cli. Task
@@ -84,7 +84,7 @@ from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import LifecycleNode
+from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
@@ -99,6 +99,21 @@ def generate_launch_description():
         get_package_share_directory('localization'),
         'config',
         'mapper_params_online_async.yaml',
+    )
+
+    # Removes the robot's own antennas from /scan; slam_toolbox reads the
+    # result. See config/scan_filter.yaml.
+    scan_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='scan_filter',
+        output='screen',
+        parameters=[
+            os.path.join(get_package_share_directory('localization'),
+                         'config', 'scan_filter.yaml'),
+            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+        ],
+        remappings=[('scan', '/scan'), ('scan_filtered', '/scan_filtered')],
     )
 
     slam_node = LifecycleNode(
@@ -160,6 +175,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true',
                               description='Take time from /clock. True in '
                                           'simulation, false on hardware.'),
+        scan_filter,
         slam_node,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),

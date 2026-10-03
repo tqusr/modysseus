@@ -39,7 +39,7 @@ topics/services:
          the bridge; 5s gives Gazebo a head start publishing them.
   t=5s   apriltag.launch.py, oak_points_filter.launch.py -- need the OAK-D
          image/pointcloud topics from the same bridge; same head start.
-  t=7s   localize.launch.py (slam_toolbox, map->odom) -- needs /scan; its own
+  t=7s   localize.launch.py (slam_toolbox, map->odom) -- needs /scan (filtered to /scan_filtered by laser_filters); its own
          internal TimerActions (configure at +3s, watchdog at +4s relative to
          ITS OWN start) then run from t=7s, i.e. activation is attempted
          around t=10-11s, well after the sim is alive.

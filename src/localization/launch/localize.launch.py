@@ -65,7 +65,7 @@ from launch.actions import (EmitEvent, ExecuteProcess, LogInfo,
                             RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
-from launch_ros.actions import LifecycleNode
+from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
@@ -79,6 +79,18 @@ def generate_launch_description():
     share = get_package_share_directory('localization')
     config = os.path.join(share, 'config', 'localization_params.yaml')
     map_file_name = os.path.join(share, 'maps', 'arena')
+
+    # Removes the robot's own antennas from /scan; slam_toolbox reads the
+    # result. See config/scan_filter.yaml.
+    scan_filter = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='scan_filter',
+        output='screen',
+        parameters=[os.path.join(share, 'config', 'scan_filter.yaml'),
+                    {'use_sim_time': True}],
+        remappings=[('scan', '/scan'), ('scan_filtered', '/scan_filtered')],
+    )
 
     slam_node = LifecycleNode(
         package='slam_toolbox',
@@ -126,6 +138,7 @@ def generate_launch_description():
     ))
 
     return LaunchDescription([
+        scan_filter,
         slam_node,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
