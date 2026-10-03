@@ -36,13 +36,14 @@ def _launch_nodes(context):
                 'saga_url': LaunchConfiguration('saga_url').perform(context),
                 'saga_token': LaunchConfiguration('saga_token').perform(context),
                 # Required since Task 7: VehicleStatusOK/Localize compare TF
-                # stamps (sim-clock, since every other node in this stack runs
-                # with use_sim_time:true) against this node's own clock. Without
-                # this, mission_node's clock is real wall-clock -- a completely
-                # different time domain from the sim-clock TF stamps -- which
-                # made every TF recency check fail permanently when confirmed
-                # against the real stack (not assumed). The real robot has no
-                # /clock, so hardware passes use_sim_time:=false.
+                # stamps against this node's own clock, so it must run in the same
+                # time domain as the rest of the stack (the launch argument
+                # use_sim_time, default true = sim /clock). In simulation,
+                # without this mission_node's wall clock is a different time
+                # domain from the sim-clock TF stamps, which made every TF
+                # recency check fail permanently (confirmed against the real
+                # stack, not assumed). The real robot has no /clock, so
+                # hardware passes use_sim_time:=false for every node.
                 'use_sim_time': use_sim_time,
             }],
         ),
