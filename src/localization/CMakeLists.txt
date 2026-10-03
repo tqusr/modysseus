@@ -17,12 +17,14 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
         scripts/slam_lifecycle_watchdog.py
         scripts/wheel_odometry_node.py
+        scripts/gyro_bias_node.py
         DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   # Pure Python against pure Python: no ROS graph, no robot, no Gazebo.
   ament_add_pytest_test(test_wheel_odometry test/test_wheel_odometry.py)
+  ament_add_pytest_test(test_gyro_bias test/test_gyro_bias.py)
 endif()
 
 ament_package()
