@@ -58,6 +58,9 @@ Do not trust the vendor's own lifecycle-manager pattern (`nav2_lifecycle_manager
 or a bare `LifecycleNode` with no activation path here without the watchdog --
 see the lesson in this repo's task briefs: it is exactly the race that cost
 real time in Tasks 2/3.
+
+The `use_sim_time` launch argument (default true) exists for the real robot,
+which runs on wall-clock time.
 """
 
 import os
@@ -65,9 +68,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, LogInfo, RegisterEventHandler, TimerAction
+from launch.actions import (DeclareLaunchArgument, ExecuteProcess, LogInfo,
+                            OpaqueFunction, RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -79,7 +84,13 @@ from lifecycle_msgs.msg import Transition
 ACTIVATION_TIMEOUT = 60.0
 
 
-def generate_launch_description():
+def _as_bool(text):
+    """Launch arguments are text; node parameters must be typed."""
+    return text.strip().lower() in ('true', '1')
+
+
+def _launch_nodes(context):
+    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     config = os.path.join(
         get_package_share_directory('perception'), 'config', 'docking.yaml')
 
@@ -89,7 +100,7 @@ def generate_launch_description():
         name='docking_server',
         namespace='',
         output='screen',
-        parameters=[config, {'use_sim_time': True}],
+        parameters=[config, {'use_sim_time': use_sim_time}],
     )
 
     def change_state(transition_id):
@@ -124,10 +135,17 @@ def generate_launch_description():
         ))],
     ))
 
-    return LaunchDescription([
+    return [
         docking_node,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
         TimerAction(period=4.0, actions=[watchdog]),
         report,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        OpaqueFunction(function=_launch_nodes),
     ])

@@ -19,9 +19,11 @@ loudly with an AttributeError rather than passing silently.
 import importlib.util
 import os
 
+import yaml
 from launch import LaunchContext
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             OpaqueFunction)
+from launch.substitution import Substitution
 from launch.utilities import (normalize_to_list_of_substitutions,
                               perform_substitutions)
 from launch_ros.actions import Node
@@ -68,10 +70,19 @@ def describe_node(node, context):
 
     remappings = {text(src): text(dst) for src, dst in node._Node__remappings}
     use_sim_time = None
+    inline = {}
     parameter_files = []
     for param in node._Node__parameters:
         if isinstance(param, dict):  # the inline {'use_sim_time': ...} dict
             for key, value in param.items():
+                # Node wraps string values as a tuple of substitutions holding
+                # their YAML dump; launch parses that back, and so do we.
+                is_text = isinstance(value, Substitution) or (
+                    isinstance(value, (tuple, list)) and value
+                    and all(isinstance(v, Substitution) for v in value))
+                inline[text(key)] = (yaml.safe_load(perform_substitutions(
+                    context, normalize_to_list_of_substitutions(value)))
+                    if is_text else value)
                 if text(key) == 'use_sim_time':
                     use_sim_time = value
         else:  # a ParameterFile, holding a path or substitutions
@@ -84,6 +95,7 @@ def describe_node(node, context):
         'name': node._Node__node_name,
         'remappings': remappings,
         'use_sim_time': use_sim_time,
+        'inline_parameters': inline,
         'parameter_files': parameter_files,
     }
 

@@ -30,6 +30,10 @@ A voxel downsample now runs AHEAD of the crop box. That stage is a latency
 fix, not a filtering one - the raw cloud's 29.5 MB/message volume was
 starving nav2_collision_monitor's camera source of data fresh enough to pass
 its `source_timeout`. config/oak_points_filter.yaml has the measurements.
+
+The `use_sim_time` launch argument (default true) exists for the real robot.
+The YAML sets `use_sim_time: true` on both filters; the inline dict listed
+after it wins.
 """
 
 import os
@@ -37,14 +41,22 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
+def _as_bool(text):
+    """Launch arguments are text; node parameters must be typed."""
+    return text.strip().lower() in ('true', '1')
+
+
+def _launch_nodes(context):
+    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     config = os.path.join(
         get_package_share_directory('perception'), 'config', 'oak_points_filter.yaml')
 
-    return LaunchDescription([
+    return [
         # Stage 1: voxel downsample. /oak/points is a 1280x720 ORGANIZED
         # cloud -- 921,600 points, 29.5 MB per message at a nominal 30 Hz
         # (measured off the topic). Carrying that volume all the way to
@@ -59,7 +71,7 @@ def generate_launch_description():
             executable='filter_voxel_grid_node',
             name='filter_voxel_grid_node',
             output='screen',
-            parameters=[config],
+            parameters=[config, {'use_sim_time': use_sim_time}],
             remappings=[
                 ('input', '/oak/points'),
                 ('output', '/oak/points_voxel'),
@@ -74,10 +86,17 @@ def generate_launch_description():
             executable='filter_crop_box_node',
             name='filter_crop_box_node',
             output='screen',
-            parameters=[config],
+            parameters=[config, {'use_sim_time': use_sim_time}],
             remappings=[
                 ('input', '/oak/points_voxel'),
                 ('output', '/oak/points_filtered'),
             ],
         ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        OpaqueFunction(function=_launch_nodes),
     ])

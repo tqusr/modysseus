@@ -54,6 +54,10 @@ Also uses `sync_slam_toolbox_node`'s localization counterpart
 same reason mapping.launch.py gives: this sim's dual `/clock` publishers
 produce small time jumps that proved less reliable against the async node's
 threading model during Task 2's investigation.
+
+The `use_sim_time` (default true) and `map` (default `arena`) launch arguments
+exist for the real robot: hardware runs on wall-clock time and its own saved
+pose graph (e.g. `map:=arena_real`).
 """
 
 import os
@@ -61,10 +65,12 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (EmitEvent, ExecuteProcess, LogInfo,
-                            RegisterEventHandler, TimerAction)
+from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
+                            LogInfo, OpaqueFunction, RegisterEventHandler,
+                            TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -75,10 +81,17 @@ from lifecycle_msgs.msg import Transition
 ACTIVATION_TIMEOUT = 60.0
 
 
-def generate_launch_description():
+def _as_bool(text):
+    """Launch arguments are text; node parameters must be typed."""
+    return text.strip().lower() in ('true', '1')
+
+
+def _launch_nodes(context):
+    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     share = get_package_share_directory('localization')
     config = os.path.join(share, 'config', 'localization_params.yaml')
-    map_file_name = os.path.join(share, 'maps', 'arena')
+    map_file_name = os.path.join(
+        share, 'maps', LaunchConfiguration('map').perform(context))
 
     # Removes the robot's own antennas from /scan; slam_toolbox reads the
     # result. See config/scan_filter.yaml.
@@ -88,7 +101,7 @@ def generate_launch_description():
         name='scan_filter',
         output='screen',
         parameters=[os.path.join(share, 'config', 'scan_filter.yaml'),
-                    {'use_sim_time': True}],
+                    {'use_sim_time': use_sim_time}],
         remappings=[('scan', '/scan'), ('scan_filtered', '/scan_filtered')],
     )
 
@@ -100,7 +113,7 @@ def generate_launch_description():
         output='screen',
         parameters=[config, {
             'use_lifecycle_manager': False,
-            'use_sim_time': True,
+            'use_sim_time': use_sim_time,
             'map_file_name': map_file_name,
         }],
     )
@@ -137,11 +150,23 @@ def generate_launch_description():
         ))],
     ))
 
-    return LaunchDescription([
+    return [
         scan_filter,
         slam_node,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
         TimerAction(period=4.0, actions=[watchdog]),
         report,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'use_sim_time', default_value='true',
+            description='Use /clock (simulation); false on the real robot'),
+        DeclareLaunchArgument(
+            'map', default_value='arena',
+            description='Pose graph basename in localization/maps'),
+        OpaqueFunction(function=_launch_nodes),
     ])
