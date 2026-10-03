@@ -160,8 +160,8 @@ docking_server:
         # pushing.
         docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
         A: {type: "arena_dock", frame: "map", pose: [2.866, -1.500, 0.0], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [2.866, 1.500, 0.0], id: "1"}
-        C: {type: "arena_dock", frame: "map", pose: [1.500, 2.866, 1.5708], id: "2"}
+        B: {type: "arena_dock", frame: "map", pose: [2.900, 1.493, 0.00008], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [1.516, 2.879, 1.58445], id: "2"}
         D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.866, 1.5708], id: "3"}
         E: {type: "arena_dock", frame: "map", pose: [-2.866, 1.500, 3.14159], id: "4"}
         F: {type: "arena_dock", frame: "map", pose: [-2.866, -1.500, 3.14159], id: "5"}

@@ -49,8 +49,8 @@
 # including a real false-start this task hit by conflating the two).
 docks:
   A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}
-  B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: 1.500, theta: 0.0}}
-  C: {tag_id: 2, dock_pose: {x: 1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: 1.500, y: 2.392, theta: 1.5708}}
+  B: {tag_id: 1, dock_pose: {x: 3.026, y: 1.493, theta: -3.14151}, staging_pose: {x: 2.426, y: 1.493, theta: 0.00008}}
+  C: {tag_id: 2, dock_pose: {x: 1.515, y: 3.005, theta: -1.55714}, staging_pose: {x: 1.523, y: 2.405, theta: 1.58445}}
   D: {tag_id: 3, dock_pose: {x: -1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: -1.500, y: 2.392, theta: 1.5708}}
   E: {tag_id: 4, dock_pose: {x: -2.992, y: 1.500, theta: 0.0}, staging_pose: {x: -2.392, y: 1.500, theta: 3.14159}}
   F: {tag_id: 5, dock_pose: {x: -2.992, y: -1.500, theta: 0.0}, staging_pose: {x: -2.392, y: -1.500, theta: 3.14159}}
