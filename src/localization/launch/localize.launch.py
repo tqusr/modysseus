@@ -86,12 +86,29 @@ def _as_bool(text):
     return text.strip().lower() in ('true', '1')
 
 
+def _require_pose_graph(map_file_name):
+    """Fail at launch if the pose graph is missing.
+
+    slam_toolbox only logs "Failed to read file" for a missing graph, still
+    configures successfully and the watchdog then reports localization live,
+    so Nav2 and the mission would run against an empty map.
+    """
+    missing = [path for path in (map_file_name + '.posegraph', map_file_name + '.data')
+               if not os.path.exists(path)]
+    if missing:
+        raise RuntimeError(
+            'slam_toolbox pose graph not found: ' + ', '.join(missing) + '. '
+            'Save the map with /slam_toolbox/serialize_map into '
+            'src/localization/maps/<map> and colcon build localization.')
+
+
 def _launch_nodes(context):
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     share = get_package_share_directory('localization')
     config = os.path.join(share, 'config', 'localization_params.yaml')
     map_file_name = os.path.join(
         share, 'maps', LaunchConfiguration('map').perform(context))
+    _require_pose_graph(map_file_name)
 
     # Removes the robot's own antennas from /scan; slam_toolbox reads the
     # result. See config/scan_filter.yaml.
