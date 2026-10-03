@@ -1,29 +1,38 @@
 # laser_filters scan_to_scan_filter_chain: /scan -> /scan_filtered.
 #
 # The LD19 sees the robot's own two antennas, mounted behind the lidar at
-# roughly 45 degrees to the left and right and ~16 cm away. Left in /scan they
-# are mapped by slam_toolbox and seen by Nav2's costmaps and collision monitor
-# as a permanent obstacle on the robot. Every /scan consumer reads
-# /scan_filtered instead.
+# roughly 45 degrees to the left and right. Left in /scan they are mapped by
+# slam_toolbox and seen by Nav2's costmaps and collision monitor as a
+# permanent obstacle on the robot. Every /scan consumer reads /scan_filtered
+# instead.
 #
-# The box is expressed in base_link (x forward, y left), NOT base_lidar_link:
-# the lidar is mounted yawed 90 degrees (model.sdf), so "behind the robot" is
-# +y in the lidar frame and a box there would be easy to get wrong. The lidar
-# sits at x = +0.040 in base_link. The box is sized to cover both readings of
-# the antenna description (16 cm radially along +-45 degrees, or 16 cm back
-# with a +-45 degree lateral offset) with margin, and stops just behind the
-# lidar so nothing in front of or beside it is ever dropped.
-scan_to_scan_filter_chain:
+# The top-level key MUST equal the node name the launch files give the filter
+# node (name='scan_filter' in mapping.launch.py and localize.launch.py). A
+# params file only applies to the node whose name matches its key: keyed on
+# the executable's default name (scan_to_scan_filter_chain) it loaded nothing,
+# the chain was empty, and /scan_filtered was an unfiltered copy of /scan.
+# test/test_scan_filter_config.py enforces this.
+#
+# Box: starts AT the lidar and extends 20 cm back and 10 cm to each side.
+# Expressed in base_link (x forward, y left), NOT base_lidar_link: the lidar
+# is mounted yawed +90 degrees, so "back" would be +y in the lidar frame. The
+# real mounting, from `tf2_echo base_link base_lidar_link` on the robot, is
+# translation (0.040, 0.000, 0.040), yaw +90 deg, so the box is
+#   x in [0.040 - 0.20, 0.040] = [-0.160, 0.040],  y in [-0.10, 0.10].
+# Measured antenna returns (lidar angles ~48-50 and ~128-132 deg, r ~0.134 m)
+# land at x ~ -0.06, |y| ~ 0.085-0.091 in base_link: inside, but only ~1 cm
+# inside the y limits. z is left wide; the lidar plane is at z = 0.040.
+scan_filter:
   ros__parameters:
     filter1:
       name: antenna_box
       type: laser_filters/LaserScanBoxFilter
       params:
         box_frame: base_link
-        min_x: -0.21
-        max_x: -0.01
-        min_y: -0.22
-        max_y: 0.22
+        min_x: -0.16
+        max_x: 0.04
+        min_y: -0.10
+        max_y: 0.10
         min_z: -0.5
         max_z: 0.5
         invert: false
