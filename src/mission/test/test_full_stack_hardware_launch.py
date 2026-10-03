@@ -9,7 +9,8 @@ import importlib.util
 import os
 
 import pytest
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, LogInfo, TimerAction
+from launch.utilities import perform_substitutions
 from launch_ros.actions import Node
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -29,8 +30,12 @@ def _load_helpers():
 h = _load_helpers()
 
 
-def _is_false(value):
-    return value is False or (isinstance(value, str) and value.lower() in ('false', '0'))
+@pytest.fixture(autouse=True)
+def robot_pose_graph_exists(monkeypatch):
+    """`arena_real` only exists on the robot; pretend its files do here."""
+    real_exists = os.path.exists
+    monkeypatch.setattr(os.path, 'exists', lambda path: (
+        True if 'arena_real' in str(path) else real_exists(path)))
 
 
 def _walk(entities, context):
@@ -76,11 +81,17 @@ def test_all_layers_on_by_default_and_no_simulator():
 
 def test_every_node_is_on_wall_clock():
     nodes = _nodes()
-    assert len(nodes) >= 12
+    assert sorted(n['name'] for n in nodes) == [
+        'apriltag_node', 'behavior_server', 'bt_navigator', 'collision_monitor',
+        'controller_server', 'docking_server', 'ekf_filter_node',
+        'filter_crop_box_node', 'filter_voxel_grid_node', 'gyro_bias_node',
+        'lifecycle_manager_navigation', 'mission_node', 'planner_server',
+        'rectify_node', 'scan_filter', 'slam_toolbox', 'velocity_smoother',
+        'wheel_odometry_node']
     for node in nodes:
         # oak filter / apriltag / etc. all set it; a node without it would
         # silently run with its YAML's `true`.
-        assert _is_false(node['inline_parameters'].get('use_sim_time')), node['name']
+        assert node['inline_parameters'].get('use_sim_time') is False, node['name']
 
 
 @pytest.mark.parametrize('switch,dropped', [
@@ -94,9 +105,9 @@ def test_switch_false_drops_only_its_includes(switch, dropped):
 
 
 def test_map_and_saga_token_are_forwarded():
-    nodes = {n['name']: n for n in _nodes(map='foo', saga_token='12345')}
+    nodes = {n['name']: n for n in _nodes(map='arena_real_alt', saga_token='12345')}
     assert nodes['slam_toolbox']['inline_parameters']['map_file_name'].endswith(
-        os.path.join('maps', 'foo'))
+        os.path.join('maps', 'arena_real_alt'))
     assert nodes['mission_node']['inline_parameters']['saga_token'] == '12345'
 
 
@@ -109,3 +120,31 @@ def test_default_map_is_arena_real():
 def test_apriltag_is_rectified_on_the_oak_raw_image():
     nodes = {n['name']: n for n in _nodes()}
     assert nodes['rectify_node']['remappings']['image'] == '/oak/rgb/image_raw'
+
+
+def _warnings(**args):
+    description = h.load_launch_module(LAUNCH_PATH).generate_launch_description()
+    context = h.make_context(description, **args)
+    return [perform_substitutions(context, e.msg)
+            for e in h.expand(description.entities, context)
+            if isinstance(e, LogInfo)
+            and (e.condition is None or e.condition.evaluate(context))]
+
+
+def test_no_warnings_by_default():
+    assert _warnings() == []
+
+
+def test_docking_without_nav_warns():
+    warnings = _warnings(docking='true', nav='false')
+    assert len(warnings) == 2  # mission is on by default as well
+    assert any('docking needs nav' in w for w in warnings)
+
+
+def test_mission_without_nav_warns():
+    warnings = _warnings(docking='false', nav='false')
+    assert len(warnings) == 1 and 'mission:=true' in warnings[0]
+
+
+def test_no_warnings_when_dependents_are_off_too():
+    assert _warnings(nav='false', docking='false', mission='false') == []

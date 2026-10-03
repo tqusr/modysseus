@@ -41,8 +41,8 @@ THE ROBOT TERMINAL WORKFLOW
   2. Save the arena's pose graph as `arena_real.posegraph` and
      `arena_real.data` into `src/localization/maps/` and rebuild (`colcon
      build --packages-select localization`, then source `install/setup.bash`):
-     `maps` is installed by the package. Without them slam_toolbox fails at
-     configure and the localize watchdog says so loudly.
+     `maps` is installed by the package. Without them the localize launch
+     refuses to start (it raises, naming the missing paths).
   3. Start the stack, one layer at a time the first time (hand on the e-stop
      from step b on):
          a. ros2 launch mission full_stack_hardware.launch.py \
@@ -74,10 +74,12 @@ so a switched-off layer does not need its package's files.
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
+                            LogInfo, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import (LaunchConfiguration, PathJoinSubstitution,
+                                  PythonExpression)
 from launch_ros.substitutions import FindPackageShare
 
 HARDWARE = {'use_sim_time': 'false'}  # launch arguments are text
@@ -90,6 +92,14 @@ def _include(package, launch_file, arguments=None, switch=None):
             [FindPackageShare(package), 'launch', launch_file])),
         launch_arguments=(arguments or {}).items(),
         condition=IfCondition(LaunchConfiguration(switch)) if switch else None)
+
+
+def _warn_when(message, *, on, off):
+    """LogInfo shown when switch `on` is true and switch `off` is false."""
+    def is_true(name):
+        return ["'", LaunchConfiguration(name), "'.lower() in ('true', '1')"]
+    return LogInfo(msg='WARNING: ' + message, condition=IfCondition(PythonExpression(
+        [*is_true(on), ' and not ', *is_true(off)])))
 
 
 def generate_launch_description():
@@ -126,6 +136,11 @@ def generate_launch_description():
         *[DeclareLaunchArgument(
             name, default_value='true', description=f'Run {what}')
           for name, what in switches.items()],
+        _warn_when('docking:=true with nav:=false: docking needs nav, its '
+                   'collision checks use the Nav2 local costmap',
+                   on='docking', off='nav'),
+        _warn_when('mission:=true with nav:=false: the mission sends Nav2 '
+                   'goals and has nothing to talk to', on='mission', off='nav'),
         odometry,
         TimerAction(period=5.0, actions=[apriltag, oak_filter]),
         TimerAction(period=7.0, actions=[localize]),
