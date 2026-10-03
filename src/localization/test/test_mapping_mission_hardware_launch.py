@@ -158,7 +158,21 @@ def test_hardware_launch_still_runs_on_wall_clock_without_the_camera_nodes():
     description, context = _description_and_context()
 
     entities = h.expand(description.entities, context)
-    own_nodes = [h.describe_node(n, context) for n in h.nodes_of(entities)]
+    assert h.nodes_of(entities) == []  # the odometry node lives one include down
 
-    assert [n['name'] for n in own_nodes] == ['wheel_odometry_node']
-    assert own_nodes[0]['use_sim_time'] is False
+    (odometry_include,) = [
+        h.describe_include(e, context) for e in entities
+        if isinstance(e, IncludeLaunchDescription)
+        and h.describe_include(e, context)['file'].endswith(
+            'hardware_odometry.launch.py')]
+    odometry_description = h.load_launch_module(
+        odometry_include['file']).generate_launch_description()
+    odometry_context = h.make_context(
+        odometry_description, **odometry_include['args'])
+    odometry_nodes = [
+        h.describe_node(n, odometry_context)
+        for n in h.nodes_of(h.expand(
+            odometry_description.entities, odometry_context))]
+
+    assert [n['name'] for n in odometry_nodes] == ['wheel_odometry_node']
+    assert odometry_nodes[0]['use_sim_time'] is False

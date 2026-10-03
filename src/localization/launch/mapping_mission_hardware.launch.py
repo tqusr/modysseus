@@ -195,29 +195,17 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-#: There is no /clock on a real robot.
-#:
-#: Spelled twice, because the two places it goes want different TYPES and
-#: getting that wrong does not degrade anything - it stops the node starting.
-#: A launch ARGUMENT is text, so the include below gets the string; a node
-#: PARAMETER is typed, and launch_ros passes a plain Python `str` straight
-#: through as a string parameter rather than applying YAML rules to it (only
-#: an unannotated *substitution* gets those). rclpy's own TimeSource has
-#: already declared `use_sim_time` as a bool by then, so a string override is
-#: rejected as a type mismatch and the node dies on construction. The vendor
-#: repo's hardware.launch.py makes the same distinction - a `'false'` string
-#: in its `launch_arguments`, a `False` bool in every `parameters`.
-USE_SIM_TIME = False
+#: There is no /clock on a real robot. A launch ARGUMENT is text, so the
+#: includes below get the string (hardware_odometry.launch.py explains why the
+#: node parameters it sets are typed bools instead).
 USE_SIM_TIME_ARG = 'false'
 
 
 def generate_launch_description():
     share = get_package_share_directory('localization')
     mapping_path = os.path.join(share, 'launch', 'mapping.launch.py')
-    hardware_params = os.path.join(share, 'config', 'hardware.yaml')
 
     # mapping.launch.py defaults use_sim_time to true, for simulation's sake;
     # this is the one caller that says otherwise. A node left at true with no
@@ -226,32 +214,12 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(mapping_path),
         launch_arguments={'use_sim_time': USE_SIM_TIME_ARG}.items())
 
-    # The real odometry source, and the reason this launch can work at all.
-    # Calibration (wheel_separation, encoder_scale) comes from
-    # config/hardware.yaml. See the docstring above for the caveats and the
-    # two-of-four-wheels limitation, and
-    # localization/localization/wheel_odometry.py for the maths and the input
-    # contract. Its TF broadcast is OFF: the EKF below owns
-    # odom -> base_footprint, and two publishers of one edge fight.
-    wheel_odometry = Node(
-        package='localization',
-        executable='wheel_odometry_node.py',
-        name='wheel_odometry_node',
-        output='screen',
-        parameters=[hardware_params, {
-            'use_sim_time': USE_SIM_TIME,
-            'publish_tf': False,
-        }],
-    )
-
-    # gyro_bias_node + EKF, fusing /odom with the bias-corrected gyro and
-    # broadcasting odom -> base_footprint. Started before SLAM so the edge is
-    # already in TF when slam_toolbox's first scan lookup happens.
-    fusion = IncludeLaunchDescription(
+    # Wheel odometry + gyro fusion (the EKF owns odom -> base_footprint), shared
+    # with full_stack_hardware.launch.py. See hardware_odometry.launch.py and
+    # the docstring above for the caveats.
+    hardware_odometry = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(share, 'launch', 'localization.launch.py')),
-        launch_arguments={'use_sim_time': USE_SIM_TIME_ARG,
-                          'publish_tf': 'true'}.items())
+            os.path.join(share, 'launch', 'hardware_odometry.launch.py')))
 
     # AprilTag detection, so one drive both builds the map and captures where
     # the docks physically are (`ros2 run perception capture_dock_pose`).
@@ -303,8 +271,7 @@ def generate_launch_description():
                 'and sanity-check it against its existing docks.yaml '
                 'entry.')),
 
-        wheel_odometry,
-        fusion,
+        hardware_odometry,
         mapping,
 
         # Staggered like the sim launch: slam_toolbox is busy with its
