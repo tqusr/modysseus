@@ -3,9 +3,9 @@
     ros2 launch localization hardware_odometry.launch.py
 
 Shared by `mapping_mission_hardware.launch.py` and (in `mission`)
-`full_stack_hardware.launch.py`, so the chain that owns `odom -> base_footprint`
-on the robot is defined in exactly one place. It takes no arguments: it is
-hardware only. See `mapping_mission_hardware.launch.py` for the full story
+`full_stack_hardware.launch.py`, so the chain that owns
+`odom -> base_footprint` on the robot is defined in exactly one place. It takes
+no arguments: it is hardware only. See `mapping_mission_hardware.launch.py` for the full story
 (why the EKF and not the wheels own the TF edge, the turn and encoder
 calibrations in `config/hardware.yaml`, the two-of-four-wheels limitation).
 
