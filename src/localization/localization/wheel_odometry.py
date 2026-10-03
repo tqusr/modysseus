@@ -101,25 +101,18 @@ inherited from the driver's intent to mirror simulation's `/wheel_encoders`
 is unmistakable and is listed in this feature's report. The index order (left
 then right) IS documented, in both the node and `hardware.yaml`.
 
-UNRESOLVED: THE REAL ROBOT'S ENCODER DATA RUNS ~28-30x TOO FAST, CAUSE UNKNOWN.
-Live testing found the pose computed from real `/wheel_encoders` data advances
-roughly 28-30x faster than the robot's actual speed: the robot drives at
-roughly walking pace (~5 km/h, ~1.39 m/s) while this module's maths - fed the
-real recorded encoder samples unchanged - computed on the order of 40 m/s from
-the same data. That ratio comes from ONE live capture cross-referenced against
-the robot's known approximate real-world speed, NOT a bench calibration.
+ENCODER UNIT CALIBRATION: THE REAL ROBOT'S `position` FIELD IS CENTIMETRES, NOT
+METRES. The vendor driver (`serial_link.py`) documents `/wheel_encoders`
+`position` as metres, but the underlying MCU counts are actually whole
+CENTIMETRES - the vendor's label is simply wrong. Confirmed by a physical
+calibration test: driving the robot a measured ~2.00 m produced a 201-count
+average delta across the left/right wheels, i.e. ~0.00995 m per count (~1 cm,
+a 0.5% match against the centimetre hypothesis). This also cleanly rejects the
+~1/29 "tick count" scale assumed before this calibration: it predicted only
+~58 counts for the same run, off by 3.47x.
 
-The root cause is explicitly UNKNOWN and NOT guessed at here. Candidates were
-considered and discarded: a wrong pulses-per-revolution constant and a wrong
-`WHEEL_RADIUS_M` were both checked against the public Waveshare firmware this
-chassis is nominally built on, and neither gives anything close to a clean
-~29x factor - which suggests this robot's actual firmware differs from that
-public reference in some way nobody has pinned down yet.
-
-`ENCODER_SCALE_TEMP` below (and the `encoder_scale` parameter it feeds) is a
-ROUGH, TEMPORARY, UNCALIBRATED stand-in so testing can proceed while the real
-cause is investigated - see its own comment before touching it, and do not let
-it quietly become the permanent answer.
+`ENCODER_SCALE_FACTOR` below (and the `encoder_scale` parameter it feeds)
+applies this confirmed centimetre-to-metre correction - see its own comment.
 """
 
 import math
@@ -144,26 +137,12 @@ SCRUB_FACTOR = 1.2435
 #: rounded as model.sdf spells it. This is the number to use.
 WHEEL_SEPARATION_M = 0.21701
 
-#: TEMPORARY, UNCALIBRATED correction for the real robot's encoder data
-#: running ~28-30x too fast - see the module docstring's "UNRESOLVED" section.
-#:
-#: This is a ROUGH stand-in derived from a single live comparison against the
-#: robot's approximate real-world speed (~5 km/h / ~1.39 m/s), NOT a measured
-#: or derived constant. It is a plain guess at the scale needed to make the
-#: numbers roughly sane, nothing more.
-#:
-#: The actual root cause of the ~28-30x discrepancy is UNKNOWN and is
-#: deliberately NOT being guessed at here. Wrong pulses-per-revolution and
-#: wrong wheel diameter were both considered against the public Waveshare
-#: firmware this chassis is nominally based on, and neither cleanly explains a
-#: ~29x factor - which points at this robot's actual firmware differing from
-#: that public reference somehow, not at a simple unit-conversion mistake.
-#:
-#: THIS VALUE MUST BE REPLACED WITH A PROPERLY MEASURED ONE before this
-#: odometry is trusted for anything beyond rough testing - in particular,
-#: before any real autonomous navigation or docking attempt on hardware. Do
-#: not let this default silently become permanent.
-ENCODER_SCALE_TEMP = 1.0 / 29.0
+#: Confirmed unit-conversion factor for the real robot's encoder data: the
+#: vendor's `position` field is mislabelled as metres but is actually whole
+#: centimetres - see the module docstring's "ENCODER UNIT CALIBRATION" note
+#: for the calibration test (~2.00 m drive, 201 counts, ~1 cm/count) that
+#: confirmed this and superseded the earlier ~1/29 assumption.
+ENCODER_SCALE_FACTOR = 1.0 / 100.0
 
 #: Longest gap between two encoder samples that is still integrated as a
 #: single constant-curvature arc, in seconds. The link runs near 80 Hz
@@ -173,12 +152,17 @@ ENCODER_SCALE_TEMP = 1.0 / 29.0
 MAX_SAMPLE_GAP_SEC = 0.5
 
 #: Per-side speed above which a sample is treated as garbage rather than
-#: motion, in m/s. nav2 is configured for 0.3 m/s linear and 1.0 rad/s yaw
-#: (`navigation/config/nav2_params.yaml`), which puts the fastest a side
-#: should ever run near 0.41 m/s; 1.0 leaves ~2.4x headroom, so this only
-#: fires on something genuinely impossible, such as the MCU's accumulator
-#: resetting when the serial port reconnects.
-MAX_WHEEL_SPEED_MPS = 1.0
+#: motion, in m/s. The chassis's real top speed is ~1.39 m/s (~5 km/h); with
+#: the confirmed centimetre encoder scale (see `ENCODER_SCALE_FACTOR`), a
+#: single sample at that speed can quantize up to roughly 1.4-1.65 m/s of
+#: implied speed from timing/quantization noise alone, so the guard needs
+#: headroom above the true ceiling rather than sitting right on it. 2.0 is a
+#: deliberately round number with generous margin above that - not the
+#: tighter ~1.6-1.8 that would be the minimal-headroom alternative - while
+#: still catching something genuinely impossible, such as the MCU's
+#: accumulator resetting or jumping across a multi-sample gap, which would be
+#: many multiples of the true ceiling.
+MAX_WHEEL_SPEED_MPS = 2.0
 
 #: Below this much yaw change in one step, the arc is integrated as a straight
 #: line. Not a tuning knob: it only avoids dividing by a vanishing `dtheta`
@@ -330,13 +314,13 @@ class WheelOdometry:
             See the module docstring before changing it.
         max_sample_gap_sec: see `MAX_SAMPLE_GAP_SEC`.
         max_wheel_speed: see `MAX_WHEEL_SPEED_MPS`.
-        encoder_scale: TEMPORARY multiplier applied to each side's displacement
-            before any kinematics, to correct for the still-unexplained
-            ~28-30x too-fast real encoder data - see the module docstring's
-            "UNRESOLVED" section and `ENCODER_SCALE_TEMP`. Defaults to `1.0`,
+        encoder_scale: multiplier applied to each side's displacement before
+            any kinematics, to correct the real encoder data's confirmed
+            centimetre units - see the module docstring's "ENCODER UNIT
+            CALIBRATION" note and `ENCODER_SCALE_FACTOR`. Defaults to `1.0`,
             i.e. OFF: this class never applies a hidden correction unless a
             caller explicitly asks for one. `wheel_odometry_node.py` is the
-            caller that defaults it to `ENCODER_SCALE_TEMP` instead.
+            caller that defaults it to `ENCODER_SCALE_FACTOR` instead.
 
     Raises:
         InvalidGeometry: either geometric value is not strictly positive.
@@ -427,10 +411,11 @@ class WheelOdometry:
         d_left, d_right = side_displacements(
             (anchor_left, anchor_right), (left_angle, right_angle),
             self.wheel_radius)
-        # TEMPORARY correction - see ENCODER_SCALE_TEMP and the module
-        # docstring's "UNRESOLVED" section. A no-op at the class default of
-        # 1.0, applied here (before the plausibility guard and the kinematics)
-        # so both see the corrected, physically-meaningful displacement.
+        # Confirmed centimetre-unit correction - see ENCODER_SCALE_FACTOR and
+        # the module docstring's "ENCODER UNIT CALIBRATION" note. A no-op at
+        # the class default of 1.0, applied here (before the plausibility
+        # guard and the kinematics) so both see the corrected,
+        # physically-meaningful displacement.
         d_left *= self.encoder_scale
         d_right *= self.encoder_scale
         if max(abs(d_left), abs(d_right)) > self.max_wheel_speed * dt:
@@ -442,7 +427,7 @@ class WheelOdometry:
 
 
 __all__ = [
-    'ENCODER_SCALE_TEMP', 'GEOMETRIC_TRACK_M', 'InvalidGeometry',
+    'ENCODER_SCALE_FACTOR', 'GEOMETRIC_TRACK_M', 'InvalidGeometry',
     'MAX_SAMPLE_GAP_SEC', 'MAX_WHEEL_SPEED_MPS', 'Pose2D', 'SCRUB_FACTOR',
     'STRAIGHT_LINE_EPSILON_RAD', 'UPDATE_BACKWARD_TIME', 'UPDATE_FIRST_SAMPLE',
     'UPDATE_GAP', 'UPDATE_IMPLAUSIBLE', 'UPDATE_OK', 'Update',

@@ -57,7 +57,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import JointState
 
-from localization.wheel_odometry import (ENCODER_SCALE_TEMP,
+from localization.wheel_odometry import (ENCODER_SCALE_FACTOR,
                                          MAX_SAMPLE_GAP_SEC,
                                          MAX_WHEEL_SPEED_MPS, UPDATE_BACKWARD_TIME,
                                          UPDATE_GAP, UPDATE_IMPLAUSIBLE,
@@ -132,7 +132,7 @@ class WheelOdometryNode(Node):
         self.get_logger().info(
             'wheel_odometry_node up: {} -> {}, wheel_radius={} '
             'wheel_separation={} (effective, scrub-corrected), '
-            'encoder_scale={} (TEMPORARY, uncalibrated - see '
+            'encoder_scale={} (confirmed centimetre correction - see '
             'localization.wheel_odometry\'s docstring), joints=({}, {})'
             .format(self._odom_frame, self._base_frame,
                     self._odometry.wheel_radius,
@@ -167,16 +167,15 @@ class WheelOdometryNode(Node):
         self.declare_parameter('max_sample_gap', MAX_SAMPLE_GAP_SEC)
         self.declare_parameter('max_wheel_speed', MAX_WHEEL_SPEED_MPS)
 
-        # TEMPORARY, UNCALIBRATED. Defaults to the correction, not to 1.0,
-        # because this node is the real-hardware odometry source and without
-        # it the pose it publishes runs ~28-30x too fast - see
-        # localization.wheel_odometry's module docstring ("UNRESOLVED") and
-        # ENCODER_SCALE_TEMP. WheelOdometry itself still defaults to 1.0 for
-        # any other caller (e.g. tests) that does not expect a hidden scale.
-        # Exposed as a parameter, not baked in, so it can be overridden -
-        # down to 1.0 to disable it, or to a properly measured value - without
-        # a rebuild once the real cause is found.
-        self.declare_parameter('encoder_scale', ENCODER_SCALE_TEMP)
+        # Confirmed centimetre-unit correction. Defaults to the correction,
+        # not to 1.0, because this node is the real-hardware odometry source
+        # and without it the pose it publishes is 100x too large - see
+        # localization.wheel_odometry's module docstring ("ENCODER UNIT
+        # CALIBRATION") and ENCODER_SCALE_FACTOR. WheelOdometry itself still
+        # defaults to 1.0 for any other caller (e.g. tests) that does not
+        # expect a hidden scale. Exposed as a parameter, not baked in, so it
+        # can still be overridden - e.g. down to 1.0 to disable it.
+        self.declare_parameter('encoder_scale', ENCODER_SCALE_FACTOR)
 
         # Covariances. These are PLACEHOLDERS, not measurements: nothing has
         # characterised this chassis's wheel slip yet. They are here because a

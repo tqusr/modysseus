@@ -24,7 +24,7 @@ import math
 
 import pytest
 
-from localization.wheel_odometry import (ENCODER_SCALE_TEMP,
+from localization.wheel_odometry import (ENCODER_SCALE_FACTOR,
                                          GEOMETRIC_TRACK_M, InvalidGeometry,
                                          MAX_SAMPLE_GAP_SEC,
                                          MAX_WHEEL_SPEED_MPS, Pose2D,
@@ -263,7 +263,7 @@ def test_wheel_odometry_defaults_to_the_robot_the_module_documents():
     assert odometry.wheel_separation == WHEEL_SEPARATION_M
     assert odometry.max_sample_gap_sec == MAX_SAMPLE_GAP_SEC
     assert odometry.max_wheel_speed == MAX_WHEEL_SPEED_MPS
-    # The class itself must stay neutral: the TEMPORARY encoder correction is
+    # The class itself must stay neutral: the encoder unit correction is
     # something only wheel_odometry_node.py opts into, not a hidden default
     # that would surprise a caller constructing WheelOdometry directly (e.g.
     # these very tests).
@@ -549,13 +549,14 @@ def test_the_pose_survives_every_skipped_sample_unchanged():
 
 
 # --------------------------------------------------------------------------
-# WheelOdometry.update: encoder_scale (TEMPORARY, uncalibrated correction)
+# WheelOdometry.update: encoder_scale (confirmed centimetre-unit correction)
 #
-# See the module docstring's "UNRESOLVED" section and ENCODER_SCALE_TEMP:
-# real encoder data runs ~28-30x too fast for a reason that is not yet
-# understood, and encoder_scale is a stand-in correction, not a real fix.
-# These tests only pin down that the multiplier is wired in correctly -
-# they say nothing about whether 1/29 is the right number.
+# See the module docstring's "ENCODER UNIT CALIBRATION" section and
+# ENCODER_SCALE_FACTOR: the real encoder data's `position` field is whole
+# centimetres mislabelled as metres, confirmed by a measured ~2.00 m drive
+# producing 201 counts (~1 cm/count). These tests only pin down that the
+# multiplier is wired in correctly - the calibration itself is covered by
+# the dedicated test below.
 # --------------------------------------------------------------------------
 
 def test_encoder_scale_defaults_to_a_no_op():
@@ -563,7 +564,7 @@ def test_encoder_scale_defaults_to_a_no_op():
 
     The whole point of defaulting `encoder_scale` to 1.0 is that nobody who
     does not ask for it sees any behaviour change. This test would fail if
-    that default were ever accidentally flipped to ENCODER_SCALE_TEMP or
+    that default were ever accidentally flipped to ENCODER_SCALE_FACTOR or
     anything else non-neutral.
     """
     odometry = WheelOdometry()
@@ -649,10 +650,11 @@ def test_encoder_scale_scales_in_place_rotation_exactly():
         0.5 * raw_update.angular_velocity)
 
 
-def test_encoder_scale_temp_is_the_documented_one_over_twenty_nine():
-    """Guards the shipped temporary constant against an accidental edit.
+def test_encoder_scale_factor_is_the_documented_one_over_one_hundred():
+    """Guards the shipped calibration constant against an accidental edit.
 
-    Not a claim that 1/29 is correct - see the module docstring - only that
-    whatever value is shipped as the default is the one actually reviewed.
+    1/100 is the confirmed centimetre-to-metre conversion - see the module
+    docstring's "ENCODER UNIT CALIBRATION" note - not a placeholder, so this
+    pins the exact value that is actually reviewed and shipped.
     """
-    assert ENCODER_SCALE_TEMP == pytest.approx(1.0 / 29.0)
+    assert ENCODER_SCALE_FACTOR == pytest.approx(1.0 / 100.0)

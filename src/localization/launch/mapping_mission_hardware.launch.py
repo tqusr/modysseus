@@ -59,25 +59,19 @@ down to the topic and the frame names, which is why `ekf.yaml` can keep
   real motion prior, which is what slam_toolbox needs to seed each scan match,
   and incomparably better than the nothing that was there before.
 
-  KNOWN, TRACKED, UNRESOLVED: REAL ENCODER ODOMETRY RUNS ~28-30x TOO FAST.
-  Live testing found the pose this launch's wheel_odometry_node computes from
-  real `/wheel_encoders` data advances roughly 28-30x faster than the robot's
-  actual speed (robot ~5 km/h / ~1.39 m/s; computed on the order of 40 m/s
-  from the same data). That is from one live comparison, not a bench
-  calibration, and it does NOT match any clean theoretical factor from the
-  public Waveshare firmware this chassis is nominally based on (wrong
-  pulses-per-revolution and wrong wheel diameter were both considered and
-  neither explains a ~29x factor) - the real cause is UNKNOWN and is not
-  being guessed at. See `localization/localization/wheel_odometry.py`'s
-  module docstring ("UNRESOLVED") for the full writeup.
+  ENCODER UNIT CALIBRATION. The real robot's `/wheel_encoders` `position`
+  field is mislabelled by the vendor as metres, but the underlying MCU counts
+  are actually whole CENTIMETRES. Confirmed by a physical calibration test:
+  driving the robot a measured ~2.00 m produced a 201-count average delta
+  across the left/right wheels, i.e. ~0.00995 m per count (~1 cm, a 0.5%
+  match). This supersedes an earlier ~1/29 "tick count" assumption, which
+  predicted only ~58 counts for the same run (off by 3.47x). See
+  `localization/localization/wheel_odometry.py`'s module docstring ("ENCODER
+  UNIT CALIBRATION") for the full writeup.
 
-  A TEMPORARY, UNCALIBRATED correction is applied by default, via the
-  `encoder_scale` argument below (`wheel_odometry_node`'s own default, from
-  `ENCODER_SCALE_TEMP`). It makes the numbers roughly sane for testing and
-  nothing more - it MUST be replaced with a properly measured value, or the
-  real cause found and fixed, before this odometry is trusted for anything
-  beyond rough testing, in particular before any real autonomous navigation
-  or docking attempt on hardware.
+  This confirmed centimetre-to-metre correction is applied by default, via
+  the `encoder_scale` argument below (`wheel_odometry_node`'s own default,
+  from `ENCODER_SCALE_FACTOR`).
 
 LIDAR ONLY. NO APRILTAG, DELIBERATELY. `mapping_mission.launch.py` runs
 apriltag_ros alongside mapping so one drive both builds the map and captures
@@ -230,13 +224,12 @@ def generate_launch_description():
                         'geometric track - see this launch file\'s docstring.'),
 
         DeclareLaunchArgument(
-            'encoder_scale', default_value='0.034482758620689655',
-            description='TEMPORARY, UNCALIBRATED correction (1/29) for real '
-                        'encoder data running ~28-30x too fast - cause '
-                        'UNKNOWN, see this launch file\'s docstring and '
-                        'localization/wheel_odometry.py\'s ENCODER_SCALE_TEMP. '
-                        'Override once a properly measured value is found, '
-                        'e.g. encoder_scale:=1.0 to disable the correction.'),
+            'encoder_scale', default_value='0.01',
+            description='Confirmed centimetre-to-metre correction (1/100) '
+                        'for real encoder data - see this launch file\'s '
+                        'docstring and localization/wheel_odometry.py\'s '
+                        'ENCODER_SCALE_FACTOR. Override e.g. '
+                        'encoder_scale:=1.0 to disable the correction.'),
 
         LogInfo(msg=(
             'mapping_mission_hardware: wheel odometry + SLAM (mapping mode), '
