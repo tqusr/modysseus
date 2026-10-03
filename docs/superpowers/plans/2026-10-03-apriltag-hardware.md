@@ -4,7 +4,7 @@
 
 **Goal:** Run AprilTag detection (rectified, wall-clock) during a hardware mapping run so `ros2 run perception capture_dock_pose` works on the real robot.
 
-**Architecture:** `perception/launch/apriltag.launch.py` gains arguments (`use_sim_time`, `image_topic`, `camera_info_topic`, `rectify`) whose defaults reproduce the simulator graph; with `rectify:=true` it also starts `image_proc`'s `rectify_node` and the detector reads the rectified topic. `localization/launch/mapping_mission_hardware.launch.py` includes it behind an `apriltag` argument (default true) inside a 5 s `TimerAction`, found by share-directory lookup at runtime (no `localization -> perception` package dependency: that would be a cycle).
+**Architecture:** `perception/launch/apriltag.launch.py` gains arguments (`use_sim_time`, `image_topic`, `rectify`) whose defaults reproduce the simulator graph; with `rectify:=true` it also starts `image_proc`'s `rectify_node` and the detector reads the rectified topic. `localization/launch/mapping_mission_hardware.launch.py` includes it behind an `apriltag` argument (default true) inside a 5 s `TimerAction`, found by share-directory lookup at runtime (no `localization -> perception` package dependency: that would be a cycle).
 
 **Tech Stack:** ROS 2 Jazzy, `launch` / `launch_ros` (Python launch files), `apriltag_ros` 3.4.0, `image_proc` 5.0.13, pytest, colcon (ament_python).
 
@@ -25,11 +25,11 @@ Branch `apriltag-hardware`, HEAD `64c6c3f` (the spec). The working tree holds UN
 ## Global Constraints
 
 - Tags: family `36h11`, `size: 0.100` (10.0 cm edge), ids 0-7 = docks A-H (unchanged from sim).
-- `apriltag.launch.py` arguments and defaults, verbatim: `use_sim_time` = `true`, `image_topic` = `/oak/rgb/image_raw`, `camera_info_topic` = `/oak/rgb/camera_info`, `rectify` = `false`. Sim callers (no arguments) must get exactly today's graph.
-- `rectify:=true`: node `rectify_node` (package `image_proc`, executable `rectify_node`), `image` -> `image_topic`, `camera_info` -> `camera_info_topic`, `image_rect` -> `<image_topic's namespace>/image_rect`; apriltag node's `image_rect` -> that rectified topic, its `camera_info` stays on `camera_info_topic`.
+- `apriltag.launch.py` arguments and defaults, verbatim: `use_sim_time` = `true`, `image_topic` = `/oak/rgb/image_raw`, `rectify` = `false`. No `camera_info` argument: image_transport always uses `<image_topic's namespace>/camera_info`. Sim callers (no arguments) must get exactly today's graph.
+- `rectify:=true`: node `rectify_node` (package `image_proc`, executable `rectify_node`), `image` -> `image_topic`, `image_rect` -> `<image_topic's namespace>/image_rect`; apriltag node's `image_rect` -> that rectified topic, no `camera_info` remapping.
 - `use_sim_time` reaches nodes as a typed bool, never the string (rclpy declares it as bool; a string stops the node starting).
 - `apriltag.yaml` must not contain `use_sim_time`; `image_transport: raw`, `qos_profile: default`, `detector.threads: 1`, `detector.decimate: 1.0` are NOT changed in this work.
-- Hardware launch: argument `apriltag` default `true`; include perception's `apriltag.launch.py` with `use_sim_time:=false`, `image_topic:=/oak/rgb/image_raw`, `camera_info_topic:=/oak/rgb/camera_info`, `rectify:=true`, in a `TimerAction` of 5 s; `apriltag:=false` is the lidar-only run. This launch does not start the camera (the vendor's `hardware.launch.py` owns it).
+- Hardware launch: argument `apriltag` default `true`; include perception's `apriltag.launch.py` with `use_sim_time:=false`, `image_topic:=/oak/rgb/image_raw`, `rectify:=true`, in a `TimerAction` of 5 s; `apriltag:=false` is the lidar-only run. This launch does not start the camera (the vendor's `hardware.launch.py` owns it).
 - No `localization/package.xml` change and no `localization -> perception` dependency (cycle: `perception` exec_depends on `localization`). `perception/package.xml` gains `<exec_depend>image_proc</exec_depend>`.
 - Robot install line: `sudo apt install ros-jazzy-apriltag-ros ros-jazzy-image-proc`.
 - `perception/test/test_dock_capture.py` must pass unchanged. No process is launched, no Gazebo, no `ros2 launch` in any automated step (project rule: the user runs the simulation and robot, not agents).
@@ -78,12 +78,12 @@ Launch files resolve their config and each other through the INSTALLED share dir
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
-- Produces (Task 2 relies on these): `apriltag.launch.py` accepts launch arguments `use_sim_time`, `image_topic`, `camera_info_topic`, `rectify` (all text); `perception/test/launch_helpers.py` exports `load_launch_module(path)`, `make_context(description, **overrides)`, `expand(entities, context)`, `nodes_of(entities)`, `describe_node(node, context) -> {'package','executable','name','remappings','use_sim_time'}`, `describe_include(include, context) -> {'file','args'}`. The installed `perception` share copy of `apriltag.launch.py` (needs a build).
+- Produces (Task 2 relies on these): `apriltag.launch.py` accepts launch arguments `use_sim_time`, `image_topic`, `rectify` (all text); `perception/test/launch_helpers.py` exports `load_launch_module(path)`, `make_context(description, **overrides)`, `expand(entities, context)`, `nodes_of(entities)`, `describe_node(node, context) -> {'package','executable','name','remappings','use_sim_time'}`, `describe_include(include, context) -> {'file','args'}`. The installed `perception` share copy of `apriltag.launch.py` (needs a build).
 
 - [ ] **Step 1: Read the prototype against the spec**
 
 Run: `git diff src/perception/launch/apriltag.launch.py src/perception/config/apriltag.yaml`
-Check each against spec section 1 and Global Constraints: (a) four arguments with the exact defaults; (b) `rectify` false graph is today's (apriltag node only, `image_rect` -> raw topic, `camera_info` -> `camera_info_topic`); (c) rectify node params carry only a bool `use_sim_time`; (d) `use_sim_time` converted to bool via `_as_bool`; (e) `apriltag.yaml` lost only the `use_sim_time` line (other values byte-identical); (f) the "nothing consumes the detections" docstring is kept. The prototype was reviewed once against these and matches. The only off-spec findings are two comments in `apriltag.yaml` that are now wrong ("sim's OAK-D camera", "sim publishes raw"): fixed in Step 3. If anything else differs from the list above, fix it in the same step.
+Check each against spec section 1 and Global Constraints: (a) three arguments with the exact defaults; (b) `rectify` false graph is today's (apriltag node only, `image_rect` -> raw topic); (c) rectify node params carry only a bool `use_sim_time`; (d) `use_sim_time` converted to bool via `_as_bool`; (e) `apriltag.yaml` lost only the `use_sim_time` line (other values byte-identical); (f) the "nothing consumes the detections" docstring is kept. The prototype was reviewed once against these and matches. The only off-spec findings are two comments in `apriltag.yaml` that are now wrong ("sim's OAK-D camera", "sim publishes raw"): fixed in Step 3. If anything else differs from the list above, fix it in the same step.
 
 - [ ] **Step 2: Add the three review-focus tests (red)**
 
@@ -209,8 +209,9 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             LogInfo, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 ```
 
 3b. Body. Replace the block from `    return LaunchDescription([` to the end of the file with:
@@ -228,12 +229,11 @@ from launch_ros.actions import Node
     # Hence rectify:=true (apriltag_ros ignores distortion) and wall-clock time.
     apriltag = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(get_package_share_directory('perception'),
-                         'launch', 'apriltag.launch.py')),
+            PathJoinSubstitution([FindPackageShare('perception'),
+                                  'launch', 'apriltag.launch.py'])),
         launch_arguments={
             'use_sim_time': USE_SIM_TIME_ARG,
             'image_topic': '/oak/rgb/image_raw',
-            'camera_info_topic': '/oak/rgb/camera_info',
             'rectify': 'true',
         }.items())
 
@@ -290,8 +290,7 @@ apriltag_ros alongside mapping so one drive both builds the map and captures
 the arena's real dock poses; so does this file, 5 s after SLAM starts (so it
 does not compete with slam_toolbox's CONFIGURE/ACTIVATE window). It includes
 `perception`'s `apriltag.launch.py` with `use_sim_time:=false`,
-`image_topic:=/oak/rgb/image_raw`, `camera_info_topic:=/oak/rgb/camera_info`
-and `rectify:=true`: the real OAK-D RGB image is distorted and apriltag_ros
+`image_topic:=/oak/rgb/image_raw` and `rectify:=true`: the real OAK-D RGB image is distorted and apriltag_ros
 ignores distortion, so `image_proc`'s rectify_node runs first and the detector
 reads `/oak/rgb/image_rect`. Pass `apriltag:=false` for the lidar-only run
 this launch used to be (e.g. if the Jetson cannot keep up). The camera driver
@@ -479,9 +478,9 @@ Expected: branch published to `origin`; the robot then does `git pull` on `april
 Prerequisites on the robot: `git pull` on `apriltag-hardware`; `sudo apt install ros-jazzy-apriltag-ros ros-jazzy-image-proc`; `colcon build --packages-select perception localization`; `source install/setup.bash`; the vendor `hardware.launch.py` is already running.
 
 1. `ros2 launch localization mapping_mission_hardware.launch.py`. Wait for "gyro bias calibrated" and slam_toolbox ACTIVE. `ros2 topic hz /oak/rgb/image_rect` should be near the camera rate (30 Hz). With a tag in view `ros2 topic hz /detections` is steady, and `ros2 topic echo --once /detections --field header.stamp` is within about 0.5 s of wall-clock now.
-   - Silent `/oak/rgb/image_rect` and `/detections` while the camera topic is alive means a QoS mismatch: run `ros2 topic info -v /oak/rgb/image_raw`. If the publisher is best-effort, set `qos_profile: sensor_data` in `src/perception/config/apriltag.yaml`, rebuild, relaunch, and also check the rectify node's subscription QoS.
+   - `/oak/rgb/image_rect` alive but `/detections` silent with a tag in view means a camera_info QoS mismatch: apriltag_node's `camera_info` subscription is reliable (`qos_profile: default`) and goes straight to the driver. Run `ros2 topic info -v /oak/rgb/camera_info`; if the publisher is best-effort, set `qos_profile: sensor_data` in `src/perception/config/apriltag.yaml`, rebuild and relaunch. (rectify_node adapts to the publisher's QoS and publishes reliable, so the image QoS is not the problem.)
    - Rates far below 30 Hz or slam_toolbox falling behind (Jetson CPU): raise `detector.decimate` (2.0) or lower `detector.threads` in `apriltag.yaml` as measured, or run with `apriltag:=false`.
-2. `ros2 topic echo --once /oak/rgb/camera_info --field header.frame_id` prints `oak_rgb_camera_optical_frame`; `--field distortion_model` prints a model OpenCV accepts (`plumb_bob` or `rational_polynomial`). Compare `K` and `P` in `/oak/rgb/camera_info`; if materially different, tag range will be slightly off and a `camera_info` relay publishing `P` as `K` is the follow-up (not done speculatively).
+2. `ros2 topic echo --once /oak/rgb/camera_info --field header.frame_id` prints `oak_rgb_camera_optical_frame`; `--field distortion_model` prints a model OpenCV accepts (`plumb_bob` or `rational_polynomial`). apriltag_ros reads its intrinsics from `P` (not `K`), so rectify-then-detect is already consistent and no relay is needed; just check that `P` in `/oak/rgb/camera_info` is non-zero and sane.
 3. RViz, Fixed Frame `map`: a TF display shows `tag36h11:<id>` on the physical tag. Check its axes on the tag (z axis is the outward normal per `dock_capture.py`); this is the first live check of that convention.
 4. Capture dock A first from about 0.6 m, square-on: `ros2 run perception capture_dock_pose` (no sim-time flag), type `i` + Enter. Then `git diff` in `~/modysseus`: a plausible pose on the arena wall, staging pose about 0.6 m out along the outward normal; compare with dock A's existing sim-derived entry in `docks.yaml`. Mirrored, rotated by pi or elsewhere entirely means the convention or TF chain is wrong: stop, do not capture the rest.
 5. Capture the other docks while driving the map, save the map, then commit the captures on the robot (`git add` + `git commit` in `~/modysseus`) before any later `git pull`. After step 4 passes, the "STILL UNVERIFIED AGAINST A LIVE TAG" note in `dock_capture.py` can be updated (separate follow-up).
@@ -495,7 +494,7 @@ Prerequisites on the robot: `git pull` on `apriltag-hardware`; `sudo apt install
 - Spec 3 (capture tool wording only, "UNVERIFIED" note left until the robot check): Task 3 plus the verification section's last line.
 - Spec 4 (`exec_depend image_proc`, apt line, no localization change): Task 1 Step 4, Task 2 docstring, Global Constraints.
 - Spec Testing (sim defaults, hardware arguments, custom topics, hardware launch on/off, `use_sim_time` false on nodes, yaml has no `use_sim_time`, `test_dock_capture.py` unchanged): all present in the two test files; Task 3 runs the full suite.
-- Spec Verification and Risks (QoS, rate, K vs P, distortion model, tag orientation, pull conflicts): the On-robot section, including the conditional fixes.
+- Spec Verification and Risks (QoS, rate, P sanity, camera_info QoS, distortion model, tag orientation, pull conflicts): the On-robot section, including the conditional fixes.
 - Out of scope respected: no detections wiring, no vendor changes, no default tuning.
 - Placeholder scan: none; every code step shows the code, every replace shows exact old and new text.
 - Type consistency: argument names, `describe_node` / `describe_include` keys and `USE_SIM_TIME_ARG` match across tasks and the existing tests.
