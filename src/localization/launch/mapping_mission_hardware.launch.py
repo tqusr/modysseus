@@ -1,4 +1,4 @@
-"""Mapping mission on the REAL robot: wheel odometry + SLAM in mapping mode.
+"""Mapping mission on the REAL robot: wheel + gyro fusion + SLAM in mapping mode.
 
     ros2 launch localization mapping_mission_hardware.launch.py
 
@@ -21,10 +21,19 @@ would fail, continuously, with no map to show for the drive.
 WHAT NOW PUBLISHES IT: REAL WHEEL ODOMETRY, NOT A STUB. `wheel_odometry_node`
 integrates the `/wheel_encoders` stream the vendor's `ugv02_serial_node`
 publishes - accumulated distance per side, straight off the chassis MCU - into
-a pose, and both publishes `/odom` and broadcasts the `odom -> base_footprint`
-TF. That is exactly the role Gazebo's DiffDrive plugin fills in simulation,
-down to the topic and the frame names, which is why `ekf.yaml` can keep
-`publish_tf: false` unchanged in both modes.
+a pose and publishes `/odom` - exactly the role Gazebo's DiffDrive plugin
+fills in simulation, down to the topic and the frame names.
+
+WHO OWNS `odom -> base_footprint`: THE EKF, NOT THE WHEELS. Wheel odometry
+alone measures turning badly (the scrub described below). So
+`localization.launch.py` also runs here: `gyro_bias_node` removes the chassis
+gyro's bias, and the robot_localization EKF fuses forward speed from `/odom`
+with turn rate from the gyro (`config/ekf.yaml` says what is fused and why).
+The EKF broadcasts the TF (`publish_tf:=true`) and `wheel_odometry_node`'s own
+broadcast is turned off, because two publishers of one TF edge fight - see
+`ekf.yaml`. slam_toolbox reads that TF, so it is seeded from the fused
+estimate. In simulation Gazebo still owns the edge and the EKF does not
+publish it; see `ekf.yaml`.
 
   THE TURN CALIBRATION IS MEASURED ON THE REAL ROBOT, AND LIVES IN
   `config/hardware.yaml`. The node's `wheel_separation` is 0.4084 m there,
@@ -96,11 +105,13 @@ THE TERMINALS, in the order they have to start.
 
          ros2 launch einride_mini_truck_bringup hardware.launch.py
 
-  1. This launch - wheel odometry + SLAM in mapping mode:
+  1. This launch - wheel odometry, gyro fusion and SLAM in mapping mode:
 
          ros2 launch localization mapping_mission_hardware.launch.py
 
-     Wait for "slam_toolbox is ACTIVE" / "slam_toolbox activation CONFIRMED"
+     KEEP THE ROBOT STILL until `gyro_bias_node` logs "gyro bias
+     calibrated" (a few seconds): it measures the gyro's offset while the
+     wheels say the robot is parked. Then wait for "slam_toolbox is ACTIVE" / "slam_toolbox activation CONFIRMED"
      before driving anywhere. `mapping.launch.py`'s watchdog prints it, and a
      mapping run that never reaches `active` silently maps nothing - see that
      file's docstring, which is where the lifecycle story lives.
@@ -140,11 +151,9 @@ growing map very hard to read.
 
 WHAT THIS LAUNCH DOES NOT INCLUDE, and why.
 
-  - EKF / `localize.launch.py` / Nav2 / docking / mission. Mapping mode and
+  - `localize.launch.py` / Nav2 / docking / mission. Mapping mode and
     localization mode are mutually exclusive (both publish map->odom), and
-    nothing on the autonomy side should be driving while a human is. The EKF
-    additionally has nothing to add yet: it would fuse this `/odom` with
-    `/imu`, which is the hardware odometry phase's own next step.
+    nothing on the autonomy side should be driving while a human is.
   - `oak_points_filter`. It feeds Nav2's collision monitor, which is not
     running here.
 """
@@ -191,28 +200,42 @@ def generate_launch_description():
     # config/hardware.yaml. See the docstring above for the caveats and the
     # two-of-four-wheels limitation, and
     # localization/localization/wheel_odometry.py for the maths and the input
-    # contract. Started before SLAM so the odom -> base_footprint edge is
-    # already in TF when slam_toolbox's first scan lookup happens.
+    # contract. Its TF broadcast is OFF: the EKF below owns
+    # odom -> base_footprint, and two publishers of one edge fight.
     wheel_odometry = Node(
         package='localization',
         executable='wheel_odometry_node.py',
         name='wheel_odometry_node',
         output='screen',
-        parameters=[hardware_params, {'use_sim_time': USE_SIM_TIME}],
+        parameters=[hardware_params, {
+            'use_sim_time': USE_SIM_TIME,
+            'publish_tf': False,
+        }],
     )
+
+    # gyro_bias_node + EKF, fusing /odom with the bias-corrected gyro and
+    # broadcasting odom -> base_footprint. Started before SLAM so the edge is
+    # already in TF when slam_toolbox's first scan lookup happens.
+    fusion = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(share, 'launch', 'localization.launch.py')),
+        launch_arguments={'use_sim_time': USE_SIM_TIME_ARG,
+                          'publish_tf': 'true'}.items())
 
     return LaunchDescription([
         LogInfo(msg=(
-            'mapping_mission_hardware: wheel odometry + SLAM (mapping mode), '
+            'mapping_mission_hardware: wheel odometry + gyro fusion (EKF) + '
+            'SLAM (mapping mode), '
             'lidar only - no AprilTag, no dock capture. The robot\'s own '
             'drivers come from einride_mini_truck_bringup hardware.launch.py, '
             'which must already be running. Drive with `ros2 run '
             'teleop_twist_keyboard teleop_twist_keyboard` in another '
-            'terminal, SLOWLY and SMOOTHLY - the odometry is skid-steer wheel '
-            'odometry and scrub is what it cannot see. Wait for slam_toolbox '
-            'ACTIVE below before driving. To watch the map grow, add a Map '
+            'terminal, SLOWLY and SMOOTHLY. Keep the robot still until '
+            '"gyro bias calibrated", then wait for slam_toolbox ACTIVE below '
+            'before driving. To watch the map grow, add a Map '
             'display on /map in RViz and set Fixed Frame to `map`.')),
 
         wheel_odometry,
+        fusion,
         mapping,
     ])
