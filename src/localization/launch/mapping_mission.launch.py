@@ -4,10 +4,11 @@
 
 THIS FILE IS THE SIMULATION ENTRY POINT. On the real robot use
 `mapping_mission_hardware.launch.py` instead, which starts the hardware
-wheel-odometry node this file does not need (the simulator's DiffDrive plugin
-provides `/odom` and the `odom -> base_footprint` TF) and leaves AprilTag
-detection out, so it maps with the lidar only. The two files share
-`mapping.launch.py`.
+wheel-odometry and fusion nodes this file does not need (the simulator's
+DiffDrive plugin provides `/odom` and the `odom -> base_footprint` TF) and
+runs AprilTag detection too, rectifying the real camera's distorted image
+first (its `apriltag` argument, default true). The two files share
+`mapping.launch.py` and perception's `apriltag.launch.py`.
 
 WHY THIS EXISTS. `mission/config/docks.yaml`'s 8 dock poses were computed from
 `arena.sdf`'s model origins -- from the SIMULATED world file. There is no

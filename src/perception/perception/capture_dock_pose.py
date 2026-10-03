@@ -3,7 +3,10 @@
 `ros2 run perception capture_dock_pose` -- terminal 3 of the mapping-mission
 workflow described at length in
 `localization/launch/mapping_mission.launch.py`'s docstring (read that first;
-it is the primary documentation for this feature).
+it is the primary documentation for this feature). It runs the same way on the
+real robot after `localization/launch/mapping_mission_hardware.launch.py`,
+except that no `use_sim_time` flag is passed there: there is no /clock on
+hardware and the default (false) is already right.
 
 WHAT THIS IS FOR. `mission/config/docks.yaml`'s 8 dock poses were computed from
 `arena.sdf`'s model origins -- i.e. from the SIMULATED world file. On real
@@ -188,7 +191,9 @@ class CaptureDockPoseNode(Node):
                 f'not staleness, it is two clock domains: this node and '
                 f'apriltag_ros disagree about use_sim_time. Restart this node '
                 f'with "--ros-args -p use_sim_time:=true" when running '
-                f'against the simulator.')
+                f'against the simulator, and with no such flag on the real '
+                f'robot (mapping_mission_hardware.launch.py runs apriltag_ros '
+                f'on wall-clock time).')
             return
         if verdict == AGE_STALE:
             logger.warning(
