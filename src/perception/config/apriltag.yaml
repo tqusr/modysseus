@@ -10,8 +10,9 @@
 # or a specific TF frame name) -- not needed here since all tags share one
 # size and the node's default per-id frame naming is fine.
 #
-# image topic / camera_info are remapped in launch/apriltag.launch.py, not
-# here -- apriltag_ros does not take topic names as ros__parameters.
+# image topic is remapped in launch/apriltag.launch.py, not here --
+# apriltag_ros does not take topic names as ros__parameters. camera_info is
+# always the sibling `<image topic namespace>/camera_info` (image_transport).
 /**:
     ros__parameters:
         # use_sim_time is set by launch/apriltag.launch.py, not here.

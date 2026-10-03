@@ -13,8 +13,9 @@ import importlib.util
 import os
 
 import pytest
-from launch.actions import IncludeLaunchDescription, TimerAction
+from launch.actions import IncludeLaunchDescription, LogInfo, TimerAction
 from launch.conditions import IfCondition
+from launch.substitutions import PathJoinSubstitution
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCH_PATH = os.path.join(PKG, 'launch', 'mapping_mission_hardware.launch.py')
@@ -79,7 +80,6 @@ def test_apriltag_include_passes_the_hardware_arguments():
     assert include['args'] == {
         'use_sim_time': 'false',
         'image_topic': '/oak/rgb/image_raw',
-        'camera_info_topic': '/oak/rgb/camera_info',
         'rectify': 'true',
     }
 
@@ -99,6 +99,35 @@ def test_apriltag_false_spelling_variants_skip_the_include(spelling):
     (timer,) = _apriltag_timers(description)
 
     assert timer.condition.evaluate(context) is False
+
+
+def _apriltag_log_infos(description):
+    """LogInfos that only appear when AprilTag detection is on."""
+    return [e for e in description.entities
+            if isinstance(e, LogInfo) and e.condition is not None]
+
+
+def test_apriltag_announcement_follows_the_apriltag_argument():
+    description, context = _description_and_context()
+    (log,) = _apriltag_log_infos(description)
+    assert isinstance(log.condition, IfCondition)
+    assert log.condition.evaluate(context) is True
+
+    description, context = _description_and_context(apriltag='false')
+    (log,) = _apriltag_log_infos(description)
+    assert log.condition.evaluate(context) is False
+
+
+def test_apriltag_include_is_resolved_lazily_through_find_package_share():
+    # A substitution, not a path computed while the description is built, so
+    # apriltag:=false does not need perception installed.
+    description, _ = _description_and_context()
+    (timer,) = _apriltag_timers(description)
+    (include,) = [a for a in timer.actions
+                  if isinstance(a, IncludeLaunchDescription)]
+    (location,) = include.launch_description_source._LaunchDescriptionSource__location
+    assert isinstance(location, PathJoinSubstitution)
+    assert 'FindPackageShare' in repr(location)
 
 
 def test_apriltag_nodes_are_rectified_and_on_wall_clock():

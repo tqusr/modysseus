@@ -10,9 +10,14 @@ whose content depends on those values are `OpaqueFunction`s; calling
 passed to a launch service, so no process starts and no ROS graph is needed.
 `Node` keeps its remappings and parameters in private attributes until it is
 executed, so `describe_node` reads those, evaluating their substitutions.
+
+The name-mangled private attributes were checked against launch 3.4.11 and
+launch_ros 0.26.12 (ROS Jazzy); a different version that renames them fails
+loudly with an AttributeError rather than passing silently.
 """
 
 import importlib.util
+import os
 
 from launch import LaunchContext
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
@@ -63,17 +68,23 @@ def describe_node(node, context):
 
     remappings = {text(src): text(dst) for src, dst in node._Node__remappings}
     use_sim_time = None
+    parameter_files = []
     for param in node._Node__parameters:
         if isinstance(param, dict):  # the inline {'use_sim_time': ...} dict
             for key, value in param.items():
                 if text(key) == 'use_sim_time':
                     use_sim_time = value
+        else:  # a ParameterFile, holding a path or substitutions
+            path = param.param_file
+            parameter_files.append(
+                str(path) if isinstance(path, os.PathLike) else text(path))
     return {
         'package': node.node_package,
         'executable': node.node_executable,
         'name': node._Node__node_name,
         'remappings': remappings,
         'use_sim_time': use_sim_time,
+        'parameter_files': parameter_files,
     }
 
 

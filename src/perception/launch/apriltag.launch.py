@@ -31,19 +31,34 @@ includes this file with none and gets exactly the graph it always had.
 
   use_sim_time        true   applied to every node started here
   image_topic         /oak/rgb/image_raw
-  camera_info_topic   /oak/rgb/camera_info
   rectify             false  also start image_proc's rectify_node and detect
                              on its output
 
-RECTIFY, AND WHY ONLY ON HARDWARE. apriltag_ros uses just the camera matrix
-from camera_info and ignores the distortion coefficients, so on a lens with
-real distortion the tag pose is wrong by an uncorrected amount. The simulated
-camera has none, so simulation feeds the raw image straight in
-(`rectify:=false`). The real OAK-D RGB camera is distorted, so
-`mapping_mission_hardware.launch.py` passes `rectify:=true`: rectify_node
+There is deliberately no camera_info argument. Both nodes subscribe through
+image_transport::CameraSubscriber, which always reads the sibling topic
+`<image_topic's namespace>/camera_info` (`/oak/rgb/camera_info` by default);
+a `camera_info` remapping has no effect on it.
+
+RECTIFY, AND WHY ONLY ON HARDWARE. apriltag_ros takes its intrinsics from
+the projection matrix P of camera_info (fx, fy, cx, cy = p[0], p[5], p[2],
+p[6]) and ignores the distortion coefficients, so on a lens with real
+distortion the tag pose is wrong by an uncorrected amount unless the image is
+rectified first. The simulated camera has none, so simulation feeds the raw
+image straight in (`rectify:=false`). The real OAK-D RGB camera is distorted,
+so `mapping_mission_hardware.launch.py` passes `rectify:=true`: rectify_node
 turns `image_topic` into `<same namespace>/image_rect`
-(`/oak/rgb/image_rect` by default) and the detector reads that, together with
-the unmodified `camera_info_topic`.
+(`/oak/rgb/image_rect` by default) and the detector reads that. Because it
+reads P, rectify-then-detect is already consistent; no K/P relay is needed.
+On the robot, check that P in `/oak/rgb/camera_info` is non-zero and sane.
+
+ON-ROBOT QOS RISK. rectify_node subscribes lazily, adapts to the publisher's
+QoS and publishes image_rect reliable, so the camera's image QoS cannot
+silence it. apriltag_node's camera_info subscription is different: it is
+reliable (`qos_profile: default` in apriltag.yaml) and goes straight to the
+driver's `/oak/rgb/camera_info`. If that publisher is best-effort,
+`/oak/rgb/image_rect` stays alive but `/detections` is silent. Check
+`ros2 topic info -v /oak/rgb/camera_info`; the remedy is
+`qos_profile: sensor_data` in apriltag.yaml.
 """
 
 import posixpath
@@ -72,7 +87,6 @@ def _launch_nodes(context):
     # starting (mapping_mission_hardware.launch.py documents the same trap).
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     image_topic = LaunchConfiguration('image_topic').perform(context)
-    camera_info_topic = LaunchConfiguration('camera_info_topic').perform(context)
     rectify = _as_bool(LaunchConfiguration('rectify').perform(context))
     config = get_package_share_directory('perception') + '/config/apriltag.yaml'
 
@@ -88,7 +102,6 @@ def _launch_nodes(context):
             parameters=[{'use_sim_time': use_sim_time}],
             remappings=[
                 ('image', image_topic),
-                ('camera_info', camera_info_topic),
                 ('image_rect', detector_image),
             ],
         ))
@@ -100,7 +113,6 @@ def _launch_nodes(context):
         parameters=[config, {'use_sim_time': use_sim_time}],
         remappings=[
             ('image_rect', detector_image),
-            ('camera_info', camera_info_topic),
         ],
     ))
     return nodes
@@ -110,8 +122,6 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('image_topic', default_value='/oak/rgb/image_raw'),
-        DeclareLaunchArgument(
-            'camera_info_topic', default_value='/oak/rgb/camera_info'),
         DeclareLaunchArgument('rectify', default_value='false'),
         OpaqueFunction(function=_launch_nodes),
     ])

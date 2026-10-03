@@ -10,6 +10,8 @@ import os
 
 import pytest
 import yaml
+from ament_index_python.packages import get_package_share_directory
+from launch.actions import DeclareLaunchArgument
 
 from launch_helpers import (describe_node, expand, load_launch_module,
                             make_context, nodes_of)
@@ -38,7 +40,6 @@ def test_sim_defaults_run_one_apriltag_node_on_the_raw_sim_topics():
     assert apriltag['use_sim_time'] is True
     assert apriltag['remappings'] == {
         'image_rect': '/oak/rgb/image_raw',
-        'camera_info': '/oak/rgb/camera_info',
     }
 
 
@@ -52,36 +53,30 @@ def test_hardware_arguments_rectify_then_detect_on_wall_clock():
     assert rectify['use_sim_time'] is False
     assert rectify['remappings'] == {
         'image': '/oak/rgb/image_raw',
-        'camera_info': '/oak/rgb/camera_info',
         'image_rect': '/oak/rgb/image_rect',
     }
     apriltag = nodes['apriltag_node']
     assert apriltag['use_sim_time'] is False
     assert apriltag['remappings'] == {
         'image_rect': '/oak/rgb/image_rect',
-        'camera_info': '/oak/rgb/camera_info',
     }
 
 
 def test_custom_topics_without_rectify_follow_the_arguments():
-    nodes = _nodes(image_topic='/cam/image_raw',
-                   camera_info_topic='/cam/info', rectify='false')
+    nodes = _nodes(image_topic='/cam/image_raw', rectify='false')
 
     assert list(nodes) == ['apriltag_node']
     assert nodes['apriltag_node']['remappings'] == {
         'image_rect': '/cam/image_raw',
-        'camera_info': '/cam/info',
     }
 
 
 def test_custom_topics_with_rectify_put_image_rect_next_to_the_raw_topic():
-    nodes = _nodes(image_topic='/cam/image_raw',
-                   camera_info_topic='/cam/info', rectify='true')
+    nodes = _nodes(image_topic='/cam/image_raw', rectify='true')
 
     assert nodes['rectify_node']['remappings']['image_rect'] == '/cam/image_rect'
     assert nodes['apriltag_node']['remappings'] == {
         'image_rect': '/cam/image_rect',
-        'camera_info': '/cam/info',
     }
 
 
@@ -103,6 +98,28 @@ def test_root_namespace_topic_rectifies_to_root_image_rect():
 
     assert nodes['rectify_node']['remappings']['image_rect'] == '/image_rect'
     assert nodes['apriltag_node']['remappings']['image_rect'] == '/image_rect'
+
+
+def test_camera_info_is_not_remapped_or_a_launch_argument():
+    # image_transport::CameraSubscriber ignores a camera_info remapping, so
+    # the launch must not pretend to support one.
+    for nodes in (_nodes(), _nodes(use_sim_time='false', rectify='true')):
+        for node in nodes.values():
+            assert 'camera_info' not in node['remappings']
+    description = load_launch_module(LAUNCH_PATH).generate_launch_description()
+    declared = {e.name for e in description.entities
+                if isinstance(e, DeclareLaunchArgument)}
+    assert declared == {'use_sim_time', 'image_topic', 'rectify'}
+
+
+@pytest.mark.parametrize('arguments', [{}, {'rectify': 'true'}])
+def test_apriltag_node_gets_the_params_file(arguments):
+    apriltag = _nodes(**arguments)['apriltag_node']
+
+    assert [os.path.normpath(f) for f in apriltag['parameter_files']] == [
+        os.path.normpath(os.path.join(
+            get_package_share_directory('perception'),
+            'config', 'apriltag.yaml'))]
 
 
 def test_params_file_no_longer_hardcodes_use_sim_time():
