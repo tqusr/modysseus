@@ -1,13 +1,17 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def generate_launch_description():
-    return LaunchDescription([
-        DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
-        DeclareLaunchArgument('saga_token', default_value=''),
+def _as_bool(text):
+    """Launch arguments are text; node parameters must be typed."""
+    return text.strip().lower() in ('true', '1')
+
+
+def _launch_nodes(context):
+    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    return [
         # stub_action_servers is NOT launched here anymore (Task 7). It used to
         # stand in for NavigateToPose/DockRobot, but it registers action servers
         # under the SAME names (`navigate_to_pose`, `dock_robot`) that the real
@@ -28,16 +32,27 @@ def generate_launch_description():
             name='mission_node',
             output='screen',
             parameters=[{
-                'saga_url': LaunchConfiguration('saga_url'),
-                'saga_token': LaunchConfiguration('saga_token'),
+                # Performed to text so a numeric-looking token stays a string.
+                'saga_url': LaunchConfiguration('saga_url').perform(context),
+                'saga_token': LaunchConfiguration('saga_token').perform(context),
                 # Required since Task 7: VehicleStatusOK/Localize compare TF
                 # stamps (sim-clock, since every other node in this stack runs
                 # with use_sim_time:true) against this node's own clock. Without
                 # this, mission_node's clock is real wall-clock -- a completely
                 # different time domain from the sim-clock TF stamps -- which
                 # made every TF recency check fail permanently when confirmed
-                # against the real stack (not assumed).
-                'use_sim_time': True,
+                # against the real stack (not assumed). The real robot has no
+                # /clock, so hardware passes use_sim_time:=false.
+                'use_sim_time': use_sim_time,
             }],
         ),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
+        DeclareLaunchArgument('saga_token', default_value=''),
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        OpaqueFunction(function=_launch_nodes),
     ])

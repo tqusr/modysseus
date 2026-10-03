@@ -74,7 +74,9 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import SetEnvironmentVariable
+from launch.actions import (DeclareLaunchArgument, OpaqueFunction,
+                            SetEnvironmentVariable)
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 LIFECYCLE_NODES = [
@@ -87,7 +89,14 @@ LIFECYCLE_NODES = [
 ]
 
 
-def generate_launch_description():
+def _as_bool(text):
+    """Launch arguments are text; node parameters must be typed."""
+    return text.strip().lower() in ('true', '1')
+
+
+def _launch_nodes(context):
+    # Default true (simulation); the real robot passes false.
+    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     config = os.path.join(
         get_package_share_directory('navigation'), 'config', 'nav2_params.yaml')
 
@@ -98,7 +107,7 @@ def generate_launch_description():
 
     common_args = {
         'output': 'screen',
-        'parameters': [config, {'use_sim_time': True}],
+        'parameters': [config, {'use_sim_time': use_sim_time}],
     }
 
     controller_server = Node(
@@ -152,7 +161,7 @@ def generate_launch_description():
         name='lifecycle_manager_navigation',
         output='screen',
         parameters=[{
-            'use_sim_time': True,
+            'use_sim_time': use_sim_time,
             'autostart': True,
             'node_names': LIFECYCLE_NODES,
             # Generous: bt_navigator/controller_server can take a while to
@@ -162,7 +171,7 @@ def generate_launch_description():
         }],
     )
 
-    return LaunchDescription([
+    return [
         stdout_linebuf_envvar,
         controller_server,
         planner_server,
@@ -171,4 +180,11 @@ def generate_launch_description():
         velocity_smoother,
         collision_monitor,
         lifecycle_manager,
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        OpaqueFunction(function=_launch_nodes),
     ])
