@@ -17,7 +17,8 @@ import importlib.util
 from launch import LaunchContext
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             OpaqueFunction)
-from launch.utilities import perform_substitutions
+from launch.utilities import (normalize_to_list_of_substitutions,
+                              perform_substitutions)
 from launch_ros.actions import Node
 
 
@@ -77,9 +78,19 @@ def describe_node(node, context):
 
 
 def describe_include(include, context):
-    """An IncludeLaunchDescription's file path and its launch arguments."""
-    args = {
-        perform_substitutions(context, list(key)):
-            perform_substitutions(context, list(value))
-        for key, value in include.launch_arguments}
-    return {'file': include.launch_description_source.location, 'args': args}
+    """An IncludeLaunchDescription's file path and its launch arguments.
+
+    Arguments and location may be plain strings or substitutions; both are
+    normalised. `location` is read from the private attribute because the
+    public property only prints the substitutions until the file is loaded.
+    """
+    def text(value):
+        return perform_substitutions(
+            context, normalize_to_list_of_substitutions(value))
+
+    source = include.launch_description_source
+    return {
+        'file': text(source._LaunchDescriptionSource__location),
+        'args': {text(key): text(value)
+                 for key, value in include.launch_arguments},
+    }

@@ -1,4 +1,4 @@
-"""Mapping mission on the REAL robot: wheel + gyro fusion + SLAM in mapping mode.
+"""Mapping mission on the REAL robot: wheel + gyro fusion + SLAM + AprilTag capture.
 
     ros2 launch localization mapping_mission_hardware.launch.py
 
@@ -73,20 +73,30 @@ publish it; see `ekf.yaml`.
   This confirmed centimetre-to-metre correction is applied via
   `encoder_scale` in `config/hardware.yaml`.
 
-LIDAR ONLY. NO APRILTAG, DELIBERATELY. `mapping_mission.launch.py` runs
+APRILTAG DETECTION, FOR DOCK CAPTURE. `mapping_mission.launch.py` runs
 apriltag_ros alongside mapping so one drive both builds the map and captures
-the arena's real dock poses. This file does not, and the dock-capture half of
-that mission is simply not available here yet: a hardware AprilTag variant is
-its own task (the camera's frames come from the device's EEPROM calibration on
-hardware, not from `model.sdf`, and the tag-orientation convention has never
-been confirmed against a live detection - see `perception/perception/
-dock_capture.py`'s "STILL UNVERIFIED AGAINST A LIVE TAG" note). Mapping does
-not depend on it, so it is left out rather than half-wired.
+the arena's real dock poses; so does this file, 5 s after SLAM starts (so it
+does not compete with slam_toolbox's CONFIGURE/ACTIVATE window). It includes
+`perception`'s `apriltag.launch.py` with `use_sim_time:=false`,
+`image_topic:=/oak/rgb/image_raw`, `camera_info_topic:=/oak/rgb/camera_info`
+and `rectify:=true`: the real OAK-D RGB image is distorted and apriltag_ros
+ignores distortion, so `image_proc`'s rectify_node runs first and the detector
+reads `/oak/rgb/image_rect`. Pass `apriltag:=false` for the lidar-only run
+this launch used to be (e.g. if the Jetson cannot keep up). The camera driver
+itself is the vendor's, started by `hardware.launch.py`.
 
-NO SIM BRING-UP, AND NO DEVICE DRIVERS. This launch starts odometry and SLAM,
-nothing else. The robot's own drivers - the serial link that produces
-`/wheel_encoders` and accepts `/cmd_vel`, the lidar that produces `/scan`, and
-RViz - come from the vendor's `hardware.launch.py`, which you are already
+  Needs `sudo apt install ros-jazzy-apriltag-ros ros-jazzy-image-proc` on the
+  robot. The tag-orientation convention in `perception/perception/
+  dock_capture.py` has never been checked against a live tag; the first
+  capture on the robot is that check (see "STILL UNVERIFIED AGAINST A LIVE
+  TAG" there and the dock-A advice in `mapping_mission.launch.py`).
+
+NO SIM BRING-UP, AND NO DEVICE DRIVERS. This launch starts odometry, fusion,
+SLAM and (by default) AprilTag detection, nothing else. The robot's own
+drivers - the serial link that produces `/wheel_encoders` and accepts
+`/cmd_vel`, the lidar that produces `/scan`, the OAK-D camera that produces
+`/oak/rgb/image_raw`, and RViz - come from the vendor's `hardware.launch.py`,
+which you are already
 running in its own terminal to drive the robot at all. Nothing here would work
 without it, and nothing here should restart it.
 
@@ -105,7 +115,8 @@ THE TERMINALS, in the order they have to start.
 
          ros2 launch einride_mini_truck_bringup hardware.launch.py
 
-  1. This launch - wheel odometry, gyro fusion and SLAM in mapping mode:
+  1. This launch - wheel odometry, gyro fusion, SLAM in mapping mode and
+     AprilTag detection:
 
          ros2 launch localization mapping_mission_hardware.launch.py
 
@@ -129,9 +140,27 @@ THE TERMINALS, in the order they have to start.
      cannot see. Every metre of error it makes is a metre of error in the pose
      slam_toolbox seeds its scan match from.
 
-  3. Save the map when the drive is done, exactly as for a sim mapping run:
+  3. The capture tool - record a dock pose per keypress, on the robot:
+
+         ros2 run perception capture_dock_pose
+
+     No `--ros-args -p use_sim_time:=true` here (that flag is for the
+     simulator): there is no /clock on hardware, the tool's default is
+     already false, and apriltag_ros runs on wall-clock time too. Drive to a
+     dock, stop with its tag square on at about 0.6 m, type `i` + Enter.
+     Capture dock A (tag 0) first. `mapping_mission.launch.py`'s docstring
+     has the full workflow. The tool rewrites the dock lines in
+     `~/modysseus/src/mission/config/docks.yaml` and
+     `~/modysseus/src/perception/config/docking.yaml` on the robot.
+
+  4. Save the map when the drive is done, exactly as for a sim mapping run:
 
          ros2 run nav2_map_server map_saver_cli -f src/localization/maps/arena
+
+  5. `git diff` in `~/modysseus` (a plausible pose on the arena wall, staging
+     pose about 0.6 m out), then COMMIT the captures there, on the robot, so a
+     later `git pull` does not conflict. They stay local; nothing sends them
+     to the laptop.
 
 WATCHING THE MAP GROW IN RVIZ. The vendor's `hardware.launch.py` already
 starts RViz, but its config
@@ -163,8 +192,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, LogInfo
+from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
+                            LogInfo, TimerAction)
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 #: There is no /clock on a real robot.
@@ -222,20 +254,57 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': USE_SIM_TIME_ARG,
                           'publish_tf': 'true'}.items())
 
+    # AprilTag detection, so one drive both builds the map and captures where
+    # the docks physically are (`ros2 run perception capture_dock_pose`).
+    # perception's launch is found through its share directory at run time and
+    # NOT declared as a package dependency: perception exec_depends on
+    # localization, so the reverse edge would be a cycle colcon refuses to
+    # order (mapping_mission.launch.py, the sim twin, does the same).
+    #
+    # The camera is the vendor's: hardware.launch.py already runs it and
+    # publishes /oak/rgb/image_raw (distorted, bgr8) and /oak/rgb/camera_info.
+    # Hence rectify:=true (apriltag_ros ignores distortion) and wall-clock time.
+    apriltag = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(get_package_share_directory('perception'),
+                         'launch', 'apriltag.launch.py')),
+        launch_arguments={
+            'use_sim_time': USE_SIM_TIME_ARG,
+            'image_topic': '/oak/rgb/image_raw',
+            'camera_info_topic': '/oak/rgb/camera_info',
+            'rectify': 'true',
+        }.items())
+
     return LaunchDescription([
+        # `apriltag:=false` gives the lidar-only run this launch used to be.
+        DeclareLaunchArgument(
+            'apriltag', default_value='true',
+            description='Run AprilTag detection (rectified) alongside mapping.'),
+
         LogInfo(msg=(
             'mapping_mission_hardware: wheel odometry + gyro fusion (EKF) + '
-            'SLAM (mapping mode), '
-            'lidar only - no AprilTag, no dock capture. The robot\'s own '
-            'drivers come from einride_mini_truck_bringup hardware.launch.py, '
-            'which must already be running. Drive with `ros2 run '
-            'teleop_twist_keyboard teleop_twist_keyboard` in another '
-            'terminal, SLOWLY and SMOOTHLY. Keep the robot still until '
-            '"gyro bias calibrated", then wait for slam_toolbox ACTIVE below '
-            'before driving. To watch the map grow, add a Map '
-            'display on /map in RViz and set Fixed Frame to `map`.')),
+            'SLAM (mapping mode) + AprilTag detection (apriltag:=false to '
+            'skip it). The robot\'s own drivers, camera included, come from '
+            'einride_mini_truck_bringup hardware.launch.py, which must '
+            'already be running. Drive with `ros2 run teleop_twist_keyboard '
+            'teleop_twist_keyboard` in another terminal, SLOWLY and '
+            'SMOOTHLY, and capture dock poses with `ros2 run perception '
+            'capture_dock_pose` in a third (no sim-time flag on the robot). '
+            'Keep the robot still until "gyro bias calibrated", then wait for '
+            'slam_toolbox ACTIVE below before driving. Capture dock A (tag 0) '
+            'first and sanity-check it against its existing docks.yaml entry. '
+            'To watch the map grow, add a Map display on /map in RViz and set '
+            'Fixed Frame to `map`.')),
 
         wheel_odometry,
         fusion,
         mapping,
+
+        # Staggered like the sim launch: slam_toolbox is busy with its
+        # CONFIGURE/ACTIVATE window in the first seconds and rectify + detect
+        # would compete with it.
+        TimerAction(
+            period=5.0,
+            actions=[apriltag],
+            condition=IfCondition(LaunchConfiguration('apriltag'))),
     ])
