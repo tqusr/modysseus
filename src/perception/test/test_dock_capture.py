@@ -27,6 +27,8 @@ import math
 import pytest
 
 from perception.dock_capture import (AGE_CLOCK_MISMATCH, AGE_OK, AGE_STALE,
+                                     CLOCK_MISMATCH_AGE_SEC,
+                                     DEFAULT_MAX_DETECTION_AGE_SEC,
                                      COMMAND_CAPTURE, COMMAND_EMPTY,
                                      COMMAND_UNKNOWN, DOCKING_CHASSIS_OFFSET_M,
                                      ERROR_ORIENTATION, ERROR_TAG_ID,
@@ -624,6 +626,20 @@ def test_capture_visible_tags_on_an_empty_message_does_nothing():
 ])
 def test_classify_detection_age(age_sec, expected):
     assert classify_detection_age(age_sec, 0.5) == expected
+
+
+@pytest.mark.parametrize('age_sec', [0.86, 1.4, 2.4])
+def test_default_age_limit_accepts_measured_hardware_latency(age_sec):
+    # Ages of /detections measured on the Jetson (OAK-D 720p -> rectify_node ->
+    # apriltag_node) while looking straight at tag 7: min 0.86 s, median 1.4 s,
+    # max 2.4 s. The old 0.5 s default rejected every one of them as "no tag
+    # currently visible".
+    assert (classify_detection_age(age_sec, DEFAULT_MAX_DETECTION_AGE_SEC)
+            == AGE_OK)
+
+
+def test_default_age_limit_is_well_below_the_clock_mismatch_threshold():
+    assert DEFAULT_MAX_DETECTION_AGE_SEC < CLOCK_MISMATCH_AGE_SEC / 10
 
 
 # --------------------------------------------------------------------------

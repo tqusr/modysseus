@@ -116,6 +116,18 @@ AGE_CLOCK_MISMATCH = 'clock_mismatch'
 #: gets its own diagnosis instead of being reported as a stale tag.
 CLOCK_MISMATCH_AGE_SEC = 1000.0
 
+#: Default for capture_dock_pose's `max_detection_age_sec`: reject a detection
+#: older (or further in the future) than this. It must cover the END-TO-END
+#: latency of the image pipeline, not just the camera frame period. On the
+#: Jetson (OAK-D 1280x720 -> rectify_node -> apriltag_node, decimate 1.0) the
+#: detection stamp -- the camera image's stamp -- was measured 0.86-2.4 s old
+#: (median 1.4 s) on arrival; the original 0.5 s, sized for the sim's camera
+#: rate, rejected every hardware detection as "no tag currently visible".
+#: 3 s still stops a tag that has left the view from being captured after the
+#: robot has been driven on, and is far below CLOCK_MISMATCH_AGE_SEC, so a
+#: use_sim_time mix-up is still diagnosed as such.
+DEFAULT_MAX_DETECTION_AGE_SEC = 3.0
+
 
 class DockCaptureError(Exception):
     """Base for the per-tag failures a capture reports and then skips past."""

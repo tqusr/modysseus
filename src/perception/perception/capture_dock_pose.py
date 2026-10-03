@@ -53,7 +53,9 @@ from rclpy.node import Node
 from rclpy.time import Time
 
 from perception.dock_capture import (AGE_CLOCK_MISMATCH, AGE_STALE,
-                                     CLOCK_MISMATCH_AGE_SEC, ERROR_ORIENTATION,
+                                     CLOCK_MISMATCH_AGE_SEC,
+                                     DEFAULT_MAX_DETECTION_AGE_SEC,
+                                     ERROR_ORIENTATION,
                                      ERROR_TAG_ID, ERROR_TRANSFORM, MAP_FRAME,
                                      TagTransformUnavailable, apply_capture,
                                      capture_visible_tags,
@@ -62,12 +64,6 @@ from perception.dock_capture import (AGE_CLOCK_MISMATCH, AGE_STALE,
                                      frame_names_from_tf_yaml,
                                      run_command_loop)
 
-#: Reject a detection older (or further in the future) than this. Half a
-#: second at the sim's camera rate is a handful of frames: long enough that a
-#: capture never fails just because the subscription happened to land between
-#: two images, short enough that a tag which left the view, or a robot that has
-#: since been driven on, cannot be captured as if it were still there.
-DEFAULT_MAX_DETECTION_AGE_SEC = 0.5
 
 #: Source-relative paths of the two files a capture rewrites, used to find the
 #: workspace copies from the installed share directories.
