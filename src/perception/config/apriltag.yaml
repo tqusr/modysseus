@@ -1,7 +1,7 @@
 ### apriltag_ros (AprilTagNode) parameters
 #
 # Detects the dock AprilTags (family 36h11, 0.100 m edge, per the arena dock
-# model's own built-in comment) from the sim's OAK-D RGB camera.
+# model's own built-in comment) from the OAK-D RGB camera, simulated or real.
 #
 # Uniform tag size: every dock tag (ids 0-7) is the same physical size, so a
 # single default `size` covers all of them. apriltag_ros's own shipped
@@ -14,9 +14,9 @@
 # here -- apriltag_ros does not take topic names as ros__parameters.
 /**:
     ros__parameters:
-        use_sim_time: true
+        # use_sim_time is set by launch/apriltag.launch.py, not here.
 
-        image_transport: raw     # sim publishes raw (uncompressed) images
+        image_transport: raw     # sim and the real driver publish raw images
         family: 36h11
         size: 0.100               # meters
         max_hamming: 0            # exact decode only

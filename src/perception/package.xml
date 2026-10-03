@@ -23,6 +23,10 @@
   <depend>apriltag_msgs</depend>
 
   <exec_depend>localization</exec_depend>
+  <!-- apriltag.launch.py starts image_proc's rectify_node on the real robot
+       (rectify:=true). apriltag_ros normally pulls image_proc in already; it
+       is declared here because this package's own launch file names it. -->
+  <exec_depend>image_proc</exec_depend>
   <!-- NOT declared: a dependency on `mission`, even though capture_dock_pose
        rewrites mission/config/docks.yaml. It finds that file by walking up to
        the workspace SOURCE tree from this package's own share directory, and
