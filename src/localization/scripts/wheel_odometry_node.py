@@ -30,7 +30,7 @@ ALL the arithmetic lives in `localization.wheel_odometry`, which imports no
 ROS and is unit-tested without a ROS graph. Read that module's docstring
 before touching anything here: it is where the input contract, the
 position-deltas-not-velocity decision, the scrub-corrected `wheel_separation`
-and its simulation-only provenance, and the still-unverified forward-positive
+and its real-robot spin-in-place calibration, and the still-unverified forward-positive
 sign assumption are all written down.
 
 TIMESTAMPS. Every pose is stamped with the encoder sample's own header stamp,
@@ -144,8 +144,8 @@ class WheelOdometryNode(Node):
         """Declare every tunable. Nothing in this node is hardcoded."""
         self.declare_parameter('wheel_radius', WHEEL_RADIUS_M)
         # The EFFECTIVE, scrub-corrected separation, and a parameter rather
-        # than a constant precisely because the shipped default was measured
-        # in simulation and the real robot's scrub may differ. See
+        # than a constant so it can be re-tuned without a rebuild. The default
+        # is WHEEL_SEPARATION_M, measured on the real robot; see
         # localization.wheel_odometry's docstring.
         self.declare_parameter('wheel_separation', WHEEL_SEPARATION_M)
 

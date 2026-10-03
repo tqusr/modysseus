@@ -57,26 +57,35 @@ That is a deliberate choice over reading `velocity`:
 So dt is used only to turn an exact displacement into a reported velocity, and
 never to produce the displacement itself.
 
-THE KINEMATIC CONSTANTS come from the simulated DiffDrive plugin's own
-configuration in `einride_mini_truck_description`'s `model.sdf` - the same
-physical robot, so the same numbers.
+THE KINEMATIC CONSTANTS. `WHEEL_RADIUS_M` comes from the simulated DiffDrive
+plugin's configuration in `einride_mini_truck_description`'s `model.sdf` (same
+physical wheel). `WHEEL_SEPARATION_M` is MEASURED ON THE REAL ROBOT and is the
+the node's code default (and what the tests use); on the robot the
+authoritative value is `wheel_separation` in `config/hardware.yaml`, which
+`mapping_mission_hardware.launch.py` loads over it. Keep the two in step.
 
 `WHEEL_SEPARATION_M` is NOT the geometric track width (0.17452 m). A
 skid-steer has to scrub its wheels sideways to rotate, so the ideal two-wheel
 differential model over-predicts yaw rate; the effective separation is the
-geometric track times a measured scrub factor of 1.2435. Do not "fix" it back
-to the geometric value and do not re-derive it - model.sdf's comment carries
-the measurements, including the finding that 6WD and 4WD give the same factor
-within noise.
+geometric track times a scrub factor. Do not "fix" it back to the geometric
+value.
 
-!!! THAT SCRUB FACTOR WAS MEASURED IN SIMULATION !!! Its provenance is the
-vendor repo's `docs/simulation.md`, under a page that opens "This page covers
-the simulation only", and the 6WD-versus-4WD comparison it reports is a
-simulation experiment. Scrub depends on real tyre and real floor friction, so
-the real robot's factor is PLAUSIBLY DIFFERENT and this value is a starting
-point, not a hardware calibration. It is a parameter on the node for exactly
-that reason - see this feature's report for how to recalibrate it from a
-measured turn.
+HOW IT WAS MEASURED (real robot, arena floor). Spin N full turns in place and
+read the `/wheel_encoders` position deltas over the spin:
+
+    effective_separation = |dR - dL| / (2 * pi * N)      [dR, dL in metres]
+
+where, remember, `/wheel_encoders` position is RADIANS = MCU centimetres /
+wheel_radius, i.e. 25 position units per cm (0.4 mm per unit) before the
+`encoder_scale` correction below turns it into metres. Measured: 5 clockwise
+turns gave dL = +16025 and dR = -16050 units, so |dR - dL| = 32075 units =
+12.830 m over 5 * 2 * pi = 31.416 rad -> effective separation 0.4084 m, scrub
+factor 0.4084 / 0.17452 = 2.340. THIS IS A SINGLE CLOCKWISE RUN; a
+counter-clockwise run is still to come and should be averaged in.
+
+(The previous value, 1.2435 / 0.21701 m, was measured in SIMULATION and is
+vendor-documented in `docs/simulation.md`; it was far too small for the real
+tyres and floor, which under-rotates the map.)
 
 ONLY TWO OF THE FOUR DRIVEN WHEELS ARE SENSED. The chassis is 6-wheel, 4WD
 (front and rear pairs driven, middle pair free-rolling idlers), but only the
@@ -129,14 +138,17 @@ WHEEL_RADIUS_M = 0.040
 #: factor below has something to be a factor OF; never used for kinematics.
 GEOMETRIC_TRACK_M = 0.17452
 
-#: Measured ratio of commanded to actual turn rate for this chassis. See the
-#: module docstring: measured in SIMULATION, not on the robot.
-SCRUB_FACTOR = 1.2435
+#: Measured ratio of effective to geometric track for this chassis, on the REAL
+#: robot (5 clockwise in-place turns; see the module docstring). Single CW run
+#: so far - average in a CCW run when it is available.
+SCRUB_FACTOR = 2.340
 
 #: Effective wheel separation in metres: `GEOMETRIC_TRACK_M * SCRUB_FACTOR`,
-#: rounded as model.sdf spells it. This is the number to use.
-WHEEL_SEPARATION_M = 0.21701
+#: rounded to the measured 0.4084. Code default only: on the robot the
+#: authoritative value comes from `config/hardware.yaml`.
+WHEEL_SEPARATION_M = 0.4084
 
+#: Code default; on the robot `config/hardware.yaml` is authoritative.
 #: Confirmed unit-conversion factor for the real robot's encoder data: the
 #: vendor's `position` field is mislabelled as metres but is actually whole
 #: centimetres - see the module docstring's "ENCODER UNIT CALIBRATION" note

@@ -26,29 +26,21 @@ TF. That is exactly the role Gazebo's DiffDrive plugin fills in simulation,
 down to the topic and the frame names, which is why `ekf.yaml` can keep
 `publish_tf: false` unchanged in both modes.
 
-  THE TURN CALIBRATION IS INHERITED FROM SIMULATION. The node's
-  `wheel_separation` defaults to 0.21701 m, which is NOT this chassis's
-  geometric track (0.17452 m). A skid-steer has to scrub its wheels sideways
-  to rotate, so the ideal differential model over-predicts yaw rate; 0.21701
-  is the geometric track times a measured scrub factor of 1.2435. That factor
-  comes from the simulated DiffDrive plugin's own configuration - see
-  `einride_mini_truck_description`'s `model.sdf` around its
-  `<wheel_separation>` tag, and the vendor repo's `docs/simulation.md`, which
-  carries the measurement. DO NOT re-derive it and do not "fix" it back to the
-  geometric value.
+  THE TURN CALIBRATION IS MEASURED ON THE REAL ROBOT, AND LIVES IN
+  `config/hardware.yaml`. The node's `wheel_separation` is 0.4084 m there,
+  which is NOT this chassis's geometric track (0.17452 m): a skid-steer has to
+  scrub its wheels sideways to rotate, so the ideal differential model
+  over-predicts yaw rate. 0.4084 is the effective separation from spinning 5
+  clockwise turns in place on the arena floor (|dR - dL| / (2 pi N)); that
+  file and `localization/localization/wheel_odometry.py`'s module docstring
+  have the method and numbers. It is a SINGLE clockwise run, with a
+  counter-clockwise one still to come to average. `config/hardware.yaml` is
+  the one place to change the robot's calibration (edit, rebuild/re-source the
+  install); the Python constants are only the node's code defaults.
 
-  But do not trust it blindly either: `docs/simulation.md` opens with "This
-  page covers the simulation only", so that factor was measured against the
-  SIMULATED robot's physics, and real scrub depends on real tyres on a real
-  floor. If the map comes out rotationally wrong - corridors meeting at the
-  wrong angle, a square room closing as a parallelogram - this parameter is
-  the first suspect, and it is a parameter precisely so it can be
-  recalibrated without a rebuild:
-
-      ros2 launch localization mapping_mission_hardware.launch.py \\
-          wheel_separation:=0.23
-
-  This feature's report has the measure-a-turn procedure.
+  If the map comes out rotationally wrong - corridors meeting at the wrong
+  angle, a square room closing as a parallelogram - `wheel_separation` is the
+  first suspect.
 
   ONLY TWO OF THE FOUR DRIVEN WHEELS ARE SENSED. The chassis is 6-wheel, 4WD
   with the front and rear pairs driven, and only the front axle is
@@ -69,9 +61,8 @@ down to the topic and the frame names, which is why `ekf.yaml` can keep
   `localization/localization/wheel_odometry.py`'s module docstring ("ENCODER
   UNIT CALIBRATION") for the full writeup.
 
-  This confirmed centimetre-to-metre correction is applied by default, via
-  the `encoder_scale` argument below (`wheel_odometry_node`'s own default,
-  from `ENCODER_SCALE_FACTOR`).
+  This confirmed centimetre-to-metre correction is applied via
+  `encoder_scale` in `config/hardware.yaml`.
 
 LIDAR ONLY. NO APRILTAG, DELIBERATELY. `mapping_mission.launch.py` runs
 apriltag_ros alongside mapping so one drive both builds the map and captures
@@ -163,9 +154,8 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo
+from launch.actions import IncludeLaunchDescription, LogInfo
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 #: There is no /clock on a real robot.
@@ -185,9 +175,9 @@ USE_SIM_TIME_ARG = 'false'
 
 
 def generate_launch_description():
-    mapping_path = os.path.join(
-        get_package_share_directory('localization'), 'launch',
-        'mapping.launch.py')
+    share = get_package_share_directory('localization')
+    mapping_path = os.path.join(share, 'launch', 'mapping.launch.py')
+    hardware_params = os.path.join(share, 'config', 'hardware.yaml')
 
     # mapping.launch.py defaults use_sim_time to true, for simulation's sake;
     # this is the one caller that says otherwise. A node left at true with no
@@ -197,8 +187,9 @@ def generate_launch_description():
         launch_arguments={'use_sim_time': USE_SIM_TIME_ARG}.items())
 
     # The real odometry source, and the reason this launch can work at all.
-    # See the docstring above for the wheel_separation calibration caveat and
-    # the two-of-four-wheels limitation, and
+    # Calibration (wheel_separation, encoder_scale) comes from
+    # config/hardware.yaml. See the docstring above for the caveats and the
+    # two-of-four-wheels limitation, and
     # localization/localization/wheel_odometry.py for the maths and the input
     # contract. Started before SLAM so the odom -> base_footprint edge is
     # already in TF when slam_toolbox's first scan lookup happens.
@@ -207,30 +198,10 @@ def generate_launch_description():
         executable='wheel_odometry_node.py',
         name='wheel_odometry_node',
         output='screen',
-        parameters=[{
-            'use_sim_time': USE_SIM_TIME,
-            'wheel_separation': LaunchConfiguration('wheel_separation'),
-            'encoder_scale': LaunchConfiguration('encoder_scale'),
-        }],
+        parameters=[hardware_params, {'use_sim_time': USE_SIM_TIME}],
     )
 
     return LaunchDescription([
-        DeclareLaunchArgument(
-            'wheel_separation', default_value='0.21701',
-            description='EFFECTIVE wheel separation in metres: the geometric '
-                        'track (0.17452) times a scrub factor measured in '
-                        'SIMULATION (1.2435). Raise it if the map comes out '
-                        'under-rotated, lower it if over-rotated. Not the '
-                        'geometric track - see this launch file\'s docstring.'),
-
-        DeclareLaunchArgument(
-            'encoder_scale', default_value='0.01',
-            description='Confirmed centimetre-to-metre correction (1/100) '
-                        'for real encoder data - see this launch file\'s '
-                        'docstring and localization/wheel_odometry.py\'s '
-                        'ENCODER_SCALE_FACTOR. Override e.g. '
-                        'encoder_scale:=1.0 to disable the correction.'),
-
         LogInfo(msg=(
             'mapping_mission_hardware: wheel odometry + SLAM (mapping mode), '
             'lidar only - no AprilTag, no dock capture. The robot\'s own '

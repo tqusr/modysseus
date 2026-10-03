@@ -11,8 +11,8 @@ can answer:
 
   - that the MCU's `odl`/`odr` increase when the robot drives FORWARD (the
     sign assumption; see the module docstring), and
-  - that `wheel_separation = 0.21701` is right for real tyres on a real
-    floor, rather than only for the simulation it was measured in.
+  - that `wheel_separation = 0.4084` (one clockwise spin-in-place run) holds
+    for every floor and turn direction, rather than just the one measured.
 
 Both are listed, with the symptoms to watch for, in this feature's report.
 What the tests do instead is make sure that IF those two inputs are right, the
@@ -48,12 +48,13 @@ def test_localization_package_importable():
 def test_effective_separation_is_the_geometric_track_times_the_scrub_factor():
     """Guards the number most likely to be 'corrected' back to the track width.
 
-    model.sdf derives 0.21701 as 0.17452 x 1.2435. If somebody edits one of
+    The separation is the geometric 0.17452 x the measured scrub 2.340,
+    rounded to 0.4084. If somebody edits one of
     the three without the others, this fails rather than quietly changing
     every turn the robot records.
     """
     assert GEOMETRIC_TRACK_M * SCRUB_FACTOR == pytest.approx(
-        WHEEL_SEPARATION_M, abs=1e-5)
+        WHEEL_SEPARATION_M, abs=5e-5)
 
 
 def test_effective_separation_is_wider_than_the_geometric_track():
