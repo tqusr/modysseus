@@ -133,11 +133,18 @@ def _launch_nodes(context):
         **common_args,
     )
 
+    # Replan only when the path is blocked or the goal changes; see the
+    # bt_navigator comment in nav2_params.yaml.
+    nav_to_pose_bt = os.path.join(
+        get_package_share_directory('nav2_bt_navigator'), 'behavior_trees',
+        'navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml')
     bt_navigator = Node(
         package='nav2_bt_navigator',
         executable='bt_navigator',
         name='bt_navigator',
-        **common_args,
+        output='screen',
+        parameters=[config, {'use_sim_time': use_sim_time,
+                             'default_nav_to_pose_bt_xml': nav_to_pose_bt}],
     )
 
     velocity_smoother = Node(

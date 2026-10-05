@@ -34,3 +34,11 @@ def test_every_nav2_node_gets_a_bool_use_sim_time(args, expected):
     nodes = _nodes(**args)
     assert len(nodes) == 7  # six servers + lifecycle manager
     assert all(n['inline_parameters']['use_sim_time'] is expected for n in nodes)
+
+
+def test_nav_to_pose_replans_only_when_the_path_becomes_invalid():
+    bt = next(n for n in _nodes() if n['name'] == 'bt_navigator')
+    xml = bt['inline_parameters']['default_nav_to_pose_bt_xml']
+    assert xml.endswith(
+        'navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml')
+    assert os.path.isfile(xml)
