@@ -99,10 +99,15 @@ controller_server:
     # the wrapped controller's parameters live in this SAME "FollowPath"
     # namespace alongside the shim's own - RotationShimController
     # instantiates primary_controller under this same plugin name.
+    # rotate_to_heading_once: only rotate for the first path of a goal, not
+    # on every ~1 s replan. Otherwise jagged NavFn paths keep re-triggering
+    # stop-and-rotate. Engage above ~34 deg, release below ~17 deg.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
-      angular_dist_threshold: 0.3
+      angular_dist_threshold: 0.6
+      angular_disengage_threshold: 0.3
+      rotate_to_heading_once: true
       forward_sampling_distance: 0.3
       rotate_to_heading_angular_vel: 1.0
       max_angular_accel: 2.0
@@ -304,17 +309,22 @@ collision_monitor:
     base_shift_correction: true
     stop_pub_timeout: 2.0
     polygons: ["PolygonStop", "PolygonSlow"]
+    # 30x30 cm square around the 23x26 cm body: stops only when something is
+    # within ~2-3.5 cm of the chassis, so it cannot trap the robot mid-path.
     PolygonStop:
       type: "polygon"
-      points: "[[0.25, 0.25], [0.25, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      points: "[[0.15, 0.15], [0.15, -0.15], [-0.15, -0.15], [-0.15, 0.15]]"
       action_type: "stop"
       min_points: 4
       visualize: true
       polygon_pub_topic: "polygon_stop"
       enabled: true
+    # Circle r=0.3, not a +-0.4 square (0.57 m at the corners): the square
+    # halved every command near walls, often below what the skid-steer needs
+    # to move at all. MPPI's CostCritic already slows near obstacles.
     PolygonSlow:
-      type: "polygon"
-      points: "[[0.4, 0.4], [0.4, -0.4], [-0.4, -0.4], [-0.4, 0.4]]"
+      type: "circle"
+      radius: 0.3
       action_type: "slowdown"
       min_points: 4
       slowdown_ratio: 0.5
@@ -338,7 +348,9 @@ collision_monitor:
       topic: "/oak/points_filtered"
       min_height: 0.05
       max_height: 1.0
-      enabled: true
+      # TEMPORARY: false while testing nav and docking - the camera cloud has
+      # been stalling and a stale source stops the robot. Set back to true.
+      enabled: false
       # Per-source override of the node-level `source_timeout: 1.0` above.
       # The lidar `scan` source deliberately KEEPS 1.0 - this loosening
       # applies only to the camera, which is the supplementary source (low
