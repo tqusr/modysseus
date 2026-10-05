@@ -18,7 +18,8 @@ odometry starts at once because there is no simulator to wait for):
      0  hardware_odometry   wheel odometry + gyro bias + EKF owning
                             odom -> base_footprint                (always)
      5  apriltag            rectified, on /oak/rgb/image_raw      (apriltag)
-     5  oak_points_filter   voxel + crop box on /oak/points       (nav)
+     5  oak_points_filter   small cloud from /oak/stereo/image_raw,
+                            voxel + crop box                      (nav)
      7  localize            slam_toolbox localization on `map`    (always)
     10  docking             opennav_docking DockRobot server      (docking)
     18  navigation          Nav2                                  (nav)
@@ -111,7 +112,8 @@ def generate_launch_description():
     apriltag = _include('perception', 'apriltag.launch.py', {
         **HARDWARE, 'image_topic': '/oak/rgb/image_raw', 'rectify': 'true'},
         switch='apriltag')
-    oak_filter = _include('perception', 'oak_points_filter.launch.py', HARDWARE, 'nav')
+    oak_filter = _include('perception', 'oak_points_filter.launch.py',
+                          {**HARDWARE, 'source': 'depth'}, 'nav')
     localize = _include('localization', 'localize.launch.py',
                         {**HARDWARE, 'map': LaunchConfiguration('map'),
                          'map_start_pose': LaunchConfiguration('map_start_pose')})

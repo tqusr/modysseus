@@ -43,6 +43,39 @@
 # obstacle anywhere else in the camera's field of view -- including low
 # ones, or ones close to the robot but outside this box (e.g. at a dock
 # during final approach) -- passes through untouched.
+# DEPTH SOURCE ONLY (oak_points_filter.launch.py source:=depth, the real
+# robot): two stages ahead of the voxel filter that replace /oak/points with a
+# cloud built from the depth image at quarter resolution per side.
+#
+# 1280x720 -> 320x180 = 57,600 points, 16 bytes each (XYZ, no colour) = 0.9 MB,
+# against /oak/points' 921,600 points at 32 bytes = 29.5 MB. What it costs:
+# one pixel now spans 4x the angle, 0.35 deg (HFOV 69.85 deg / 320 px), which
+# is 1.8 cm at 3 m and 3.1 cm at 5 m - still at or under the 3 cm voxel leaf
+# below and the costmaps' 5 cm cells, so nav sees nothing coarser in the
+# arena. The OAK's own depth is already computed at half resolution (the
+# ROBOTICS preset decimates by 2, see the vendor's oak_d_lite.yaml), so the
+# full image held less detail than its pixel count suggests anyway.
+oak_depth_resize:
+  ros__parameters:
+    use_sim_time: true
+    use_scale: true
+    scale_width: 0.25
+    scale_height: 0.25
+    # 0 = nearest neighbour. Not the default 1 (linear): averaging depth
+    # across an object's edge invents points floating between the object and
+    # the wall behind it, and averaging with a 0 (no depth) pixel invents
+    # points near the camera. Nearest keeps every value a real measurement.
+    # ResizeNode scales camera_info's K and P with the image, so the cloud
+    # below lands in the same place as one built at full resolution.
+    interpolation: 0
+
+oak_depth_points:
+  ros__parameters:
+    use_sim_time: true
+    # Drop a frame rather than queue it: same reason as the filters' own
+    # max_queue_size below.
+    queue_size: 1
+
 # STAGE 1 of 2: voxel downsample, ahead of the CropBox below.
 #
 # Why this stage exists (it is a LATENCY fix, not a filtering one): the sim's
@@ -91,6 +124,15 @@ filter_voxel_grid_node:
   ros__parameters:
     use_sim_time: true
     leaf_size: 0.03
+    # pcl_ros's VoxelGrid ALSO range-filters, by default on z in [0, 1.0] -
+    # and this stage runs in the optical frame, where z is distance from the
+    # camera. Left at the default it silently dropped every point beyond 1 m
+    # (found on a synthetic wall at 2 m: the voxelled cloud came out empty).
+    # 3.5 m covers nav2_params.yaml's camera layers (obstacle_max_range 2.5,
+    # raytrace_max_range 3.0) with margin; anything further is never used.
+    filter_field_name: z
+    filter_limit_min: 0.0
+    filter_limit_max: 3.5
     # Keep only the newest pending cloud. The default 3 lets a slow consumer
     # build a backlog and then serve collision_monitor a sample that is
     # already several frames old -- the exact staleness this stage exists to

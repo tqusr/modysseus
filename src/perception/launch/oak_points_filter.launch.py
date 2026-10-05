@@ -34,6 +34,24 @@ its `source_timeout`. config/oak_points_filter.yaml has the measurements.
 The `use_sim_time` launch argument (default true) exists for the real robot.
 The YAML sets `use_sim_time: true` on both filters; the inline dict listed
 after it wins.
+
+`source` picks what the filters read:
+
+    cloud (default)  /oak/points, the full 1280x720 colour cloud (simulation)
+    depth            builds a small XYZ cloud from /oak/stereo/image_raw
+                     itself (full_stack_hardware.launch.py)
+
+`depth` exists because on the robot even the voxel stage came too late: the
+vendor's camera container builds /oak/points (921,600 points, ~29.5 MB) and
+it then crosses DDS to reach the voxel filter, over UDP only
+(/etc/default/einride-mini-truck sets FASTDDS_BUILTIN_TRANSPORTS=UDPv4). The
+collision monitor's camera source stalled and stopped the robot. In `depth`
+mode the 1.8 MB depth image is the only thing that crosses DDS: it is shrunk
+4x per side (nearest neighbour, so no depth is invented at object edges),
+turned into a 320x180 XYZ cloud (57,600 points, no colour: nothing in nav
+reads it), and voxelled and cropped, all in one container with intra-process
+transport. Once nothing subscribes to /oak/points the vendor's colour-cloud
+node stops computing it. config/oak_points_filter.yaml has the sizing.
 """
 
 import os
@@ -43,7 +61,8 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 
 
 def _as_bool(text):
@@ -51,10 +70,78 @@ def _as_bool(text):
     return text.strip().lower() in ('true', '1')
 
 
+def _depth_container(config, use_sim_time):
+    """`source:=depth`: depth image -> small XYZ cloud -> voxel -> crop box."""
+    parameters = [config, {'use_sim_time': use_sim_time}]
+    return ComposableNodeContainer(
+        name='oak_cloud_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}],
+        composable_node_descriptions=[
+            ComposableNode(
+                package='image_proc',
+                plugin='image_proc::ResizeNode',
+                name='oak_depth_resize',
+                parameters=parameters,
+                remappings=[
+                    ('image/image_raw', '/oak/stereo/image_raw'),
+                    ('image/camera_info', '/oak/stereo/camera_info'),
+                    ('resize/image_raw', '/oak/depth_small/image_raw'),
+                    ('resize/camera_info', '/oak/depth_small/camera_info'),
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
+            ComposableNode(
+                package='depth_image_proc',
+                plugin='depth_image_proc::PointCloudXyzNode',
+                name='oak_depth_points',
+                parameters=parameters,
+                remappings=[
+                    ('image_rect', '/oak/depth_small/image_raw'),
+                    ('camera_info', '/oak/depth_small/camera_info'),
+                    ('points', '/oak/points_small'),
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
+            ComposableNode(
+                package='pcl_ros',
+                plugin='pcl_ros::VoxelGrid',
+                name='filter_voxel_grid_node',
+                parameters=parameters,
+                remappings=[
+                    ('input', '/oak/points_small'),
+                    ('output', '/oak/points_voxel'),
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
+            ComposableNode(
+                package='pcl_ros',
+                plugin='pcl_ros::CropBox',
+                name='filter_crop_box_node',
+                parameters=parameters,
+                remappings=[
+                    ('input', '/oak/points_voxel'),
+                    ('output', '/oak/points_filtered'),
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            ),
+        ],
+    )
+
+
 def _launch_nodes(context):
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     config = os.path.join(
         get_package_share_directory('perception'), 'config', 'oak_points_filter.yaml')
+
+    source = LaunchConfiguration('source').perform(context).strip().lower()
+    if source == 'depth':
+        return [_depth_container(config, use_sim_time)]
+    if source != 'cloud':
+        raise ValueError(f"source must be 'cloud' or 'depth', not {source!r}")
 
     return [
         # Stage 1: voxel downsample. /oak/points is a 1280x720 ORGANIZED
@@ -98,5 +185,9 @@ def _launch_nodes(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'source', default_value='cloud',
+            description="'cloud': filter /oak/points; 'depth': build a small "
+                        'cloud from /oak/stereo/image_raw (real robot)'),
         OpaqueFunction(function=_launch_nodes),
     ])
