@@ -33,29 +33,21 @@
 #     pose.theta here = docks.yaml's dock_pose.theta + pi (normalized).
 #
 # Plugin choice: `opennav_docking::SimpleChargingDock` with
-# `use_external_detection_pose: false` -- i.e. FIXED-POSE docking against the
-# known world/map poses below, not vision-corrected (AprilTag) final
-# approach. opennav_docking *does* support vision correction (it subscribes
-# a single global `detected_dock_pose` topic, applying
-# `external_detection_translation_*`/`external_detection_rotation_*` offsets,
-# with no per-dock ID filtering in the plugin itself -- whatever PoseStamped
-# arrives there is trusted as the dock in view). Wiring that up for real
-# would need a new small node bridging apriltag_ros's `/detections`
-# (AprilTagDetectionArray, camera-optical-frame poses, Task 4) into that one
-# PoseStamped topic, which also means adding Python-node scaffolding to this
-# package (currently ament_cmake, config/launch only) and empirically
-# calibrating the external_detection_translation/rotation offsets against
-# the dock model's actual tag-mount geometry. The task brief explicitly
-# allows the fixed-pose fallback "if the AprilTag integration proves
-# complex", and the risk/time profile here (new node, new frame-transform
-# chain, calibration against an unknown tag-mount offset, on top of the
-# lifecycle-watchdog work this task already needs) outweighs the benefit
-# for this iteration: arena localization (Task 3) already gives a drift-
-# corrected `map` frame, and the docking_server transforms each dock's pose
-# from its own `frame` (map) into `fixed_frame` (odom) via tf2 every control
-# cycle regardless, so the fixed-pose approach still benefits from
-# localization corrections up to the point docking starts. Revisit this if
-# fixed-pose docking proves insufficiently precise in practice.
+# `use_external_detection_pose: false`. The docking_server itself docks against
+# a FIXED pose; the AprilTag work happens before it is called.
+#
+# `/dock_robot` is answered by perception/tag_dock_server.py, not by this
+# server: docking.launch.py remaps this server's own docking action to
+# `/docking_server/dock_robot`. tag_dock_server drives towards the requested
+# dock's stored pre-dock pose, measures that dock's tag as soon as it is in
+# view, recomputes the dock pose and a pre-dock pose 0.6 m straight out from
+# it, aligns square onto that (turn-drive-turn), measures again standing
+# still, checks a tight tolerance, and only then calls this server with that
+# MEASURED pose (use_dock_id: false, navigate_to_staging_pose: false). The
+# stored poses below are therefore the starting estimate and the fallback for
+# a tag that is never seen; nothing is ever written back to them.
+# `perception/tag_docking.py` documents the process and its tolerances, and
+# the `tag_dock_server:` block at the end of this file holds its parameters.
 #
 # dock_backwards: false (robot drives NOSE-FORWARD the whole approach,
 # constant heading) -- chosen after a real false-start in this task's
@@ -88,13 +80,17 @@ docking_server:
         base_frame: "base_footprint"   # NOT base_link -- see repo-wide lesson
         fixed_frame: "odom"
         dock_backwards: false          # nose-forward, constant heading throughout (see header comment)
-        dock_prestaging_tolerance: 0.5
+        # Only reached through tag_dock_server, which always aligns first and
+        # sends navigate_to_staging_pose: false. Kept small anyway: at 0.5 a
+        # direct call from a neighbouring dock's pre-dock pose (0.3 m away)
+        # skipped staging and drove in diagonally.
+        dock_prestaging_tolerance: 0.05
 
         dock_plugins: ["arena_dock"]
         arena_dock:
             plugin: "opennav_docking::SimpleChargingDock"
             use_battery_status: false       # sim has no battery topic
-            use_external_detection_pose: false   # fixed-pose fallback -- see header comment
+            use_external_detection_pose: false   # pose is measured by tag_dock_server beforehand -- see header comment
             docking_threshold: 0.05
             # staging = dock_pose + staging_x_offset * (cos th, sin th);
             # staging.theta = dock_pose.theta + staging_yaw_offset. Negative
@@ -345,3 +341,48 @@ docking_server:
             v_linear_max: 0.15
             v_angular_max: 0.75
             slowdown_radius: 0.25
+
+# tag_dock_server (answers /dock_robot). See perception/tag_docking.py
+# for the process these tune.
+tag_dock_server:
+    ros__parameters:
+        # Pre-dock pose: this far straight back from the dock pose. Matches
+        # arena_dock.staging_x_offset above.
+        predock_standoff_m: 0.6
+        # Measuring a tag: only within this range (a 0.10 m tag is ~45 px wide
+        # at 2 m), from detections and TF younger than max_detection_age_sec,
+        # trusted once samples_required consecutive measurements within
+        # sample_window_sec agree to sample_spread_m / sample_spread_rad.
+        max_tag_range_m: 2.0
+        max_detection_age_sec: 0.5
+        samples_required: 3
+        sample_spread_m: 0.04
+        sample_spread_rad: 0.06
+        sample_window_sec: 2.0
+        # At the pre-dock pose, how long to wait for a fresh measurement before
+        # using the one from the drive in (or the stored pose).
+        perception_timeout_sec: 3.0
+        # While driving, re-aim Nav2 only when the measured pre-dock pose moved
+        # more than this, so detection jitter does not keep preempting it.
+        replan_distance_m: 0.05
+        replan_angle_rad: 0.05
+        # Nav2 only gets the robot NEAR the pre-dock pose: its own goal
+        # tolerance (0.15 m / 0.2 rad) is too loose for docks 0.3 m apart.
+        # Within align_range_m of the pre-dock pose (always the case when
+        # moving between neighbouring docks B/C/D) the robot instead turns to
+        # face it, drives straight to it (or backs up) at align_speed_mps and
+        # turns square to the dock, using Nav2's spin / drive_on_heading /
+        # backup behaviours.
+        align_range_m: 1.0
+        align_speed_mps: 0.08
+        # Wiggle room at the pre-dock pose, in the approach line's own axes.
+        # Lateral and heading matter most for a straight drive in (3 cm and
+        # ~3 deg); along-track error only shortens or lengthens the approach.
+        predock_lateral_tolerance_m: 0.03
+        predock_along_tolerance_m: 0.08
+        predock_heading_tolerance_rad: 0.05
+        # Measure-and-align rounds to get within that tolerance. After the
+        # last, still dock if within give_up_tolerance_factor x the tolerance
+        # (the docking controller corrects the rest on the way in), else fail.
+        max_predock_attempts: 4
+        give_up_tolerance_factor: 2.0

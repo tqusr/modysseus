@@ -88,7 +88,8 @@ def test_every_node_is_on_wall_clock():
         # the oak filter in source:=depth mode: its stages are components
         # inside this container (perception's own tests cover them)
         'oak_cloud_container', 'planner_server',
-        'rectify_node', 'scan_filter', 'slam_toolbox', 'velocity_smoother',
+        'rectify_node', 'scan_filter', 'slam_toolbox', 'tag_dock_server',
+        'velocity_smoother',
         'wheel_odometry_node']
     for node in nodes:
         # oak filter / apriltag / etc. all set it; a node without it would

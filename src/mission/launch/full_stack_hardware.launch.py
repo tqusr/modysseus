@@ -124,7 +124,7 @@ def generate_launch_description():
         'saga_token': LaunchConfiguration('saga_token')}, 'mission')
 
     switches = {
-        'apriltag': 'AprilTag detection (rectified), a verification aid',
+        'apriltag': 'AprilTag detection (rectified), used by /dock_robot to measure each dock',
         'nav': 'Nav2 and the point cloud filter it reads',
         'docking': 'the opennav_docking DockRobot server',
         'mission': 'mission_node',
@@ -149,6 +149,9 @@ def generate_launch_description():
         _warn_when('docking:=true with nav:=false: docking needs nav, its '
                    'collision checks use the Nav2 local costmap',
                    on='docking', off='nav'),
+        _warn_when('docking:=true with apriltag:=false: /dock_robot cannot see '
+                   'tags, every dock uses its stored pose',
+                   on='docking', off='apriltag'),
         _warn_when('mission:=true with nav:=false: the mission sends Nav2 '
                    'goals and has nothing to talk to', on='mission', off='nav'),
         odometry,

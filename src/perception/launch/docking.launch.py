@@ -73,7 +73,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess, LogInfo,
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import LifecycleNode
+from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from launch.actions import EmitEvent
@@ -101,6 +101,22 @@ def _launch_nodes(context):
         namespace='',
         output='screen',
         parameters=[config, {'use_sim_time': use_sim_time}],
+        # tag_dock_server answers /dock_robot (measure the tag, align, then
+        # call this server); this server's own docking action moves aside.
+        # /undock_robot is unchanged.
+        remappings=[('dock_robot', 'docking_server/dock_robot')],
+    )
+
+    # /dock_robot: measures the requested dock's AprilTag on the way in, aligns
+    # square to it and calls docking_server (/docking_server/dock_robot) with
+    # the measured pose. Reads its own
+    # `tag_dock_server:` block and the dock list from the same docking.yaml.
+    tag_dock_server = Node(
+        package='perception',
+        executable='tag_dock_server',
+        name='tag_dock_server',
+        output='screen',
+        parameters=[config, {'use_sim_time': use_sim_time, 'docking_config': config}],
     )
 
     def change_state(transition_id):
@@ -137,6 +153,7 @@ def _launch_nodes(context):
 
     return [
         docking_node,
+        tag_dock_server,
         activate_on_configured,
         TimerAction(period=3.0, actions=[change_state(Transition.TRANSITION_CONFIGURE)]),
         TimerAction(period=4.0, actions=[watchdog]),

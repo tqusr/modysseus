@@ -21,6 +21,11 @@
   <depend>rclpy</depend>
   <depend>tf2_ros</depend>
   <depend>apriltag_msgs</depend>
+  <!-- tag_dock_server's, on top of the above. -->
+  <depend>nav2_msgs</depend>
+  <depend>action_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <exec_depend>localization</exec_depend>
   <!-- apriltag.launch.py starts image_proc's rectify_node on the real robot
