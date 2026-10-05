@@ -58,27 +58,19 @@ slam_toolbox:
     mode: localization
     use_sim_time: true
 
-    # map_start_pose is deliberately NOT set here, unlike the shipped
-    # example's commented-out suggestion. It looked tempting to hardcode
-    # [0.0, 0.0, 0.0] on the assumption that "both mapping and localization
-    # start at the sim's true world origin" (true of Task 2's mapping run),
-    # but that only constrains POSITION, not HEADING - verified the hard way
-    # while testing this launch file: after some earlier driving, the robot
-    # was sitting at the right position but facing ~90 deg away from the
-    # pose graph's zero-heading convention, the scan matcher's angular search
-    # window (coarse_search_angle_offset: 0.349 rad =~ 20 deg) could not
-    # bridge that, and it converged on a wrong, nonsensical map->odom
-    # transform instead of either failing loudly or correcting itself.
-    # A hardcoded seed is only ever right by coincidence of wherever the
-    # robot happened to be at launch time, and is actively dangerous here
-    # since a wrong seed outside the matcher's capture range fails SILENTLY
-    # (TF still resolves, numbers just lie) rather than erroring out.
-    # The correct, general mechanism - and what this was fixed to use for
-    # verification - is slam_toolbox's `/initialpose`
-    # (geometry_msgs/PoseWithCovarianceStamped) subscription: publish the
-    # robot's actual current pose there (e.g. the same tool RViz's "2D Pose
-    # Estimate" uses) once after activation, any time the robot's starting
-    # pose does not already coincide with the pose graph's own origin.
+    # map_start_pose is NOT set here: launch/localize.launch.py injects it
+    # from its `map_start_pose` launch argument (default [0.0, 0.0, 0.0]).
+    # It cannot simply be left out: without map_start_pose or
+    # map_start_at_dock, localization mode logs "Map starting pose not
+    # specified", skips loading the pose graph and still activates with an
+    # EMPTY map (seen on the robot, 2026-10-03).
+    # It is only a seed and constrains heading as much as position: the scan
+    # matcher's angular search (coarse_search_angle_offset: 0.349 rad =~ 20
+    # deg) cannot bridge a larger heading error, and a seed outside its
+    # capture range fails SILENTLY (it converges on a wrong map->odom, TF
+    # still resolves). So whenever the robot does not start at the seed,
+    # pass its real pose as the launch argument or publish it once on
+    # `/initialpose` (RViz "2D Pose Estimate") after activation.
 
     debug_logging: false
     throttle_scans: 1

@@ -27,6 +27,9 @@ odometry starts at once because there is no simulator to wait for):
 ARGUMENTS
     map         pose graph basename in localization/maps (default arena_real);
                 slam_toolbox reads <map>.posegraph + <map>.data
+    map_start_pose
+                "x, y, yaw" in the map frame (m, rad), default "0.0, 0.0, 0.0":
+                where slam_toolbox seeds the robot on the loaded pose graph
     saga_url    default http://localhost:8000
     saga_token  default empty; pass it for the mission layer
     apriltag, nav, docking, mission
@@ -53,8 +56,9 @@ THE ROBOT TERMINAL WORKFLOW
             (if not, Nav2 needs a hardware copy of its parameter file).
          c. drop `docking:=false`
          d. drop `mission:=false` and add `saga_token:=<token>`
-  4. Set the initial pose, once slam_toolbox is active. It starts at the pose
-     graph's origin and its scan matcher only captures about +-20 degrees. In
+  4. Set the initial pose, once slam_toolbox is active. It starts at
+     `map_start_pose` (default the pose graph's origin) and its scan matcher
+     only captures about +-20 degrees. In
      RViz set Fixed Frame to `map`, click "2D Pose Estimate" where the robot
      really is and drag the way it faces; check the scan lies on the map walls
      and re-click if not. Without RViz:
@@ -109,7 +113,8 @@ def generate_launch_description():
         switch='apriltag')
     oak_filter = _include('perception', 'oak_points_filter.launch.py', HARDWARE, 'nav')
     localize = _include('localization', 'localize.launch.py',
-                        {**HARDWARE, 'map': LaunchConfiguration('map')})
+                        {**HARDWARE, 'map': LaunchConfiguration('map'),
+                         'map_start_pose': LaunchConfiguration('map_start_pose')})
     docking = _include('perception', 'docking.launch.py', HARDWARE, 'docking')
     navigation = _include('navigation', 'navigation.launch.py', HARDWARE, 'nav')
     mission = _include('mission', 'mission.launch.py', {
@@ -127,6 +132,9 @@ def generate_launch_description():
             'map', default_value='arena_real',
             description='Pose graph basename in localization/maps '
                         '(<map>.posegraph + <map>.data)'),
+        DeclareLaunchArgument(
+            'map_start_pose', default_value='0.0, 0.0, 0.0',
+            description='Seed pose "x, y, yaw" in the map frame (m, rad)'),
         DeclareLaunchArgument(
             'saga_url', default_value='http://localhost:8000',
             description='Saga server URL for the mission layer'),

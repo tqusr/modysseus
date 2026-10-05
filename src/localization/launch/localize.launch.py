@@ -58,6 +58,15 @@ threading model during Task 2's investigation.
 The `use_sim_time` (default true) and `map` (default `arena`) launch arguments
 exist for the real robot: hardware runs on wall-clock time and its own saved
 pose graph (e.g. `map:=arena_real`).
+
+START POSE. `map_start_pose` ("x, y, yaw" in the map frame, metres and
+radians; default "0.0, 0.0, 0.0", the pose graph's origin) is REQUIRED by
+slam_toolbox to load the graph at all: with neither `map_start_pose` nor
+`map_start_at_dock` set, localization mode logs "Map starting pose not
+specified", skips the load and still activates with an EMPTY graph. It is only
+the seed: the scan matcher captures about +-20 degrees of heading, so when the
+robot does not start at the given pose either pass its real pose here or
+correct it once active with `/initialpose` (RViz "2D Pose Estimate").
 """
 
 import os
@@ -102,6 +111,19 @@ def _require_pose_graph(map_file_name):
             'src/localization/maps/<map> and colcon build localization.')
 
 
+def _parse_start_pose(text):
+    """"x, y, yaw" (brackets and spaces optional) -> [x, y, yaw] as floats."""
+    parts = text.strip().strip('[]').replace(',', ' ').split()
+    try:
+        pose = [float(part) for part in parts]
+    except ValueError:
+        pose = []
+    if len(pose) != 3:
+        raise RuntimeError(
+            f'map_start_pose must be "x, y, yaw" (three numbers), got {text!r}')
+    return pose
+
+
 def _launch_nodes(context):
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     share = get_package_share_directory('localization')
@@ -109,6 +131,8 @@ def _launch_nodes(context):
     map_file_name = os.path.join(
         share, 'maps', LaunchConfiguration('map').perform(context))
     _require_pose_graph(map_file_name)
+    map_start_pose = _parse_start_pose(
+        LaunchConfiguration('map_start_pose').perform(context))
 
     # Removes the robot's own antennas from /scan; slam_toolbox reads the
     # result. See config/scan_filter.yaml.
@@ -132,6 +156,7 @@ def _launch_nodes(context):
             'use_lifecycle_manager': False,
             'use_sim_time': use_sim_time,
             'map_file_name': map_file_name,
+            'map_start_pose': map_start_pose,
         }],
     )
 
@@ -185,5 +210,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'map', default_value='arena',
             description='Pose graph basename in localization/maps'),
+        DeclareLaunchArgument(
+            'map_start_pose', default_value='0.0, 0.0, 0.0',
+            description='Seed pose "x, y, yaw" in the map frame (m, rad); '
+                        'slam_toolbox does not load the pose graph without it'),
         OpaqueFunction(function=_launch_nodes),
     ])

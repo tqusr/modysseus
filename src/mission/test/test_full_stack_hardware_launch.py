@@ -111,6 +111,11 @@ def test_map_and_saga_token_are_forwarded():
     assert nodes['mission_node']['inline_parameters']['saga_token'] == '12345'
 
 
+def test_map_start_pose_is_forwarded():
+    nodes = {n['name']: n for n in _nodes(map_start_pose='1.0, 2.0, 0.5')}
+    assert nodes['slam_toolbox']['inline_parameters']['map_start_pose'] == (1.0, 2.0, 0.5)
+
+
 def test_default_map_is_arena_real():
     nodes = {n['name']: n for n in _nodes()}
     assert nodes['slam_toolbox']['inline_parameters']['map_file_name'].endswith(
