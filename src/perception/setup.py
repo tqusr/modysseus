@@ -27,7 +27,8 @@ setup(
     entry_points={
         'console_scripts': [
             'capture_dock_pose = perception.capture_dock_pose:main',
-            'tag_dock_server = perception.tag_dock_server:main',
+            'image_gate = perception.image_gate:main',
+            'tag_dock_server =perception.tag_dock_server:main',
         ],
     },
 )

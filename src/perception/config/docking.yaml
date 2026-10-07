@@ -39,11 +39,13 @@
 # `/dock_robot` is answered by perception/tag_dock_server.py, not by this
 # server: docking.launch.py remaps this server's own docking action to
 # `/docking_server/dock_robot`. tag_dock_server drives towards the requested
-# dock's stored pre-dock pose, measures that dock's tag as soon as it is in
-# view, recomputes the dock pose and a pre-dock pose 0.6 m straight out from
+# dock's stored pre-dock pose, and only there measures that dock's tag,
+# recomputes the dock pose and a pre-dock pose 0.6 m straight out from
 # it, aligns square onto that (turn-drive-turn), measures again standing
 # still, checks a tight tolerance, and only then calls this server with that
 # MEASURED pose (use_dock_id: false, navigate_to_staging_pose: false). The
+# AprilTag detector is switched on (perception's image_gate) only for those
+# standing measurements; it is idle while driving. The
 # stored poses below are therefore the starting estimate and the fallback for
 # a tag that is never seen; nothing is ever written back to them.
 # `perception/tag_docking.py` documents the process and its tolerances, and
@@ -329,7 +331,10 @@ docking_server:
             use_collision_detection: true
             costmap_topic: "local_costmap/costmap_raw"
             footprint_topic: "local_costmap/published_footprint"
-            transform_tolerance: 0.1
+            # How long a TF lookup may wait for odom->base_footprint. The EKF's
+            # TF runs ~20 Hz and measured up to 0.29 s late on the Jetson; at
+            # 0.1 one late transform aborted an undock ("Failed to get control").
+            transform_tolerance: 0.5
             projection_time: 5.0
             simulation_step: 0.1
             dock_collision_threshold: 0.65
@@ -362,10 +367,6 @@ tag_dock_server:
         # At the pre-dock pose, how long to wait for a fresh measurement before
         # using the one from the drive in (or the stored pose).
         perception_timeout_sec: 3.0
-        # While driving, re-aim Nav2 only when the measured pre-dock pose moved
-        # more than this, so detection jitter does not keep preempting it.
-        replan_distance_m: 0.05
-        replan_angle_rad: 0.05
         # Nav2 only gets the robot NEAR the pre-dock pose: its own goal
         # tolerance (0.15 m / 0.2 rad) is too loose for docks 0.3 m apart.
         # Within align_range_m of the pre-dock pose (always the case when

@@ -84,7 +84,7 @@ def test_every_node_is_on_wall_clock():
     assert sorted(n['name'] for n in nodes) == [
         'apriltag_node', 'behavior_server', 'bt_navigator', 'collision_monitor',
         'controller_server', 'docking_server', 'ekf_filter_node',
-        'gyro_bias_node', 'lifecycle_manager_navigation', 'mission_node',
+        'gyro_bias_node', 'image_gate', 'lifecycle_manager_navigation', 'mission_node',
         # the oak filter in source:=depth mode: its stages are components
         # inside this container (perception's own tests cover them)
         'oak_cloud_container', 'planner_server',

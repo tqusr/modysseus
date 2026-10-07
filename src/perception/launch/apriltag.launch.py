@@ -33,6 +33,13 @@ includes this file with none and gets exactly the graph it always had.
   image_topic         /oak/rgb/image_raw
   rectify             false  also start image_proc's rectify_node and detect
                              on its output
+  gated               false  put perception's image_gate in front of the
+                             detector: it then processes frames only while
+                             `/image_gate/enable` is true (tag_dock_server
+                             opens it for each measurement). Idle otherwise
+                             -- ungated, the detector took ~60% of a CPU core
+                             all the time. Leave false where detections are
+                             wanted continuously (mapping_mission's capture).
 
 There is deliberately no camera_info argument. Both nodes subscribe through
 image_transport::CameraSubscriber, which always reads the sibling topic
@@ -88,6 +95,7 @@ def _launch_nodes(context):
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
     image_topic = LaunchConfiguration('image_topic').perform(context)
     rectify = _as_bool(LaunchConfiguration('rectify').perform(context))
+    gated = _as_bool(LaunchConfiguration('gated').perform(context))
     config = get_package_share_directory('perception') + '/config/apriltag.yaml'
 
     nodes = []
@@ -104,6 +112,18 @@ def _launch_nodes(context):
                 ('image', image_topic),
                 ('image_rect', detector_image),
             ],
+        ))
+    if gated:
+        source = detector_image
+        detector_image = posixpath.join(posixpath.dirname(image_topic), 'image_gated')
+        nodes.append(Node(
+            package='perception',
+            executable='image_gate',
+            name='image_gate',
+            output='screen',
+            parameters=[{'use_sim_time': use_sim_time,
+                         'source_topic': source,
+                         'output_topic': detector_image}],
         ))
     nodes.append(Node(
         package='apriltag_ros',
@@ -123,5 +143,6 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('image_topic', default_value='/oak/rgb/image_raw'),
         DeclareLaunchArgument('rectify', default_value='false'),
+        DeclareLaunchArgument('gated', default_value='false'),
         OpaqueFunction(function=_launch_nodes),
     ])

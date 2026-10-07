@@ -93,7 +93,7 @@ def generate_launch_description():
         {'world': world, 'headless': headless, 'rviz': use_rviz})
 
     ekf = _include('localization', 'localization.launch.py')
-    apriltag = _include('perception', 'apriltag.launch.py')
+    apriltag = _include('perception', 'apriltag.launch.py', {'gated': 'true'})
     oak_points_filter = _include('perception', 'oak_points_filter.launch.py')
     localize = _include('localization', 'localize.launch.py')
     docking = _include('perception', 'docking.launch.py')

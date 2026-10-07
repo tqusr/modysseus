@@ -109,7 +109,7 @@ def test_camera_info_is_not_remapped_or_a_launch_argument():
     description = load_launch_module(LAUNCH_PATH).generate_launch_description()
     declared = {e.name for e in description.entities
                 if isinstance(e, DeclareLaunchArgument)}
-    assert declared == {'use_sim_time', 'image_topic', 'rectify'}
+    assert declared == {'use_sim_time', 'image_topic', 'rectify', 'gated'}
 
 
 @pytest.mark.parametrize('arguments', [{}, {'rectify': 'true'}])
@@ -129,3 +129,25 @@ def test_params_file_no_longer_hardcodes_use_sim_time():
     assert 'use_sim_time' not in params
     assert params['family'] == '36h11'
     assert params['size'] == 0.100
+
+
+def test_gated_detector_reads_the_gate_output_not_the_camera():
+    nodes = _nodes(use_sim_time='false', rectify='true', gated='true')
+
+    assert sorted(nodes) == ['apriltag_node', 'image_gate', 'rectify_node']
+    assert nodes['image_gate']['package'] == 'perception'
+    assert nodes['image_gate']['inline_parameters'] == {
+        'use_sim_time': False,
+        'source_topic': '/oak/rgb/image_rect',
+        'output_topic': '/oak/rgb/image_gated',
+    }
+    assert nodes['apriltag_node']['remappings'] == {
+        'image_rect': '/oak/rgb/image_gated'}
+
+
+def test_gated_without_rectify_gates_the_raw_image():
+    nodes = _nodes(gated='true')
+
+    assert nodes['image_gate']['inline_parameters']['source_topic'] == '/oak/rgb/image_raw'
+    assert nodes['apriltag_node']['remappings'] == {
+        'image_rect': '/oak/rgb/image_gated'}

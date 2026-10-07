@@ -33,12 +33,14 @@ from apriltag_msgs.msg import AprilTagDetectionArray
 from geometry_msgs.msg import PoseStamped
 from builtin_interfaces.msg import Duration
 from nav2_msgs.action import (BackUp, DockRobot, DriveOnHeading,
-                              NavigateToPose, Spin)
+                              NavigateToPose, Spin, UndockRobot)
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.time import Time
+
+from std_srvs.srv import SetBool
 
 from perception.dock_capture import (STAGING_STANDOFF_M, DockCaptureError,
                                      Pose2D, capture_from_tag_transform,
@@ -46,7 +48,7 @@ from perception.dock_capture import (STAGING_STANDOFF_M, DockCaptureError,
 from perception.tag_docking import (FORWARD, SPIN,
                                     MeasurementWindow, Tolerance, compose,
                                     correction, load_dock_database,
-                                    needs_replan, plan_alignment,
+                                    plan_alignment,
                                     predock_error, predock_pose_for,
                                     yaw_from_quaternion)
 
@@ -110,6 +112,8 @@ class TagDockServer(Node):
         declare('action_name', 'dock_robot')
         declare('navigate_action', 'navigate_to_pose')
         declare('docking_action', 'docking_server/dock_robot')
+        declare('undock_action_name', 'undock_robot')
+        declare('undocking_action', 'docking_server/undock_robot')
         declare('spin_action', 'spin')
         declare('drive_action', 'drive_on_heading')
         declare('backup_action', 'backup')
@@ -122,8 +126,7 @@ class TagDockServer(Node):
         declare('sample_spread_rad', 0.06)
         declare('sample_window_sec', 2.0)
         declare('perception_timeout_sec', 3.0)
-        declare('replan_distance_m', 0.05)
-        declare('replan_angle_rad', 0.05)
+        declare('gate_service', '/image_gate/enable')
         declare('align_range_m', 1.0)
         declare('align_speed_mps', 0.08)
         declare('predock_lateral_tolerance_m', 0.03)
@@ -144,8 +147,6 @@ class TagDockServer(Node):
         self._max_range = float(p('max_tag_range_m'))
         self._max_age = float(p('max_detection_age_sec'))
         self._perception_timeout = float(p('perception_timeout_sec'))
-        self._replan_m = float(p('replan_distance_m'))
-        self._replan_rad = float(p('replan_angle_rad'))
         self._tolerance = Tolerance(float(p('predock_lateral_tolerance_m')),
                                     float(p('predock_along_tolerance_m')),
                                     float(p('predock_heading_tolerance_rad')))
@@ -166,10 +167,14 @@ class TagDockServer(Node):
         self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
         self.create_subscription(AprilTagDetectionArray, p('detections_topic'),
                                  self._on_detections, 10, callback_group=group)
+        self._gate_client = self.create_client(SetBool, p('gate_service'),
+                                               callback_group=group)
         self._nav_client = ActionClient(self, NavigateToPose, p('navigate_action'),
                                         callback_group=group)
         self._dock_client = ActionClient(self, DockRobot, p('docking_action'),
                                          callback_group=group)
+        self._undock_client = ActionClient(self, UndockRobot, p('undocking_action'),
+                                           callback_group=group)
         self._spin_client = ActionClient(self, Spin, p('spin_action'),
                                          callback_group=group)
         self._drive_client = ActionClient(self, DriveOnHeading, p('drive_action'),
@@ -180,6 +185,13 @@ class TagDockServer(Node):
         self._server = ActionServer(
             self, DockRobot, self._action_name, self._execute,
             goal_callback=self._on_goal, cancel_callback=lambda _: CancelResponse.ACCEPT,
+            callback_group=group)
+
+        self._undock_server = ActionServer(
+            self, UndockRobot, p('undock_action_name'), self._execute_undock,
+            goal_callback=lambda _: (GoalResponse.REJECT if self._busy
+                                     else GoalResponse.ACCEPT),
+            cancel_callback=lambda _: CancelResponse.ACCEPT,
             callback_group=group)
 
         self.get_logger().info(
@@ -318,8 +330,8 @@ class TagDockServer(Node):
                      f'{math.degrees(dth):+.1f} deg')
             estimate, measured = new_estimate, True
 
-        # Step 1-2: drive near the pre-dock pose, re-aiming at the tag on the
-        # way. Skipped when already close: then the robot is typically at a
+        # Step 1: drive near the STORED pre-dock pose; the detector is off.
+        # Skipped when already close: then the robot is typically at a
         # neighbouring dock, and turn-drive-turn below is the exact way over.
         predock = predock_pose_for(estimate, self._standoff)
         robot = self._robot_in_map()
@@ -331,10 +343,10 @@ class TagDockServer(Node):
                             f'navigating there although navigate_to_staging_pose '
                             f'is false')
             deadline = time.monotonic() + float(request.max_staging_time)
-            self._navigate(goal_handle, estimate, deadline, on_tag=adopt)
-            estimate = self._last_nav_estimate
+            self._navigate(goal_handle, estimate, deadline)
 
-        # Step 3: measure standing still; align until within tolerance.
+        # Steps 2-3: measure standing still (detector on only for that); align
+        # to the MEASURED pre-dock pose until within tolerance.
         for attempt in range(1, self._max_attempts + 1):
             goal_handle.publish_feedback(Feedback(state=Feedback.INITIAL_PERCEPTION))
             final = self._measure_still(goal_handle)
@@ -388,11 +400,10 @@ class TagDockServer(Node):
             raise _Abort(Result.FAILED_TO_STAGE, 'navigation goal rejected')
         return handle, handle.get_result_async()
 
-    def _navigate(self, goal_handle, estimate: Pose2D, deadline: float, on_tag):
-        """Drive to estimate's pre-dock pose; with `on_tag`, re-aim at the tag."""
-        self._last_nav_estimate = estimate
-        target = predock_pose_for(estimate, self._standoff)
-        handle, result_future = self._send_nav(goal_handle, target)
+    def _navigate(self, goal_handle, estimate: Pose2D, deadline: float):
+        """Drive to estimate's pre-dock pose."""
+        handle, result_future = self._send_nav(
+            goal_handle, predock_pose_for(estimate, self._standoff))
         last_feedback = 0.0
         while True:
             if goal_handle.is_cancel_requested:
@@ -407,36 +418,53 @@ class TagDockServer(Node):
                     raise _Abort(Result.FAILED_TO_STAGE,
                                  f'navigation to pre-dock ended with status {status}')
                 return
-            if on_tag is not None:
-                measured = self._stable_measurement_in_map()
-                if measured is not None:
-                    new_target = predock_pose_for(measured, self._standoff)
-                    if needs_replan(target, new_target, self._replan_m, self._replan_rad):
-                        on_tag(measured, 'while driving')
-                        self._last_nav_estimate = measured
-                        target = new_target
-                        self.get_logger().info(
-                            f'redirecting to measured pre-dock {_fmt(target)}')
-                        handle, result_future = self._send_nav(goal_handle, target)
             if time.monotonic() - last_feedback > 1.0:
                 goal_handle.publish_feedback(
                     Feedback(state=Feedback.NAV_TO_STAGING_POSE))
                 last_feedback = time.monotonic()
             time.sleep(POLL_SEC)
 
+    def _set_detector(self, goal_handle, on: bool) -> bool:
+        """Open or close the AprilTag image gate; False if there is none.
+
+        Without a gate (apriltag ungated, or not running) detections, if any,
+        flow all the time, so measuring still works as before.
+        """
+        if not self._gate_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warning(
+                f'{self._gate_client.srv_name} not available: detector gating '
+                f'off', throttle_duration_sec=30.0)
+            return False
+        request = SetBool.Request(data=on)
+        self._wait(goal_handle, self._gate_client.call_async(request))
+        return True
+
     def _measure_still(self, goal_handle):
-        """A fresh agreed-upon tag measurement at the pre-dock pose, or None."""
+        """A fresh agreed-upon tag measurement at the pre-dock pose, or None.
+
+        The detector is switched on for just this wait.
+        """
         with self._lock:
             self._window.clear()
-        deadline = time.monotonic() + self._perception_timeout
-        while time.monotonic() < deadline:
-            if goal_handle.is_cancel_requested:
-                raise _Canceled()
-            measured = self._stable_measurement_in_map()
-            if measured is not None:
-                return measured
-            time.sleep(POLL_SEC)
-        return None
+        gated = self._set_detector(goal_handle, True)
+        try:
+            deadline = time.monotonic() + self._perception_timeout
+            while time.monotonic() < deadline:
+                if goal_handle.is_cancel_requested:
+                    raise _Canceled()
+                measured = self._stable_measurement_in_map()
+                if measured is not None:
+                    return measured
+                time.sleep(POLL_SEC)
+            return None
+        finally:
+            if gated:
+                self._close_detector()
+
+    def _close_detector(self):
+        """Best-effort close that also works while the goal is being canceled."""
+        if self._gate_client.service_is_ready():
+            self._gate_client.call_async(SetBool.Request(data=False))
 
     # ---------------------------------------------------------- alignment
 
@@ -486,6 +514,38 @@ class TagDockServer(Node):
             raise _Abort(Result.UNKNOWN, 'docking goal rejected by docking_server')
         response = self._wait(goal_handle, handle.get_result_async(), handle)
         return response.result
+
+    # ------------------------------------------------------------ undocking
+
+    def _execute_undock(self, goal_handle):
+        """/undock_robot: docking_server backs the robot out to its staging pose."""
+        self._busy = True
+        result = UndockRobot.Result()
+        try:
+            if not self._undock_client.wait_for_server(timeout_sec=5.0):
+                raise _Abort(Result.UNKNOWN, 'docking_server undock not available')
+            handle = self._wait(goal_handle, self._undock_client.send_goal_async(
+                goal_handle.request))
+            if not handle.accepted:
+                raise _Abort(Result.UNKNOWN, 'undock goal rejected by docking_server')
+            response = self._wait(goal_handle, handle.get_result_async(), handle)
+            result = response.result
+            if response.status == GoalStatus.STATUS_SUCCEEDED and result.success:
+                goal_handle.succeed()
+            else:
+                self.get_logger().error(
+                    f'undock failed: code {result.error_code} {result.error_msg}')
+                goal_handle.abort()
+        except _Canceled:
+            goal_handle.canceled()
+        except _Abort as error:
+            self.get_logger().error(f'undock aborted: {error}')
+            goal_handle.abort()
+            result = UndockRobot.Result(success=False, error_code=error.code,
+                                        error_msg=str(error))
+        finally:
+            self._busy = False
+        return result
 
     # ------------------------------------------------------------- docking
 

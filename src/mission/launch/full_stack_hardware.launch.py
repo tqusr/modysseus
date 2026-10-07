@@ -110,7 +110,8 @@ def _warn_when(message, *, on, off):
 def generate_launch_description():
     odometry = _include('localization', 'hardware_odometry.launch.py')
     apriltag = _include('perception', 'apriltag.launch.py', {
-        **HARDWARE, 'image_topic': '/oak/rgb/image_raw', 'rectify': 'true'},
+        **HARDWARE, 'image_topic': '/oak/rgb/image_raw', 'rectify': 'true',
+        'gated': 'true'},
         switch='apriltag')
     oak_filter = _include('perception', 'oak_points_filter.launch.py',
                           {**HARDWARE, 'source': 'depth'}, 'nav')
