@@ -1,0 +1,8 @@
+- Improve camera refresh rate/detection
+- predock/undock more in the middle of box
+- fallback when predock is occupied -- nav directly to dock
+- Ask einride about case when apriltag is removed/destroyed
+- Control safety when driving/distance to obstacle
+- Dynamically detect when a static obstacle have moved
+- Clean up code
+- Presentation
