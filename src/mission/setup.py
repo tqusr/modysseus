@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'mission_node = mission.mission_node:main',
             'stub_action_servers = mission.stub_action_servers:main',
+            'dock_markers = mission.dock_markers:main',
         ],
     },
 )

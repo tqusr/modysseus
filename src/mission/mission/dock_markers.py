@@ -56,3 +56,31 @@ def build_dock_markers(docks: dict, frame_id: str = "map") -> MarkerArray:
         label.text = f"{letter} (tag {dock.tag_id})"
         array.markers.append(label)
     return array
+
+
+def main():
+    """Publish the dock markers without the mission, e.g. with mission:=false."""
+    import rclpy
+    from ament_index_python.packages import get_package_share_directory
+    from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile
+
+    from mission.docks import load_docks
+
+    rclpy.init()
+    node = Node('dock_markers')
+    docks_file = node.declare_parameter(
+        'docks_file',
+        get_package_share_directory('mission') + '/config/docks.yaml').value
+    publisher = node.create_publisher(
+        MarkerArray, '~/markers',
+        QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    publisher.publish(build_dock_markers(load_docks(docks_file)))
+    node.get_logger().info(f'Published dock markers from {docks_file}')
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
