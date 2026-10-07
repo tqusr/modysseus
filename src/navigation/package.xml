@@ -12,7 +12,7 @@
   <depend>nav2_costmap_2d</depend>
   <depend>nav2_controller</depend>
   <depend>nav2_planner</depend>
-  <depend>nav2_navfn_planner</depend>
+  <depend>nav2_smac_planner</depend>
   <depend>nav2_mppi_controller</depend>
   <depend>nav2_rotation_shim_controller</depend>
   <depend>nav2_behaviors</depend>

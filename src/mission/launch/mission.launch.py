@@ -48,6 +48,8 @@ def _launch_nodes(context):
                 # stack, not assumed). The real robot has no /clock, so
                 # hardware passes use_sim_time:=false for every node.
                 'use_sim_time': use_sim_time,
+                'safe_stop_zero_hold': _as_bool(
+                    LaunchConfiguration('safe_stop_zero_hold').perform(context)),
             }],
         ),
     ]
@@ -59,5 +61,9 @@ def generate_launch_description():
         DeclareLaunchArgument('saga_token', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('health_config', default_value=''),
+        DeclareLaunchArgument(
+            'safe_stop_zero_hold', default_value='true',
+            description='false = safe stop does not publish zero velocity '
+                        '(diagnostic only)'),
         OpaqueFunction(function=_launch_nodes),
     ])

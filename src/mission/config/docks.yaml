@@ -18,7 +18,8 @@
 #   staging_pose.y     = dock_pose.y + d * sin(dock_pose.theta)
 #   staging_pose.theta = dock_pose.theta + pi   (normalized to (-pi, pi])
 #
-# where d = 0.6 m (within the spec's 0.5-0.7 m standoff range). This walks
+# where d = 0.75 m: the middle of perception's acceptable pre-dock box (0.5 to
+# 1.0 m from the wall; was 0.6 m). This walks
 # `d` meters from the dock *along its own outward normal* (i.e. away from
 # the wall, further into the room -- never through the wall, since every
 # dock's theta points room-ward by construction), and faces the robot back
@@ -48,11 +49,11 @@
 # perception/config/docking.yaml's header comment for the full story,
 # including a real false-start this task hit by conflating the two).
 docks:
-  A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}
-  B: {tag_id: 1, dock_pose: {x: 3.026, y: 1.493, theta: -3.14151}, staging_pose: {x: 2.426, y: 1.493, theta: 0.00008}}
-  C: {tag_id: 2, dock_pose: {x: 1.515, y: 3.005, theta: -1.55714}, staging_pose: {x: 1.523, y: 2.405, theta: 1.58445}}
-  D: {tag_id: 3, dock_pose: {x: -1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: -1.500, y: 2.392, theta: 1.5708}}
-  E: {tag_id: 4, dock_pose: {x: -2.992, y: 1.500, theta: 0.0}, staging_pose: {x: -2.392, y: 1.500, theta: 3.14159}}
-  F: {tag_id: 5, dock_pose: {x: -2.992, y: -1.500, theta: 0.0}, staging_pose: {x: -2.392, y: -1.500, theta: 3.14159}}
-  G: {tag_id: 6, dock_pose: {x: -1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: -1.500, y: -2.392, theta: -1.5708}}
-  H: {tag_id: 7, dock_pose: {x: 1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: 1.500, y: -2.392, theta: -1.5708}}
+  A: {tag_id: 0, dock_pose: {x: 1.288, y: 0.597, theta: 3.11312}, staging_pose: {x: 0.539, y: 0.619, theta: -0.02847}}
+  B: {tag_id: 1, dock_pose: {x: 1.256, y: -0.155, theta: 3.08286}, staging_pose: {x: 0.507, y: -0.111, theta: -0.05873}}
+  C: {tag_id: 2, dock_pose: {x: 1.458, y: -0.887, theta: 3.02356}, staging_pose: {x: 0.713, y: -0.799, theta: -0.11803}}
+  D: {tag_id: 3, dock_pose: {x: 0.785, y: -1.329, theta: 2.34871}, staging_pose: {x: 0.259, y: -0.795, theta: -0.79288}}
+  E: {tag_id: 4, dock_pose: {x: -0.620, y: -0.050, theta: 0.18001}, staging_pose: {x: 0.118, y: 0.084, theta: -2.96158}}
+  F: {tag_id: 5, dock_pose: {x: -0.644, y: 0.343, theta: -0.07538}, staging_pose: {x: 0.104, y: 0.287, theta: 3.06621}}
+  G: {tag_id: 6, dock_pose: {x: -0.008, y: 1.511, theta: -1.49808}, staging_pose: {x: 0.046, y: 0.763, theta: 1.64351}}
+  H: {tag_id: 7, dock_pose: {x: 0.837, y: 0.939, theta: -2.2178}, staging_pose: {x: 0.385, y: 0.341, theta: 0.92379}}

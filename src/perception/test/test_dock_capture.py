@@ -255,7 +255,7 @@ def test_capture_from_tag_transform_reproduces_dock_a(dock_a_capture):
 
     `docks.yaml` currently records, from arena.sdf's model origins:
         A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159},
-                       staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}
+                       staging_pose: {x: 2.242, y: -1.500, theta: 0.0}}
 
     Dock A is on the arena's +x wall, so its tag faces -x (into the room): an
     upright tag at (2.992, -1.500) whose outward normal is -x. Feed exactly
@@ -268,7 +268,7 @@ def test_capture_from_tag_transform_reproduces_dock_a(dock_a_capture):
     assert capture.dock_pose.x == pytest.approx(2.992)
     assert capture.dock_pose.y == pytest.approx(-1.500)
     assert capture.dock_pose.theta == pytest.approx(3.14159, abs=1e-5)
-    assert capture.staging_pose.x == pytest.approx(2.392)
+    assert capture.staging_pose.x == pytest.approx(2.242)
     assert capture.staging_pose.y == pytest.approx(-1.500)
     assert capture.staging_pose.theta == pytest.approx(0.0, abs=1e-9)
     # And docking.yaml's own derived entry for the same dock.
@@ -304,14 +304,14 @@ ARENA_DOCKS = [
 ]
 
 EXPECTED_DOCKS_LINES = {
-    'A': 'A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}',
-    'B': 'B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: 1.500, theta: 0.0}}',
-    'C': 'C: {tag_id: 2, dock_pose: {x: 1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: 1.500, y: 2.392, theta: 1.5708}}',
-    'D': 'D: {tag_id: 3, dock_pose: {x: -1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: -1.500, y: 2.392, theta: 1.5708}}',
-    'E': 'E: {tag_id: 4, dock_pose: {x: -2.992, y: 1.500, theta: 0.0}, staging_pose: {x: -2.392, y: 1.500, theta: 3.14159}}',
-    'F': 'F: {tag_id: 5, dock_pose: {x: -2.992, y: -1.500, theta: 0.0}, staging_pose: {x: -2.392, y: -1.500, theta: 3.14159}}',
-    'G': 'G: {tag_id: 6, dock_pose: {x: -1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: -1.500, y: -2.392, theta: -1.5708}}',
-    'H': 'H: {tag_id: 7, dock_pose: {x: 1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: 1.500, y: -2.392, theta: -1.5708}}',
+    'A': 'A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.242, y: -1.500, theta: 0.0}}',
+    'B': 'B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.242, y: 1.500, theta: 0.0}}',
+    'C': 'C: {tag_id: 2, dock_pose: {x: 1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: 1.500, y: 2.242, theta: 1.5708}}',
+    'D': 'D: {tag_id: 3, dock_pose: {x: -1.500, y: 2.992, theta: -1.5708}, staging_pose: {x: -1.500, y: 2.242, theta: 1.5708}}',
+    'E': 'E: {tag_id: 4, dock_pose: {x: -2.992, y: 1.500, theta: 0.0}, staging_pose: {x: -2.242, y: 1.500, theta: 3.14159}}',
+    'F': 'F: {tag_id: 5, dock_pose: {x: -2.992, y: -1.500, theta: 0.0}, staging_pose: {x: -2.242, y: -1.500, theta: 3.14159}}',
+    'G': 'G: {tag_id: 6, dock_pose: {x: -1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: -1.500, y: -2.242, theta: -1.5708}}',
+    'H': 'H: {tag_id: 7, dock_pose: {x: 1.500, y: -2.992, theta: 1.5708}, staging_pose: {x: 1.500, y: -2.242, theta: -1.5708}}',
 }
 
 EXPECTED_DOCKING_LINES = {
@@ -375,8 +375,8 @@ FIXTURE_DOCKS_YAML = """\
 #
 # A: this comment mentions dock A and must survive untouched.
 docks:
-  A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: -1.500, theta: 0.0}}
-  B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.392, y: 1.500, theta: 0.0}}
+  A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159}, staging_pose: {x: 2.242, y: -1.500, theta: 0.0}}
+  B: {tag_id: 1, dock_pose: {x: 2.992, y: 1.500, theta: 3.14159}, staging_pose: {x: 2.242, y: 1.500, theta: 0.0}}
 # trailing comment
 """
 
@@ -464,7 +464,7 @@ def test_apply_capture_writes_both_files(yaml_pair):
     apply_capture(capture, str(docks), str(docking))
 
     assert ('  B: {tag_id: 1, dock_pose: {x: 1.234, y: -5.678, theta: 0.0}, '
-            'staging_pose: {x: 1.834, y: -5.678, theta: 3.14159}}'
+            'staging_pose: {x: 1.984, y: -5.678, theta: 3.14159}}'
             in docks.read_text())
     assert ('        B: {type: "arena_dock", frame: "map", '
             'pose: [1.360, -5.678, 3.14159], id: "1"}'

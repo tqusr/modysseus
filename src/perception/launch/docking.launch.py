@@ -7,31 +7,33 @@ real arena dock poses (`config/docking.yaml`, itself hand-transcribed from
 staging-pose formula and why fixed-pose docking was chosen over a vision-
 corrected AprilTag approach for this iteration).
 
-KNOWN, DELIBERATE EXCEPTION TO THE "COLLISION MONITOR IS ALWAYS LAST" RULE.
+EVERY DOCKING MOTION GOES THROUGH THE COLLISION MONITOR.
 
-Everywhere else in this stack, a velocity command reaches the robot only
-through controller -> velocity_smoother -> nav2_collision_monitor ->
-`/cmd_vel` (see navigation/launch/navigation.launch.py, which remaps even
-the recovery behaviours' `cmd_vel` into that chain so nothing bypasses it).
-`docking_server` does NOT: it publishes `/cmd_vel` directly for the whole
-docking and undocking leg, bypassing both the velocity smoother and the
-standalone collision monitor.
+Everywhere in this stack a velocity command reaches the robot only through
+controller/behavior_server -> `cmd_vel_nav` -> velocity_smoother ->
+nav2_collision_monitor -> `/cmd_vel` (navigation/launch/navigation.launch.py),
+so the lidar and camera stop/slowdown zones guard docking and undocking too:
+an obstacle can appear in a dock bay like anywhere else.
 
-That is accepted on purpose, not an oversight. Rerouting docking's output
-through the chain was considered in the final-review fix wave and rejected
-as the higher-risk option against two proven live delivery routes: the
-collision monitor's stop polygon (+-0.25 m around base_footprint, see
-navigation/config/nav2_params.yaml) would fire on the dock's own back wall
-during every single approach, and the smoother's limits would fight the
-docking controller's own pose-regulation profile.
+  - tag_dock_server (`/dock_robot`, `/undock_robot`, what the mission uses)
+    publishes no velocity itself. It moves the robot only with Nav2's own
+    NavigateToPose (to the pre-dock pose, then turned round onto the staging
+    pose) and docking_server (which REVERSES the robot in, at the slow speed
+    limits in docking.yaml), all inside that chain.
+  - docking_server (explicit-pose goals passed through, and its own
+    `/docking_server/*` actions) publishes `cmd_vel`, remapped below into
+    `cmd_vel_nav`. It used to publish `/cmd_vel` directly, a deliberate
+    exception from when the stop polygon was +-0.25 m and fired on the dock's
+    back wall. The stop square is now +-0.15 m and tag docking ends with the
+    front edge 0.15 m from the wall (0.273 m from base_footprint), so the
+    wall is outside it; the wall is inside the 0.30 m slowdown circle, which
+    only slows the last few cm. An explicit-pose goal that drives
+    docking_server closer than ~3 cm to a wall WILL be stopped by the monitor:
+    that is the point.
 
-Collision protection during docking/undocking therefore comes from exactly
-one place: `docking_server`'s own `controller.use_collision_detection`
-(config/docking.yaml), which is now ENABLED and checks the projected
-approach trajectory against Nav2's local costmap, with
-`dock_collision_threshold` carving out the dock structure itself. If that
-parameter is ever turned off again, docking legs run with no obstacle
-protection whatsoever.
+docking_server's own `controller.use_collision_detection` (config/
+docking.yaml) stays on as a second, trajectory-ahead check against the local
+costmap.
 
 LIFECYCLE -- same issue class as Tasks 2/3's `slam_toolbox` nodes, confirmed
 (not assumed) before writing this file: `ros2 node info` against a running
@@ -101,15 +103,21 @@ def _launch_nodes(context):
         namespace='',
         output='screen',
         parameters=[config, {'use_sim_time': use_sim_time}],
-        # tag_dock_server answers /dock_robot (measure the tag, align, then
-        # call this server); this server's own docking action moves aside.
-        # /undock_robot is unchanged.
-        remappings=[('dock_robot', 'docking_server/dock_robot')],
+        # tag_dock_server answers /dock_robot and /undock_robot (Nav2 to the
+        # pre-dock pose, wait while the bay is occupied, measure the tag and
+        # save the pose, turn round, then call this server to back in); this server's own
+        # actions move aside and serve its explicit-pose goals.
+        # cmd_vel -> cmd_vel_nav: into the velocity smoother and collision
+        # monitor like every other motion (see the docstring above).
+        remappings=[('dock_robot', 'docking_server/dock_robot'),
+                    ('undock_robot', 'docking_server/undock_robot'),
+                    ('cmd_vel', 'cmd_vel_nav')],
     )
 
-    # /dock_robot: measures the requested dock's AprilTag on the way in, aligns
-    # square to it and calls docking_server (/docking_server/dock_robot) with
-    # the measured pose. Reads its own
+    # /dock_robot + /undock_robot: Nav2 to the requested dock's pre-dock pose,
+    # waits (without limit) while another robot or an obstacle is in the bay,
+    # measures the dock's AprilTag, saves the measured pose, and has
+    # docking_server drive in. Undocking backs out again. Reads its own
     # `tag_dock_server:` block and the dock list from the same docking.yaml.
     tag_dock_server = Node(
         package='perception',

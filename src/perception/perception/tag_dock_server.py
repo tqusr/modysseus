@@ -11,17 +11,22 @@ using the usual name and goal, and always get the measured, aligned approach:
 A goal with `use_dock_id: false` (an explicit dock_pose) is passed straight
 through to docking_server unchanged.
 
-The four-step process, its tolerances and why they are what they are, are
-documented in `perception.tag_docking`'s module docstring. Parameters live in
-the `tag_dock_server:` block of `perception/config/docking.yaml`.
+The process -- Nav2 to the pre-dock pose in the middle of the acceptable box, a
+check that the dock bay is free (waiting and checking again, without limit,
+while it is not), a measurement of that dock's tag, the measured pose written
+back to docks.yaml and docking.yaml, Nav2 turns the robot round, then
+docking_server reverses it in at the slow speed set in docking.yaml -- its tolerances and why they are what they
+are, are documented in `perception.tag_docking`'s module docstring. Parameters
+live in the `tag_dock_server:` block of `perception/config/docking.yaml`.
 
 Feedback reuses DockRobot's states: NAV_TO_STAGING_POSE while driving to the
-pre-dock pose (tag measured on the way), INITIAL_PERCEPTION while measuring at
-the pre-dock pose, then whatever docking_server reports for the final drive.
+pre-dock pose, INITIAL_PERCEPTION while checking the bay and measuring the tag
+at the pre-dock pose, then whatever docking_server reports for the final drive.
 """
 
 import math
 import os
+import contextlib
 import threading
 import time
 
@@ -31,26 +36,30 @@ from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
 from apriltag_msgs.msg import AprilTagDetectionArray
 from geometry_msgs.msg import PoseStamped
-from builtin_interfaces.msg import Duration
-from nav2_msgs.action import (BackUp, DockRobot, DriveOnHeading,
-                              NavigateToPose, Spin, UndockRobot)
+from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 from rclpy.action import ActionClient, ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from nav_msgs.msg import OccupancyGrid
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 
 from std_srvs.srv import SetBool
 
-from perception.dock_capture import (STAGING_STANDOFF_M, DockCaptureError,
-                                     Pose2D, capture_from_tag_transform,
-                                     tag_tf_frame)
-from perception.tag_docking import (FORWARD, SPIN,
-                                    MeasurementWindow, Tolerance, compose,
+from perception.dock_capture import (DOCKING_CHASSIS_OFFSET_M,
+                                     DockCaptureError, Pose2D, apply_capture,
+                                     normalize_angle,
+                                     capture_from_docking_pose,
+                                     capture_from_tag_transform,
+                                     find_workspace_source_file, tag_tf_frame)
+from perception.tag_docking import (PREDOCK_STANDOFF_M, MeasurementWindow,
+                                    Tolerance, bay_occupied, compose,
                                     correction, load_dock_database,
-                                    plan_alignment,
-                                    predock_error, predock_pose_for,
-                                    yaw_from_quaternion)
+                                    occupied_cell_points, points_in_dock_bay,
+                                    predock_error,
+                                    predock_pose_for, yaw_from_quaternion)
 
 Feedback = DockRobot.Feedback
 Result = DockRobot.Result
@@ -114,11 +123,8 @@ class TagDockServer(Node):
         declare('docking_action', 'docking_server/dock_robot')
         declare('undock_action_name', 'undock_robot')
         declare('undocking_action', 'docking_server/undock_robot')
-        declare('spin_action', 'spin')
-        declare('drive_action', 'drive_on_heading')
-        declare('backup_action', 'backup')
         declare('dock_type', 'arena_dock')
-        declare('predock_standoff_m', STAGING_STANDOFF_M)
+        declare('predock_standoff_m', PREDOCK_STANDOFF_M)
         declare('max_tag_range_m', 2.0)
         declare('max_detection_age_sec', 0.5)
         declare('samples_required', 3)
@@ -127,13 +133,20 @@ class TagDockServer(Node):
         declare('sample_window_sec', 2.0)
         declare('perception_timeout_sec', 3.0)
         declare('gate_service', '/image_gate/enable')
-        declare('align_range_m', 1.0)
-        declare('align_speed_mps', 0.08)
         declare('predock_lateral_tolerance_m', 0.03)
-        declare('predock_along_tolerance_m', 0.08)
+        declare('predock_min_tag_distance_m', 0.5)
+        declare('predock_max_tag_distance_m', 1.0)
         declare('predock_heading_tolerance_rad', 0.05)
         declare('max_predock_attempts', 4)
-        declare('give_up_tolerance_factor', 2.0)
+        declare('bay_costmap_topic', 'local_costmap/costmap')
+        declare('bay_occupied_value', 100)
+        declare('dock_occupied_wait_sec', 10.0)
+        declare('bay_min_out_m', 0.15)
+        declare('bay_max_out_m', 0.55)
+        declare('bay_half_width_m', 0.15)
+        declare('bay_min_cells', 2)
+        declare('bay_window_sec', 1.5)
+        declare('save_measured_pose', True)
 
         p = lambda name: self.get_parameter(name).value  # noqa: E731
         config_path = p('docking_config')
@@ -147,13 +160,26 @@ class TagDockServer(Node):
         self._max_range = float(p('max_tag_range_m'))
         self._max_age = float(p('max_detection_age_sec'))
         self._perception_timeout = float(p('perception_timeout_sec'))
-        self._tolerance = Tolerance(float(p('predock_lateral_tolerance_m')),
-                                    float(p('predock_along_tolerance_m')),
-                                    float(p('predock_heading_tolerance_rad')))
-        self._give_up = self._tolerance.scaled(float(p('give_up_tolerance_factor')))
+        self._tag_distance_min = float(p('predock_min_tag_distance_m'))
+        self._tag_distance_max = float(p('predock_max_tag_distance_m'))
+        self._tolerance = Tolerance.from_tag_distance(
+            float(p('predock_lateral_tolerance_m')),
+            float(p('predock_heading_tolerance_rad')),
+            float(p('predock_min_tag_distance_m')),
+            float(p('predock_max_tag_distance_m')),
+            self._standoff + DOCKING_CHASSIS_OFFSET_M)
         self._max_attempts = int(p('max_predock_attempts'))
-        self._align_range = float(p('align_range_m'))
-        self._align_speed = float(p('align_speed_mps'))
+        self._occupied_wait = float(p('dock_occupied_wait_sec'))
+        self._bay_min_out = float(p('bay_min_out_m'))
+        self._bay_max_out = float(p('bay_max_out_m'))
+        self._bay_half_width = float(p('bay_half_width_m'))
+        self._bay_min_cells = int(p('bay_min_cells'))
+        self._bay_occupied_value = int(p('bay_occupied_value'))
+        self._bay_window = float(p('bay_window_sec'))
+        self._save_measured_pose = bool(p('save_measured_pose'))
+        # Where costmaps are collected while the bay is being checked; None the
+        # rest of the time, so the subscription costs nothing while idle.
+        self._costmap_sink = None
 
         self._lock = threading.Lock()
         self._target_tag = None
@@ -163,8 +189,13 @@ class TagDockServer(Node):
         self._busy = False
 
         group = ReentrantCallbackGroup()
+        # TF is only listened to while a `_tf_session()` is open (see there).
         self._tf_buffer = tf2_ros.Buffer()
-        self._tf_listener = tf2_ros.TransformListener(self._tf_buffer, self)
+        self._tf_use_sim_time = bool(self.get_parameter('use_sim_time').value)
+        self._tf_users = 0
+        self._tf_node = None
+        self._tf_listener = None
+        self._tf_guard = threading.Lock()
         self.create_subscription(AprilTagDetectionArray, p('detections_topic'),
                                  self._on_detections, 10, callback_group=group)
         self._gate_client = self.create_client(SetBool, p('gate_service'),
@@ -175,12 +206,14 @@ class TagDockServer(Node):
                                          callback_group=group)
         self._undock_client = ActionClient(self, UndockRobot, p('undocking_action'),
                                            callback_group=group)
-        self._spin_client = ActionClient(self, Spin, p('spin_action'),
-                                         callback_group=group)
-        self._drive_client = ActionClient(self, DriveOnHeading, p('drive_action'),
-                                          callback_group=group)
-        self._backup_client = ActionClient(self, BackUp, p('backup_action'),
-                                           callback_group=group)
+        # The local costmap, which is what the lidar and the camera both mark.
+        # Transient local, like the costmap publisher, so the last one arrives
+        # at once.
+        self.create_subscription(
+            OccupancyGrid, p('bay_costmap_topic'), self._on_costmap,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            callback_group=group)
         self._action_name = p('action_name')
         self._server = ActionServer(
             self, DockRobot, self._action_name, self._execute,
@@ -196,12 +229,50 @@ class TagDockServer(Node):
 
         self.get_logger().info(
             f'/{self._action_name} ready: {len(self._database)} docks from '
-            f'{config_path}; pre-dock {self._standoff:.2f} m out, aligned within '
-            f'{self._align_range:.1f} m by turn-drive-turn, tolerance lateral '
-            f'{self._tolerance.lateral_m:.2f} m / along {self._tolerance.along_m:.2f} m '
+            f'{config_path}; pre-dock {self._standoff:.3f} m out, tolerance lateral '
+            f'+-{self._tolerance.lateral_m:.2f} m / '
+            f'{self._tag_distance_min:.2f}-{self._tag_distance_max:.2f} m from the tag '
             f'/ heading {math.degrees(self._tolerance.heading_rad):.0f} deg')
 
     # ------------------------------------------------------------------ TF
+
+    @contextlib.contextmanager
+    def _tf_session(self, warmup_sec: float = 2.0):
+        """Listen to /tf only inside this block.
+
+        /tf is ~80 msgs/s; decoding them in Python cost 30-50% of a core all the
+        time, although this node needs TF only to read the robot pose and to
+        measure a tag -- not while Nav2 or a behaviour drives the robot. The
+        listener runs in its own node and thread (so its wake-ups never walk
+        this node's action clients), on a fresh buffer.
+        """
+        with self._tf_guard:
+            if self._tf_users == 0:
+                self._tf_buffer = tf2_ros.Buffer()
+                self._tf_node = rclpy.create_node(
+                    'tag_dock_server_tf',
+                    parameter_overrides=[Parameter(
+                        'use_sim_time', value=self._tf_use_sim_time)])
+                self._tf_listener = tf2_ros.TransformListener(
+                    self._tf_buffer, self._tf_node, spin_thread=True)
+            self._tf_users += 1
+        try:
+            deadline = time.monotonic() + warmup_sec
+            while time.monotonic() < deadline:
+                if self._tf_buffer.can_transform(self._map, self._base, Time()):
+                    break
+                time.sleep(0.05)
+            yield
+        finally:
+            with self._tf_guard:
+                self._tf_users -= 1
+                if self._tf_users == 0:
+                    listener, node = self._tf_listener, self._tf_node
+                    self._tf_listener = self._tf_node = None
+                    listener.executor.shutdown()
+                    listener.dedicated_listener_thread.join(timeout=2.0)
+                    listener.unregister()
+                    node.destroy_node()
 
     def _now(self) -> float:
         return self.get_clock().now().nanoseconds / 1e9
@@ -321,61 +392,229 @@ class TagDockServer(Node):
         log.info(f'dock {dock.letter}: stored pose {_fmt(dock.pose)}, '
                  f'looking for tag {dock.tag_id}')
 
-        def adopt(new_estimate, where):
-            nonlocal estimate, measured
-            dx, dy, dth = correction(dock.pose, new_estimate)
-            log.info(f'dock {dock.letter}: tag {dock.tag_id} measured {where}: '
-                     f'dock pose {_fmt(new_estimate)}, correction vs stored '
-                     f'dx {dx:+.3f} dy {dy:+.3f} m, dtheta '
-                     f'{math.degrees(dth):+.1f} deg')
-            estimate, measured = new_estimate, True
+        # Step 1: Nav2 to the pre-dock pose, until the robot is in the box. The
+        # detector is off while driving.
+        self._reach_predock_box(goal_handle, dock, estimate, request)
 
-        # Step 1: drive near the STORED pre-dock pose; the detector is off.
-        # Skipped when already close: then the robot is typically at a
-        # neighbouring dock, and turn-drive-turn below is the exact way over.
-        predock = predock_pose_for(estimate, self._standoff)
-        robot = self._robot_in_map()
-        far = math.hypot(predock.x - robot.x, predock.y - robot.y) > self._align_range
-        if far:
-            if not request.navigate_to_staging_pose:
-                log.warning(f'dock {dock.letter}: robot is more than '
-                            f'{self._align_range:.1f} m from the pre-dock pose, '
-                            f'navigating there although navigate_to_staging_pose '
-                            f'is false')
-            deadline = time.monotonic() + float(request.max_staging_time)
-            self._navigate(goal_handle, estimate, deadline)
-
-        # Steps 2-3: measure standing still (detector on only for that); align
-        # to the MEASURED pre-dock pose until within tolerance.
+        # Steps 2-3, standing in the box: wait for the bay to be free, then
+        # measure the tag (detector on only for that) and save the dock pose.
         for attempt in range(1, self._max_attempts + 1):
+            self._wait_for_free_bay(goal_handle, dock, estimate)
             goal_handle.publish_feedback(Feedback(state=Feedback.INITIAL_PERCEPTION))
-            final = self._measure_still(goal_handle)
-            if final is not None:
-                adopt(final, 'at pre-dock' if attempt > 1 or far else 'before aligning')
-            elif not measured and attempt == 1:
+            with self._tf_session():
+                final = self._measure_still(goal_handle)
+                robot = self._robot_in_map()
+            if final is None:
                 log.warning(f'dock {dock.letter}: tag {dock.tag_id} not seen, '
-                            f'docking against the stored pose')
-            predock = predock_pose_for(estimate, self._standoff)
-            robot = self._robot_in_map()
-            error = predock_error(robot, predock)
+                            f'docking against the '
+                            f'{"last measured" if measured else "stored"} pose')
+                break
+            dx, dy, dth = correction(dock.pose, final)
+            log.info(f'dock {dock.letter}: tag {dock.tag_id} measured: dock pose '
+                     f'{_fmt(final)}, correction vs stored dx {dx:+.3f} '
+                     f'dy {dy:+.3f} m, dtheta {math.degrees(dth):+.1f} deg')
+            estimate, measured = final, True
+            error = predock_error(robot, predock_pose_for(estimate, self._standoff))
             summary = (f'lateral {error.lateral:+.3f} m, along {error.along:+.3f} m, '
                        f'heading {math.degrees(error.heading):+.1f} deg')
             if self._tolerance.accepts(error):
-                log.info(f'dock {dock.letter}: at pre-dock within tolerance ({summary})')
+                log.info(f'dock {dock.letter}: in the pre-dock box of the measured '
+                         f'dock ({summary})')
+                self._save_pose(dock, final)
                 break
             if attempt == self._max_attempts:
-                if not self._give_up.accepts(error):
-                    raise _Abort(Result.FAILED_TO_STAGE,
-                                 f'could not reach the pre-dock pose ({summary})')
-                log.warning(f'dock {dock.letter}: pre-dock still off ({summary}) '
-                            f'after {attempt} alignments; close enough for the '
-                            f'docking controller, continuing')
-                break
-            log.info(f'dock {dock.letter}: aligning to pre-dock ({summary})')
-            self._align(goal_handle, robot, predock)
+                raise _Abort(Result.FAILED_TO_STAGE,
+                             f'outside the pre-dock box of the measured dock '
+                             f'({summary}) after {attempt} measurements')
+            # The measurement moved the box (the stored pose was off): let Nav2
+            # take the robot to the measured pre-dock pose, then measure again.
+            log.info(f'dock {dock.letter}: outside the measured pre-dock box '
+                     f'({summary}), navigating there')
+            self._reach_predock_box(goal_handle, dock, estimate, request)
 
-        # Step 4: drive forward into the dock.
+        # Something may have arrived while measuring; check once more before
+        # driving in.
+        self._wait_for_free_bay(goal_handle, dock, estimate)
+
+        # Step 4: turn round (Nav2) onto the staging pose, then Nav2's docking
+        # controller reverses in, at the speed limits in docking.yaml.
+        self._turn_to_staging(goal_handle, dock, estimate, request)
         return self._dock(goal_handle, dock, estimate)
+
+    def _turn_to_staging(self, goal_handle, dock, estimate: Pose2D, request):
+        """Turn the robot round so it can back into the dock.
+
+        The robot stands in the pre-dock box facing the dock (to see the tag).
+        docking_server reverses in, from the staging pose: the pre-dock
+        position, facing AWAY from the dock. docking_server only navigates to
+        its staging pose when the robot is farther than dock_prestaging_tolerance
+        from it IN POSITION, ignoring heading, so a robot already at the spot,
+        facing the dock, would be left as it is. Nav2 is sent there instead,
+        which also turns it.
+        """
+        predock = predock_pose_for(estimate, self._standoff)
+        staging = Pose2D(predock.x, predock.y,
+                         normalize_angle(predock.theta + math.pi))
+        self.get_logger().info(
+            f'dock {dock.letter}: turning onto the staging pose {_fmt(staging)} '
+            f'to back in')
+        deadline = time.monotonic() + float(request.max_staging_time)
+        self._navigate(goal_handle, staging, deadline)
+
+    def _in_predock_box(self, estimate: Pose2D):
+        """(whether the robot is in the pre-dock box of `estimate`, a summary)."""
+        with self._tf_session():
+            robot = self._robot_in_map()
+        error = predock_error(robot, predock_pose_for(estimate, self._standoff))
+        summary = (f'lateral {error.lateral:+.3f} m, along {error.along:+.3f} m, '
+                   f'heading {math.degrees(error.heading):+.1f} deg')
+        return self._tolerance.accepts(error), summary
+
+    def _reach_predock_box(self, goal_handle, dock, estimate: Pose2D, request):
+        """Send Nav2 to the pre-dock pose until the robot is inside the box."""
+        log = self.get_logger()
+        for attempt in range(1, self._max_attempts + 1):
+            inside, summary = self._in_predock_box(estimate)
+            if inside:
+                log.info(f'dock {dock.letter}: in the pre-dock box ({summary})')
+                return
+            if not request.navigate_to_staging_pose:
+                log.warning(f'dock {dock.letter}: not in the pre-dock box ({summary}),'
+                            f' navigating there although navigate_to_staging_pose '
+                            f'is false')
+            log.info(f'dock {dock.letter}: navigating to the pre-dock pose '
+                     f'(attempt {attempt}, {summary})')
+            deadline = time.monotonic() + float(request.max_staging_time)
+            self._navigate(goal_handle, predock_pose_for(estimate, self._standoff),
+                           deadline)
+        inside, summary = self._in_predock_box(estimate)
+        if not inside:
+            raise _Abort(Result.FAILED_TO_STAGE,
+                         f'could not get into the pre-dock box after '
+                         f'{self._max_attempts} navigation goals ({summary})')
+
+    # ------------------------------------------------------------ bay check
+
+    def _on_costmap(self, msg):
+        with self._lock:
+            sink = self._costmap_sink
+            if sink is not None:
+                sink.append(msg)
+
+    def _sleep(self, goal_handle, seconds: float):
+        """Sleep, but notice a cancel."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            if goal_handle.is_cancel_requested:
+                raise _Canceled()
+            if not rclpy.ok():
+                raise _Abort(Result.UNKNOWN, 'shutting down')
+            time.sleep(POLL_SEC)
+
+    def _bay_is_occupied(self, goal_handle, docking_pose: Pose2D):
+        """True / False, or None when no costmap arrived, for the dock bay.
+
+        Reads the local costmap, so what the lidar sees (obstacles in its plane)
+        and what the camera sees (low obstacles under it) both count, and so
+        does anything Nav2 itself would treat as an obstacle.
+        """
+        grids = []
+        with self._lock:
+            self._costmap_sink = grids
+        try:
+            self._sleep(goal_handle, self._bay_window)
+        finally:
+            with self._lock:
+                self._costmap_sink = None
+        if not grids:
+            return None
+        counts = []
+        with self._tf_session():
+            for grid in grids:
+                try:
+                    grid_in_map = self._lookup(self._map, grid.header.frame_id)
+                except tf2_ros.TransformException as error:
+                    self.get_logger().warning(
+                        f'bay check: no {self._map}<-{grid.header.frame_id} '
+                        f'transform: {error}', throttle_duration_sec=2.0)
+                    continue
+                info = grid.info
+                cells = occupied_cell_points(
+                    grid.data, info.width, info.height, info.resolution,
+                    info.origin.position.x, info.origin.position.y,
+                    self._bay_occupied_value)
+                points = []
+                for x, y in cells:
+                    point = compose(grid_in_map, Pose2D(x=x, y=y, theta=0.0))
+                    points.append((point.x, point.y))
+                counts.append(points_in_dock_bay(
+                    points, docking_pose, self._bay_min_out, self._bay_max_out,
+                    self._bay_half_width))
+        if not counts:
+            return None
+        self.get_logger().info(
+            f'bay check: occupied costmap cells inside the bay per update {counts} '
+            f'(occupied when half the updates have >= {self._bay_min_cells})')
+        return bay_occupied(counts, self._bay_min_cells)
+
+    def _wait_for_free_bay(self, goal_handle, dock, estimate: Pose2D):
+        """Return once the dock bay is free; while it is not, wait and re-check.
+
+        No limit on the number of checks: a dock another robot is using is
+        simply waited for. Cancel the goal to stop. No costmap data counts as not
+        free.
+        """
+        log = self.get_logger()
+        checks = 0
+        while True:
+            occupied = self._bay_is_occupied(goal_handle, estimate)
+            if occupied is False:
+                if checks:
+                    log.info(f'dock {dock.letter}: bay is free again after '
+                             f'{checks} waits')
+                return
+            checks += 1
+            reason = ('no costmap received on '
+                      f'{self.get_parameter("bay_costmap_topic").value}'
+                      if occupied is None else 'another robot or an obstacle is in it')
+            log.warning(f'dock {dock.letter}: not docking, {reason}; checking '
+                        f'again in {self._occupied_wait:.0f} s (wait {checks})')
+            goal_handle.publish_feedback(Feedback(state=Feedback.INITIAL_PERCEPTION))
+            self._sleep(goal_handle, self._occupied_wait)
+
+    # ------------------------------------------------------- saving the pose
+
+    def _save_pose(self, dock, docking_pose: Pose2D):
+        """Write the measured dock pose into docks.yaml and docking.yaml.
+
+        The workspace SOURCE files, as `capture_dock_pose` does (an installed
+        copy would be overwritten by the next build), so it takes effect after
+        the next `colcon build`; this goal docks against the measurement
+        regardless. A failure here is logged and does not stop the docking.
+        """
+        if not self._save_measured_pose:
+            return
+        log = self.get_logger()
+        try:
+            capture = capture_from_docking_pose(dock.tag_id, docking_pose)
+            if capture.letter != dock.letter:
+                raise DockCaptureError(
+                    f'tag {dock.tag_id} belongs to dock {capture.letter}, not '
+                    f'{dock.letter}')
+            share = get_package_share_directory('perception')
+            docks_path = find_workspace_source_file(share, 'mission/config/docks.yaml')
+            docking_path = find_workspace_source_file(
+                share, 'perception/config/docking.yaml')
+            if docks_path is None or docking_path is None:
+                log.warning(f'dock {dock.letter}: no workspace source tree next to '
+                            f'{share}; measured pose not saved')
+                return
+            apply_capture(capture, docks_path, docking_path)
+            log.info(f'dock {dock.letter}: saved the measured pose to {docks_path} '
+                     f'and {docking_path} (applies after the next colcon build)')
+        except (DockCaptureError, OSError) as error:
+            log.warning(f'dock {dock.letter}: could not save the measured pose: '
+                        f'{error}')
 
     # --------------------------------------------------------- navigation
 
@@ -400,10 +639,9 @@ class TagDockServer(Node):
             raise _Abort(Result.FAILED_TO_STAGE, 'navigation goal rejected')
         return handle, handle.get_result_async()
 
-    def _navigate(self, goal_handle, estimate: Pose2D, deadline: float):
-        """Drive to estimate's pre-dock pose."""
-        handle, result_future = self._send_nav(
-            goal_handle, predock_pose_for(estimate, self._standoff))
+    def _navigate(self, goal_handle, target: Pose2D, deadline: float):
+        """Drive (Nav2 NavigateToPose) to `target`, turning to its heading."""
+        handle, result_future = self._send_nav(goal_handle, target)
         last_feedback = 0.0
         while True:
             if goal_handle.is_cancel_requested:
@@ -466,40 +704,6 @@ class TagDockServer(Node):
         if self._gate_client.service_is_ready():
             self._gate_client.call_async(SetBool.Request(data=False))
 
-    # ---------------------------------------------------------- alignment
-
-    def _behavior(self, goal_handle, client, goal, what):
-        if not client.wait_for_server(timeout_sec=5.0):
-            raise _Abort(Result.FAILED_TO_STAGE, f'{what}: behavior server not available')
-        handle = self._wait(goal_handle, client.send_goal_async(goal))
-        if not handle.accepted:
-            raise _Abort(Result.FAILED_TO_STAGE, f'{what}: goal rejected')
-        response = self._wait(goal_handle, handle.get_result_async(), handle)
-        if response.status != GoalStatus.STATUS_SUCCEEDED:
-            raise _Abort(Result.FAILED_TO_STAGE,
-                         f'{what} failed (status {response.status}, error code '
-                         f'{getattr(response.result, "error_code", "?")}) -- '
-                         f'blocked by an obstacle?')
-
-    def _align(self, goal_handle, robot: Pose2D, predock: Pose2D):
-        """Turn to face the pre-dock pose, drive (or back) to it, turn square."""
-        goal_handle.publish_feedback(Feedback(state=Feedback.NAV_TO_STAGING_POSE))
-        for kind, amount in plan_alignment(robot, predock):
-            if kind == SPIN:
-                goal = Spin.Goal(target_yaw=float(amount),
-                                 time_allowance=Duration(sec=15))
-                self._behavior(goal_handle, self._spin_client, goal,
-                               f'spin {math.degrees(amount):+.1f} deg')
-                continue
-            client, action, label = ((self._drive_client, DriveOnHeading, 'drive')
-                                     if kind == FORWARD else
-                                     (self._backup_client, BackUp, 'back up'))
-            goal = action.Goal(speed=self._align_speed,
-                               time_allowance=Duration(
-                                   sec=int(10 + amount / self._align_speed * 3)))
-            goal.target.x = float(amount)
-            self._behavior(goal_handle, client, goal, f'{label} {amount:.3f} m')
-
     def _passthrough(self, goal_handle, request) -> Result:
         """Forward an explicit-pose goal to docking_server unchanged."""
         if not self._dock_client.wait_for_server(timeout_sec=5.0):
@@ -557,7 +761,7 @@ class TagDockServer(Node):
         goal.dock_pose = _pose_stamped(estimate, self._map, self)
         goal.dock_type = self._dock_type
         goal.navigate_to_staging_pose = False
-        self.get_logger().info(f'dock {dock.letter}: driving in to {_fmt(estimate)}')
+        self.get_logger().info(f'dock {dock.letter}: backing in to {_fmt(estimate)}')
 
         def forward(feedback_msg):
             goal_handle.publish_feedback(feedback_msg.feedback)

@@ -937,3 +937,21 @@ def test_stop_robot_zeroes_cmd_vel_ctrl_too():
             m.linear.x == 0.0 and m.angular.z == 0.0 for m in received)
     finally:
         rclpy.shutdown()
+
+
+def test_stop_robot_publishes_nothing_when_the_hold_is_disabled():
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_stop_robot_disabled")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        received = []
+        _count_cmd_vel_messages(node, received)
+        node.create_subscription(
+            Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
+        behaviour = StopRobot("StopRobot", node, publish_hz=20.0, hold_zero=False)
+        assert behaviour.update() == py_trees.common.Status.SUCCESS
+        _spin_and_drain(executor, 0.3)
+        assert received == []
+    finally:
+        rclpy.shutdown()

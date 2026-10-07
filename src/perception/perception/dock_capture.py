@@ -68,9 +68,15 @@ import re
 from dataclasses import dataclass
 
 
-#: Standoff used for `docks.yaml`'s `staging_pose`, per that file's header
-#: comment (within the task spec's 0.5-0.7 m range).
-STAGING_STANDOFF_M = 0.6
+#: Distance from a dock's back wall to the PRE-DOCK pose: the middle of the
+#: acceptable pre-dock box (`predock_min_tag_distance_m` 0.5 to
+#: `predock_max_tag_distance_m` 1.0 in docking.yaml), so a Nav2 goal that lands
+#: anywhere near it is inside the box.
+PREDOCK_TAG_DISTANCE_M = 0.75
+
+#: Standoff used for `docks.yaml`'s `staging_pose`: the pre-dock pose, measured
+#: from the dock's back wall (docks.yaml's dock_pose). It used to be 0.6.
+STAGING_STANDOFF_M = PREDOCK_TAG_DISTANCE_M
 
 #: Chassis standoff separating `docks.yaml`'s `dock_pose` (the dock's back
 #: wall) from `perception/config/docking.yaml`'s `pose` (where the ROBOT must
@@ -320,6 +326,31 @@ def capture_from_tag_transform(tag_id: int, translation_xy, rotation_xyzw,
         dock_pose=dock_pose,
         staging_pose=staging_pose_for(dock_pose, standoff_m),
         docking_pose=docking_server_pose_for(dock_pose, docking_offset_m),
+    )
+
+
+def capture_from_docking_pose(tag_id: int, docking_pose: Pose2D,
+                              standoff_m: float = STAGING_STANDOFF_M,
+                              docking_offset_m: float = DOCKING_CHASSIS_OFFSET_M,
+                              ) -> DockCapture:
+    """Everything implied by a measured DOCKING pose (the robot's docked pose).
+
+    The inverse of `docking_server_pose_for`: the wall pose that function would
+    have been given. `docking_pose` is where base_footprint ends up (heading
+    into the wall, `docking_offset_m` out from it), so the wall is that far
+    further along the heading and its outward normal is the opposite way.
+    """
+    wall = Pose2D(
+        x=docking_pose.x + docking_offset_m * math.cos(docking_pose.theta),
+        y=docking_pose.y + docking_offset_m * math.sin(docking_pose.theta),
+        theta=normalize_angle(docking_pose.theta - math.pi),
+    )
+    return DockCapture(
+        letter=letter_for_tag_id(tag_id),
+        tag_id=int(tag_id),
+        dock_pose=wall,
+        staging_pose=staging_pose_for(wall, standoff_m),
+        docking_pose=docking_pose,
     )
 
 

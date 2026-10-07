@@ -26,7 +26,7 @@
 # Footprint: einride_mini_truck is a 6-wheel skid-steer, track 0.17452 m,
 # wheelbase 0.171 m (vendor docs / earlier task notes). Half-diagonal from
 # the base_footprint origin to a wheel-contact corner is
-# sqrt((0.171/2)^2 + (0.17452/2)^2) =~ 0.122 m; robot_radius: 0.18 below
+# sqrt((0.171/2)^2 + (0.17452/2)^2) =~ 0.122 m; robot_radius (now 0.23, see costmaps) below
 # adds a conservative ~0.06 m margin for the chassis body/bumper overhang
 # the wheel-only geometry doesn't capture, without tuning tightly (out of
 # scope per the brief - this only needs to work reliably, not quickly).
@@ -73,7 +73,11 @@
 controller_server:
   ros__parameters:
     use_sim_time: true
-    controller_frequency: 20.0
+    # 10 Hz, not 20: on the Jetson MPPI (CPU only) managed a median ~11 Hz
+    # (3-15 Hz seen) while asked for 20, so each command was held for a
+    # variable 70-280 ms and the robot moved in jerky steps. A rate it can
+    # keep gives steady commands; velocity_smoother (20 Hz) fills in between.
+    controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -130,9 +134,14 @@ controller_server:
       rotate_to_goal_heading: true
 
       # --- nav2_mppi_controller::MPPIController params (wrapped above) ---
-      time_steps: 56
-      model_dt: 0.05
-      batch_size: 1000
+      # Cost per cycle is batch_size x time_steps. 28 x 0.1 s keeps the same
+      # 2.8 s horizon as the old 56 x 0.05 s with half the steps, and
+      # model_dt matches the 10 Hz controller_frequency as MPPI recommends.
+      # With 500 samples instead of 1000 that is a quarter of the work per
+      # cycle, and half as many cycles per second.
+      time_steps: 28
+      model_dt: 0.1
+      batch_size: 500
       vx_max: 0.3
       vx_min: -0.15
       vy_max: 0.0
@@ -230,10 +239,26 @@ planner_server:
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
     GridBased:
-      plugin: "nav2_navfn_planner::NavfnPlanner"
+      # Smac 2D (A* on the costmap grid, then smoothed) instead of NavFn:
+      # NavFn weighs inflation cost only lightly and hugged obstacles.
+      # cost_travel_multiplier scales how much a cell's cost adds to the
+      # travel cost (default 2.0, 4.0 here; higher = keeps further from obstacles,
+      # at the price of refusing narrow gaps).
+      plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.3
-      use_astar: false
-      allow_unknown: true
+      # false: only plan through cells known to be free.
+      allow_unknown: false
+      downsample_costmap: false
+      max_iterations: 1000000
+      max_on_approach_iterations: 1000
+      max_planning_time: 1.0
+      cost_travel_multiplier: 4.0
+      use_final_approach_orientation: false
+      smoother:
+        max_iterations: 1000
+        w_smooth: 0.3
+        w_data: 0.2
+        tolerance: 1.0e-10
 
 behavior_server:
   ros__parameters:
@@ -369,9 +394,14 @@ collision_monitor:
       topic: "/oak/points_filtered"
       min_height: 0.05
       max_height: 1.0
-      # TEMPORARY: false while testing nav and docking - the camera cloud has
-      # been stalling and a stale source stops the robot. Set back to true.
-      enabled: false
+      # On again: the camera is the only sensor that sees obstacles shorter
+      # than the lidar's plane (12 cm above the floor), so without it a low
+      # obstacle is invisible to the stop and slowdown zones. It had been off
+      # while the cloud was stalling (a source with no fresh data makes the
+      # monitor stop the robot, "invalid source"); source_timeout below allows
+      # for the measured gaps. If the stops come back, look at the cloud's rate
+      # (`ros2 topic hz /oak/points_filtered`) before turning this off again.
+      enabled: true
       # Per-source override of the node-level `source_timeout: 1.0` above.
       # The lidar `scan` source deliberately KEEPS 1.0 - this loosening
       # applies only to the camera, which is the supplementary source (low
@@ -419,7 +449,10 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      robot_radius: 0.18
+      # 0.23, was 0.18: the planner and MPPI treat everything closer than this
+      # to an obstacle as forbidden for the robot's centre, so this is the hard
+      # clearance (chassis circumradius ~0.15 m + localization error).
+      robot_radius: 0.23
       plugins: ["lidar_layer", "camera_layer", "inflation_layer"]
       lidar_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
@@ -466,8 +499,9 @@ local_costmap:
           clearing: true
           marking: true
       # Wide, gentle gradient so the planner prefers open space over narrow
-      # gaps: cost = 252 * exp(-3 * (d - 0.18)) gives ~176 at 0.3 m from an
-      # obstacle, ~96 at 0.5 m, ~71 at 0.6 m. Was 5.0 (~138 / ~50 / ~30):
+      # gaps: cost = 252 * exp(-3 * (d - 0.23)) gives ~204 at 0.3 m from an
+      # obstacle, ~112 at 0.5 m, ~83 at 0.6 m. Was 5.0 (~138 / ~50 / ~30,
+      # at the old 0.18 m radius):
       # NavFn weighs cost only lightly, so paths still hugged obstacles and
       # the robot's pose error put it inside the inscribed radius. A smaller
       # factor decays slower, i.e. keeps cost high further out, without
@@ -486,7 +520,10 @@ global_costmap:
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
-      robot_radius: 0.18
+      # 0.23, was 0.18: the planner and MPPI treat everything closer than this
+      # to an obstacle as forbidden for the robot's centre, so this is the hard
+      # clearance (chassis circumradius ~0.15 m + localization error).
+      robot_radius: 0.23
       # Matches arena.yaml's own resolution (src/localization/maps/arena.yaml)
       # so the static layer never has to resample the saved map.
       resolution: 0.025
@@ -540,8 +577,9 @@ global_costmap:
           clearing: true
           marking: true
       # Wide, gentle gradient so the planner prefers open space over narrow
-      # gaps: cost = 252 * exp(-3 * (d - 0.18)) gives ~176 at 0.3 m from an
-      # obstacle, ~96 at 0.5 m, ~71 at 0.6 m. Was 5.0 (~138 / ~50 / ~30):
+      # gaps: cost = 252 * exp(-3 * (d - 0.23)) gives ~204 at 0.3 m from an
+      # obstacle, ~112 at 0.5 m, ~83 at 0.6 m. Was 5.0 (~138 / ~50 / ~30,
+      # at the old 0.18 m radius):
       # NavFn weighs cost only lightly, so paths still hugged obstacles and
       # the robot's pose error put it inside the inscribed radius. A smaller
       # factor decays slower, i.e. keeps cost high further out, without

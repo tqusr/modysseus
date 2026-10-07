@@ -228,9 +228,14 @@ class StopRobot(py_trees.behaviour.Behaviour):
     DEFAULT_HOLD_TIMEOUT_SEC = 10.0
 
     def __init__(self, name, node, publish_hz=DEFAULT_PUBLISH_HZ,
-                 hold_timeout_sec=DEFAULT_HOLD_TIMEOUT_SEC):
+                 hold_timeout_sec=DEFAULT_HOLD_TIMEOUT_SEC, hold_zero=True):
         super().__init__(name)
         self._node = node
+        # False: never publish. A diagnostic switch (mission_node parameter
+        # `safe_stop_zero_hold`) for telling whether this hold is what makes
+        # the robot's motion choppy; with it off a safe stop no longer holds
+        # the robot down, so only use it with a hand on the e-stop.
+        self._zero_hold_enabled = hold_zero
         # Zero goes to every place a velocity can enter the robot: /cmd_vel (the
         # vendor driver / simulator) and cmd_vel_ctrl (where Nav2 ends when
         # localization's wheel_drive_node drives the wheels). Holding only one
@@ -243,6 +248,10 @@ class StopRobot(py_trees.behaviour.Behaviour):
         self._hold_deadline = None
 
     def update(self):
+        if not self._zero_hold_enabled:
+            self.logger.warning("zero-velocity hold is DISABLED "
+                                "(safe_stop_zero_hold:=false): not publishing")
+            return py_trees.common.Status.SUCCESS
         # Re-arm first: a tick is the only evidence this behaviour is still
         # in the active branch.
         self._hold_deadline = \
@@ -406,7 +415,7 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
     within DOCK_PROXIMITY_TOLERANCE_M (0.3 m) of a real dock pose while not
     actually docked -- and that is a dock approach corridor, kept clear of
     props by the arena design (see arena.sdf's own prop-layout notes), with
-    the undock manoeuvre bounded by docking.yaml's staging offset (0.6 m).
+    the undock manoeuvre bounded by docking.yaml's staging offset (0.624 m).
 
     docking_server is a separate long-running process (docking.launch.py)
     whose own docked-state stash survives a mission_node-only restart intact
@@ -774,7 +783,7 @@ def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
     return py_trees.composites.Selector(name="GoToDock", memory=False, children=[at_dock, move_and_dock])
 
 
-def build_mission_tree(node, saga_client, docks, health_topics=()):
+def build_mission_tree(node, saga_client, docks, health_topics=(), hold_zero=True):
     # `health_topics`: (topic, type_name, max_age_sec) tuples VehicleStatusOK
     # requires to keep arriving; see topic_health.py.
     # Single shared Buffer/TransformListener for both health-check behaviours
@@ -826,7 +835,7 @@ def build_mission_tree(node, saga_client, docks, health_topics=()):
     ])
 
     safe_stop = py_trees.composites.Sequence(name="Safe stop", memory=True, children=[
-        StopRobot("StopRobot", node),
+        StopRobot("StopRobot", node, hold_zero=hold_zero),
         ReportFaultToSaga("ReportFaultToSaga"),
         Pause("Sleep 2s", duration_sec=2.0),
     ])
