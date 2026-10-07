@@ -18,6 +18,7 @@ install(PROGRAMS
         scripts/slam_lifecycle_watchdog.py
         scripts/wheel_odometry_node.py
         scripts/gyro_bias_node.py
+        scripts/wheel_drive_node.py
         DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
@@ -25,6 +26,7 @@ if(BUILD_TESTING)
   # Pure Python against pure Python: no ROS graph, no robot, no Gazebo.
   ament_add_pytest_test(test_wheel_odometry test/test_wheel_odometry.py)
   ament_add_pytest_test(test_gyro_bias test/test_gyro_bias.py)
+  ament_add_pytest_test(test_wheel_drive test/test_wheel_drive.py)
 endif()
 
 ament_package()

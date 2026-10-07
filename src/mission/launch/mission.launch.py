@@ -11,6 +11,9 @@ def _as_bool(text):
 
 def _launch_nodes(context):
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    # Optional parameter file, e.g. config/health_hardware.yaml: the topics
+    # VehicleStatusOK requires to keep arriving. Empty = no topic checks.
+    health_config = LaunchConfiguration('health_config').perform(context)
     return [
         # stub_action_servers is NOT launched here anymore (Task 7). It used to
         # stand in for NavigateToPose/DockRobot, but it registers action servers
@@ -31,7 +34,7 @@ def _launch_nodes(context):
             executable='mission_node',
             name='mission_node',
             output='screen',
-            parameters=[{
+            parameters=([health_config] if health_config else []) + [{
                 # Performed to text so a numeric-looking token stays a string.
                 'saga_url': LaunchConfiguration('saga_url').perform(context),
                 'saga_token': LaunchConfiguration('saga_token').perform(context),
@@ -55,5 +58,6 @@ def generate_launch_description():
         DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
         DeclareLaunchArgument('saga_token', default_value=''),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('health_config', default_value=''),
         OpaqueFunction(function=_launch_nodes),
     ])

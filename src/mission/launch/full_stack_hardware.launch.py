@@ -23,7 +23,8 @@ odometry starts at once because there is no simulator to wait for):
      7  localize            slam_toolbox localization on `map`    (always)
     10  docking             opennav_docking DockRobot server      (docking)
     18  navigation          Nav2                                  (nav)
-    25  mission             mission_node (saga_url, saga_token)   (mission)
+    25  mission             mission_node (saga_url, saga_token,
+                            config/health_hardware.yaml)          (mission)
 
 ARGUMENTS
     map         pose graph basename in localization/maps (default arena_real);
@@ -68,9 +69,9 @@ THE ROBOT TERMINAL WORKFLOW
              "{header: {frame_id: map}, pose: {pose: {position: {x: 0.0, \
 y: 0.0}, orientation: {w: 1.0}}}}"
 
-CAUTIONS. `docking_server` publishes `/cmd_vel` directly, bypassing the
-collision monitor (see docking.launch.py), so dock with `nav` on and a hand on
-the e-stop. Nav2 and docking tuning, and the dock poses, are the simulation's
+CAUTIONS. Docking moves through Nav2's velocity smoother and collision
+monitor (see docking.launch.py), so dock with `nav` on, and keep a hand on the
+e-stop. Nav2 and docking tuning, and the dock poses, are the simulation's
 until retuned and captured on the chassis. This launch has not been run on the
 robot; it is covered by in-process launch-description tests only.
 
@@ -119,10 +120,27 @@ def generate_launch_description():
                         {**HARDWARE, 'map': LaunchConfiguration('map'),
                          'map_start_pose': LaunchConfiguration('map_start_pose')})
     docking = _include('perception', 'docking.launch.py', HARDWARE, 'docking')
-    navigation = _include('navigation', 'navigation.launch.py', HARDWARE, 'nav')
+    # wheel_drive:=true makes Nav2 end in cmd_vel_ctrl, and localization's
+    # wheel_drive_node write T:1 wheel speeds instead of the MCU's own T:13
+    # kinematics. Off by default.
+    navigation = _include('navigation', 'navigation.launch.py', {
+        **HARDWARE,
+        'cmd_vel_out': PythonExpression([
+            "'cmd_vel_ctrl' if '", LaunchConfiguration('wheel_drive'),
+            "'.lower() in ('true', '1') else 'cmd_vel'"]),
+        # With wheel_drive the commanded turn rate is the real one, so Nav2
+        # is told the rate we actually want (see navigation.launch.py).
+        'wz_max': PythonExpression([
+            "'0.75' if '", LaunchConfiguration('wheel_drive'),
+            "'.lower() in ('true', '1') else ''"])}, 'nav')
+    wheel_drive = _include('localization', 'wheel_drive.launch.py',
+                           switch='wheel_drive')
     mission = _include('mission', 'mission.launch.py', {
         **HARDWARE, 'saga_url': LaunchConfiguration('saga_url'),
-        'saga_token': LaunchConfiguration('saga_token')}, 'mission')
+        'saga_token': LaunchConfiguration('saga_token'),
+        'health_config': PathJoinSubstitution(
+            [FindPackageShare('mission'), 'config', 'health_hardware.yaml'])},
+        'mission')
 
     switches = {
         'apriltag': 'AprilTag detection (rectified), used by /dock_robot to measure each dock',
@@ -147,6 +165,10 @@ def generate_launch_description():
         *[DeclareLaunchArgument(
             name, default_value='true', description=f'Run {what}')
           for name, what in switches.items()],
+        DeclareLaunchArgument(
+            'wheel_drive', default_value='false',
+            description='Run wheel_drive_node (T:1 wheel speeds) and point '
+                        'Nav2 at it, instead of the MCU\'s own T:13'),
         _warn_when('docking:=true with nav:=false: docking needs nav, its '
                    'collision checks use the Nav2 local costmap',
                    on='docking', off='nav'),
@@ -156,6 +178,7 @@ def generate_launch_description():
         _warn_when('mission:=true with nav:=false: the mission sends Nav2 '
                    'goals and has nothing to talk to', on='mission', off='nav'),
         odometry,
+        wheel_drive,
         TimerAction(period=5.0, actions=[apriltag, oak_filter]),
         TimerAction(period=7.0, actions=[localize]),
         TimerAction(period=10.0, actions=[docking]),

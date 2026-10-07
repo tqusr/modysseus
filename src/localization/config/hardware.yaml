@@ -21,3 +21,20 @@ wheel_odometry_node:
     # though the vendor labels them metres. Confirmed by driving ~2.00 m,
     # which gave a 201-count average delta (~1 cm per count).
     encoder_scale: 0.01
+
+# wheel_drive_node: T:1 left/right wheel speeds from a Twist, in place of the
+# MCU's own T:13 kinematics. Opt-in; see scripts/wheel_drive_node.py.
+wheel_drive_node:
+  ros__parameters:
+    port: /dev/ugv02
+    baud: 115200
+    # Keep equal to wheel_odometry_node's wheel_separation above: the
+    # controller and the odometry share one calibration.
+    wheel_separation: 0.4084
+    # 0 = unlimited. The MCU's real ceiling is unmeasured.
+    max_wheel_speed: 0.0
+    # 0 = unlimited: the node passes Nav2's angular velocity through unchanged.
+    max_angular_velocity: 0.0
+    cmd_timeout: 0.5
+    send_rate: 20.0
+    input_topic: cmd_vel_ctrl

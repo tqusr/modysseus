@@ -1,0 +1,23 @@
+# Topics VehicleStatusOK requires to keep arriving on the real robot, as
+# '<topic> <pkg/msg/Type> <max_age_sec>'. One that goes silent for longer than
+# its max age sends the mission to safe stop until it is back (see
+# mission/topic_health.py). Loaded by full_stack_hardware.launch.py.
+#
+# Rates measured on the robot (2026-10-05, drivers only): /scan 10 Hz,
+# /wheel_encoders and /imu 12 Hz, gaps never above 0.11 s. 1.0 s is about ten
+# missed messages: a dead driver, not a hiccup.
+#
+# /oak/points_filtered, not the depth image: it is the small cloud Nav2
+# actually reads, so it proves the whole camera chain, and a raw
+# subscription to it costs little. The depth image is 1.8 MB a frame over UDP.
+#
+# Not watched: /voltage (0.5 Hz, unit not yet known, so no threshold to
+# set) and /detections (AprilTag; docking falls back to the stored pose).
+mission_node:
+  ros__parameters:
+    health_topics:
+      - "/scan sensor_msgs/msg/LaserScan 1.0"
+      - "/wheel_encoders sensor_msgs/msg/JointState 1.0"
+      - "/imu sensor_msgs/msg/Imu 1.0"
+      - "/odometry/filtered nav_msgs/msg/Odometry 1.0"
+      - "/oak/points_filtered sensor_msgs/msg/PointCloud2 2.0"

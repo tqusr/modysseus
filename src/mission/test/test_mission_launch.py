@@ -37,3 +37,13 @@ def test_defaults_are_sim_time_with_string_saga_arguments():
 def test_use_sim_time_false_is_a_bool():
     (node,) = _nodes(use_sim_time='false')
     assert node['inline_parameters']['use_sim_time'] is False
+
+
+def test_no_health_config_by_default():
+    (node,) = _nodes()
+    assert node['parameter_files'] == []
+
+
+def test_health_config_is_loaded_before_the_inline_parameters():
+    (node,) = _nodes(health_config='/some/health.yaml')
+    assert node['parameter_files'] == ['/some/health.yaml']

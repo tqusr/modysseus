@@ -97,13 +97,29 @@ def _as_bool(text):
 def _launch_nodes(context):
     # Default true (simulation); the real robot passes false.
     use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
-    config = os.path.join(
+    config = LaunchConfiguration('params_file').perform(context) or os.path.join(
         get_package_share_directory('navigation'), 'config', 'nav2_params.yaml')
 
     # Unbuffered stdout, matching nav2_bringup's own launch files, so node
     # logs interleave correctly when backgrounded/redirected to a file.
     stdout_linebuf_envvar = SetEnvironmentVariable(
         'RCUTILS_LOGGING_BUFFERED_STREAM', '1')
+
+    # wz_max, when given, replaces every angular-velocity limit in the file at
+    # once (MPPI's wz_max, the rotation shim's pivot rate, the smoother's
+    # limits), so they cannot disagree. Empty keeps the file's values. The
+    # hardware launch uses it with wheel_drive_node, where a commanded rate is
+    # the real rate; the file's 1.5 was tuned for the MCU's own kinematics,
+    # which turned ~2.3x weaker than commanded.
+    wz_text = LaunchConfiguration('wz_max').perform(context).strip()
+    wz = float(wz_text) if wz_text else None
+    controller_wz = ({'FollowPath.wz_max': wz,
+                      'FollowPath.rotate_to_heading_angular_vel': wz}
+                     if wz is not None else {})
+    # velocity_smoother's arrays carry vx, vy, wz; only wz changes.
+    smoother_wz = ({'max_velocity': [0.3, 0.0, wz],
+                    'min_velocity': [-0.15, 0.0, -wz]}
+                   if wz is not None else {})
 
     common_args = {
         'output': 'screen',
@@ -115,7 +131,8 @@ def _launch_nodes(context):
         executable='controller_server',
         name='controller_server',
         remappings=[('cmd_vel', 'cmd_vel_nav')],
-        **common_args,
+        output='screen',
+        parameters=[config, {'use_sim_time': use_sim_time, **controller_wz}],
     )
 
     planner_server = Node(
@@ -135,7 +152,7 @@ def _launch_nodes(context):
 
     # Replan only when the path is blocked or the goal changes; see the
     # bt_navigator comment in nav2_params.yaml.
-    nav_to_pose_bt = os.path.join(
+    nav_to_pose_bt = LaunchConfiguration('bt_xml').perform(context) or os.path.join(
         get_package_share_directory('nav2_bt_navigator'), 'behavior_trees',
         'navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml')
     bt_navigator = Node(
@@ -152,14 +169,22 @@ def _launch_nodes(context):
         executable='velocity_smoother',
         name='velocity_smoother',
         remappings=[('cmd_vel', 'cmd_vel_nav')],
-        **common_args,
+        output='screen',
+        parameters=[config, {'use_sim_time': use_sim_time, **smoother_wz}],
     )
 
+    # cmd_vel_out is where the safety chain ends. Default `cmd_vel` (the
+    # vendor driver / the simulator); `cmd_vel_ctrl` hands it to
+    # localization's wheel_drive_node instead.
     collision_monitor = Node(
         package='nav2_collision_monitor',
         executable='collision_monitor',
         name='collision_monitor',
-        **common_args,
+        output='screen',
+        parameters=[config, {
+            'use_sim_time': use_sim_time,
+            'cmd_vel_out_topic': LaunchConfiguration('cmd_vel_out').perform(context),
+        }],
     )
 
     lifecycle_manager = Node(
@@ -193,5 +218,21 @@ def _launch_nodes(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument(
+            'params_file', default_value='',
+            description='Nav2 parameter file; empty = this package\'s '
+                        'config/nav2_params.yaml (for tuning experiments)'),
+        DeclareLaunchArgument(
+            'cmd_vel_out', default_value='cmd_vel',
+            description='Topic the collision monitor publishes the final '
+                        'velocity on; cmd_vel_ctrl for wheel_drive_node'),
+        DeclareLaunchArgument(
+            'wz_max', default_value='',
+            description='Override every angular-velocity limit (rad/s); '
+                        'empty = the values in nav2_params.yaml'),
+        DeclareLaunchArgument(
+            'bt_xml', default_value='',
+            description='NavigateToPose behavior tree; empty = the "replan only '
+                        'if the path becomes invalid" tree'),
         OpaqueFunction(function=_launch_nodes),
     ])

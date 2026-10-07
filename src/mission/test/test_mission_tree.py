@@ -877,3 +877,63 @@ def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
         assert status == py_trees.common.Status.SUCCESS
     finally:
         rclpy.shutdown()
+
+
+def test_vehicle_status_ok_fails_while_a_health_topic_is_silent():
+    """Nav2 active and map->odom live, but a watched sensor topic has never
+    arrived: FAILURE. Once it arrives (and keeps arriving): SUCCESS."""
+    from sensor_msgs.msg import LaserScan
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_vsok_health_topic")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        _serve_lifecycle_manager_is_active(node)
+        tf_broadcaster = tf2_ros.TransformBroadcaster(node)
+        tf_buffer = tf2_ros.Buffer()
+        tf_listener = tf2_ros.TransformListener(tf_buffer, node, spin_thread=False)
+        behaviour = VehicleStatusOK(
+            "VehicleStatusOK", node, tf_buffer, tf_listener,
+            health_topics=[("/test_vsok/scan", "sensor_msgs/msg/LaserScan", 1.0)])
+
+        # Long enough for the lifecycle and TF halves to come good on their own.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            _broadcast_fake_localization(tf_broadcaster, node)
+            _spin_and_drain(executor, 0.05)
+            assert behaviour.update() == py_trees.common.Status.FAILURE
+        assert behaviour._last_known_active is True
+        assert "/test_vsok/scan" in behaviour._last_fault
+
+        scan = node.create_publisher(LaserScan, "/test_vsok/scan", 10)
+        deadline = time.monotonic() + 5.0
+        status = py_trees.common.Status.FAILURE
+        while time.monotonic() < deadline and status != py_trees.common.Status.SUCCESS:
+            scan.publish(LaserScan())
+            _broadcast_fake_localization(tf_broadcaster, node)
+            _spin_and_drain(executor, 0.05)
+            status = behaviour.update()
+        assert status == py_trees.common.Status.SUCCESS
+        assert behaviour._last_fault is None
+    finally:
+        rclpy.shutdown()
+
+
+def test_stop_robot_zeroes_cmd_vel_ctrl_too():
+    """With wheel_drive on, Nav2 ends in cmd_vel_ctrl; a hold that only covered
+    /cmd_vel would leave the robot driving through a safe stop."""
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_stop_robot_ctrl")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        received = []
+        node.create_subscription(
+            Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
+        behaviour = StopRobot("StopRobot", node, publish_hz=0.001)
+        behaviour.update()
+        _spin_and_drain(executor, 0.2)
+        assert received and all(
+            m.linear.x == 0.0 and m.angular.z == 0.0 for m in received)
+    finally:
+        rclpy.shutdown()

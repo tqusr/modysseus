@@ -10,6 +10,7 @@ from rclpy.time import Time
 from std_srvs.srv import Trigger
 
 from mission.bt_behaviours import BlackboardFlagTrue, CallAction, SetBlackboardFlag, WaitUntil
+from mission.topic_health import TopicFreshness
 from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 
 _logger = logging.getLogger('mission.mission_tree')
@@ -230,7 +231,12 @@ class StopRobot(py_trees.behaviour.Behaviour):
                  hold_timeout_sec=DEFAULT_HOLD_TIMEOUT_SEC):
         super().__init__(name)
         self._node = node
-        self._publisher = node.create_publisher(Twist, '/cmd_vel', 10)
+        # Zero goes to every place a velocity can enter the robot: /cmd_vel (the
+        # vendor driver / simulator) and cmd_vel_ctrl (where Nav2 ends when
+        # localization's wheel_drive_node drives the wheels). Holding only one
+        # would let the other keep driving. An unused topic costs nothing.
+        self._publishers = [node.create_publisher(Twist, topic, 10)
+                            for topic in ('/cmd_vel', '/cmd_vel_ctrl')]
         self._publish_hz = publish_hz
         self._hold_timeout_sec = hold_timeout_sec
         self._timer = None
@@ -268,7 +274,8 @@ class StopRobot(py_trees.behaviour.Behaviour):
         self._publish_zero()
 
     def _publish_zero(self):
-        self._publisher.publish(Twist())
+        for publisher in self._publishers:
+            publisher.publish(Twist())
 
     def _cancel_timer(self):
         self._hold_deadline = None
@@ -430,17 +437,24 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
       - nav2_lifecycle_manager reports its managed navigation nodes active
         (polled via its own is_active std_srvs/Trigger service), and
       - slam_toolbox is actively publishing map->odom (TF lookup, rejecting
-        anything older than max_tf_age_sec).
+        anything older than max_tf_age_sec), and
+      - every topic in `health_topics` (sensor and driver outputs, see
+        topic_health.py) has arrived within its own max age. Empty by
+        default: the hardware launch supplies the list.
     FAILURE otherwise -- including while the lifecycle-manager service
     simply isn't up yet, which is the correct read for "status not OK".
+    Each new failure reason is logged once, when it starts.
     """
 
     def __init__(self, name, node, tf_buffer, tf_listener,
                  lifecycle_manager_service=LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
                  max_tf_age_sec=MAX_TF_AGE_SEC,
-                 poll_timeout_sec=LIFECYCLE_POLL_TIMEOUT_SEC):
+                 poll_timeout_sec=LIFECYCLE_POLL_TIMEOUT_SEC,
+                 health_topics=()):
         super().__init__(name)
         self.node = node
+        self._topics = TopicFreshness(node, health_topics)
+        self._last_fault = None
         self.tf_buffer = tf_buffer
         # Not otherwise referenced -- held here purely so the listener (and
         # its tf/tf_static subscriptions) outlives this call and isn't
@@ -456,11 +470,28 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
         self._last_known_active = False
 
     def update(self):
-        if not self._lifecycle_manager_reports_active():
-            return py_trees.common.Status.FAILURE
+        fault = self._fault()
+        if fault != self._last_fault:
+            if fault is None:
+                self.logger.info("Vehicle status OK")
+            else:
+                self.logger.warning(f"Vehicle status NOT OK: {fault}")
+            self._last_fault = fault
+        return py_trees.common.Status.FAILURE if fault else py_trees.common.Status.SUCCESS
+
+    def _fault(self):
+        """What is wrong right now, or None. The lifecycle poll runs every
+        tick regardless, so its latched result never goes stale behind an
+        earlier failing check."""
+        stale = self._topics.stale_topics()
+        nav_active = self._lifecycle_manager_reports_active()
+        if stale:
+            return f"no recent messages on {', '.join(stale)}"
+        if not nav_active:
+            return "Nav2 lifecycle manager does not report active"
         if not _transform_is_recent(self.tf_buffer, self.node, 'map', 'odom', self.max_tf_age_sec):
-            return py_trees.common.Status.FAILURE
-        return py_trees.common.Status.SUCCESS
+            return "map->odom transform missing or stale"
+        return None
 
     def _lifecycle_manager_reports_active(self):
         """Non-blocking, like CallAction: tree.tick() must never block on a
@@ -743,13 +774,16 @@ def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
     return py_trees.composites.Selector(name="GoToDock", memory=False, children=[at_dock, move_and_dock])
 
 
-def build_mission_tree(node, saga_client, docks):
+def build_mission_tree(node, saga_client, docks, health_topics=()):
+    # `health_topics`: (topic, type_name, max_age_sec) tuples VehicleStatusOK
+    # requires to keep arriving; see topic_health.py.
     # Single shared Buffer/TransformListener for both health-check behaviours
     # below, rather than one pair each -- avoids duplicate /tf, /tf_static
     # subscriptions on the same node for the same data.
     tf_buffer = tf2_ros.Buffer()
     tf_listener = tf2_ros.TransformListener(tf_buffer, node, spin_thread=False)
-    vehicle_status_ok = VehicleStatusOK("VehicleStatusOK", node, tf_buffer, tf_listener)
+    vehicle_status_ok = VehicleStatusOK("VehicleStatusOK", node, tf_buffer, tf_listener,
+                                        health_topics=health_topics)
     localize = Localize("Localize", node, tf_buffer)
 
     have_route = py_trees.composites.Selector(name="Have route", memory=False, children=[

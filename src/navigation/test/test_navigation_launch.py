@@ -42,3 +42,40 @@ def test_nav_to_pose_replans_only_when_the_path_becomes_invalid():
     assert xml.endswith(
         'navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml')
     assert os.path.isfile(xml)
+
+
+def _node(name, **args):
+    return next(n for n in _nodes(**args) if n['name'] == name)
+
+
+def test_wz_max_defaults_to_the_files_values():
+    controller = _node('controller_server')['inline_parameters']
+    smoother = _node('velocity_smoother')['inline_parameters']
+    assert 'FollowPath.wz_max' not in controller
+    assert 'max_velocity' not in smoother
+
+
+def test_wz_max_overrides_every_angular_limit_together():
+    controller = _node('controller_server', wz_max='0.75')['inline_parameters']
+    smoother = _node('velocity_smoother', wz_max='0.75')['inline_parameters']
+    assert controller['FollowPath.wz_max'] == 0.75
+    assert controller['FollowPath.rotate_to_heading_angular_vel'] == 0.75
+    assert list(smoother['max_velocity']) == [0.3, 0.0, 0.75]
+    assert list(smoother['min_velocity']) == [-0.15, 0.0, -0.75]
+
+
+def test_cmd_vel_out_moves_the_end_of_the_safety_chain():
+    default = _node('collision_monitor')['inline_parameters']
+    moved = _node('collision_monitor', cmd_vel_out='cmd_vel_ctrl')['inline_parameters']
+    assert 'cmd_vel_out_topic' in default and default['cmd_vel_out_topic'] == 'cmd_vel'
+    assert moved['cmd_vel_out_topic'] == 'cmd_vel_ctrl'
+
+
+def test_the_files_limits_the_override_replaces_are_the_ones_we_think():
+    """If the file's wz or vx change, the override's [0.3, 0, wz] must follow."""
+    import yaml
+    with open(os.path.join(PKG, 'config', 'nav2_params.yaml')) as f:
+        params = yaml.safe_load(f)
+    smoother = params['velocity_smoother']['ros__parameters']
+    assert smoother['max_velocity'][:2] == [0.3, 0.0]
+    assert smoother['min_velocity'][:2] == [-0.15, 0.0]

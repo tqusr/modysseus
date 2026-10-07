@@ -156,3 +156,42 @@ def test_mission_without_nav_warns():
 
 def test_no_warnings_when_dependents_are_off_too():
     assert _warnings(nav='false', docking='false', mission='false') == []
+
+
+def test_mission_node_loads_the_hardware_health_topics():
+    nodes = {n['name']: n for n in _nodes()}
+    (path,) = nodes['mission_node']['parameter_files']
+    assert path.endswith(os.path.join('mission', 'config', 'health_hardware.yaml'))
+
+
+def _nav_include_args(**args):
+    return next(i for kind, i in _include_infos(**args)
+                if kind == 'include_info' and i['file'].endswith('navigation.launch.py'))['args']
+
+
+def _include_infos(**args):
+    description = h.load_launch_module(LAUNCH_PATH).generate_launch_description()
+    context = h.make_context(description, **args)
+    for e in h.expand(description.entities, context):
+        if isinstance(e, TimerAction):
+            for a in h.expand(e.actions, context):
+                if isinstance(a, IncludeLaunchDescription):
+                    yield 'include_info', h.describe_include(a, context)
+
+
+def test_wheel_drive_is_off_by_default():
+    runs = _run()
+    assert not any(kind == 'include' and f.endswith('wheel_drive.launch.py')
+                   for kind, f in runs if kind == 'include')
+    nav = _nav_include_args()
+    assert nav['cmd_vel_out'] == 'cmd_vel'
+    assert nav['wz_max'] == ''
+
+
+def test_wheel_drive_starts_the_node_and_retargets_nav2():
+    runs = _run(wheel_drive='true')
+    assert any(kind == 'include' and f.endswith('wheel_drive.launch.py')
+               for kind, f in runs)
+    nav = _nav_include_args(wheel_drive='true')
+    assert nav['cmd_vel_out'] == 'cmd_vel_ctrl'
+    assert float(nav['wz_max']) == 0.75
