@@ -1,7 +1,10 @@
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from visualization_msgs.msg import MarkerArray
 
+from mission.dock_markers import build_dock_markers
 from mission.docks import load_docks
 from mission.mission_tree import build_mission_tree
 from mission.saga_client import SagaApi
@@ -22,6 +25,12 @@ class MissionNode(Node):
             self.get_parameter('saga_token').value,
         )
         docks = load_docks(self.get_parameter('docks_file').value)
+
+        # Latched, so Foxglove/RViz get the markers whenever they subscribe.
+        self._dock_markers_pub = self.create_publisher(
+            MarkerArray, '~/dock_markers',
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self._dock_markers_pub.publish(build_dock_markers(docks))
 
         root = build_mission_tree(self, saga_client, docks)
         # py_trees_ros.trees.BehaviourTree (not plain py_trees.trees.BehaviourTree) is the
