@@ -182,7 +182,7 @@ controller_server:
       CostCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 3.81
+        cost_weight: 6.0   # was 3.81: hold a bigger margin from obstacles
         near_collision_cost: 253
         critical_cost: 300.0
         # false, not true: with a radius-only footprint (robot_radius below,
@@ -466,13 +466,15 @@ local_costmap:
           clearing: true
           marking: true
       # Wide, gentle gradient so the planner prefers open space over narrow
-      # gaps: cost = 252 * exp(-5 * (d - 0.18)) gives ~140 at 0.3 m from an
-      # obstacle, ~50 at 0.5 m, ~30 at 0.6 m. The old 0.3 m radius with
-      # factor 3.0 left almost no cost beyond the robot radius, so a gap
-      # barely wider than the robot looked as good as open floor.
+      # gaps: cost = 252 * exp(-3 * (d - 0.18)) gives ~176 at 0.3 m from an
+      # obstacle, ~96 at 0.5 m, ~71 at 0.6 m. Was 5.0 (~138 / ~50 / ~30):
+      # NavFn weighs cost only lightly, so paths still hugged obstacles and
+      # the robot's pose error put it inside the inscribed radius. A smaller
+      # factor decays slower, i.e. keeps cost high further out, without
+      # growing the inflated zone (docks are 0.3 m apart).
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 3.0
         inflation_radius: 0.6
       always_send_full_costmap: true
 
@@ -538,12 +540,14 @@ global_costmap:
           clearing: true
           marking: true
       # Wide, gentle gradient so the planner prefers open space over narrow
-      # gaps: cost = 252 * exp(-5 * (d - 0.18)) gives ~140 at 0.3 m from an
-      # obstacle, ~50 at 0.5 m, ~30 at 0.6 m. The old 0.3 m radius with
-      # factor 3.0 left almost no cost beyond the robot radius, so a gap
-      # barely wider than the robot looked as good as open floor.
+      # gaps: cost = 252 * exp(-3 * (d - 0.18)) gives ~176 at 0.3 m from an
+      # obstacle, ~96 at 0.5 m, ~71 at 0.6 m. Was 5.0 (~138 / ~50 / ~30):
+      # NavFn weighs cost only lightly, so paths still hugged obstacles and
+      # the robot's pose error put it inside the inscribed radius. A smaller
+      # factor decays slower, i.e. keeps cost high further out, without
+      # growing the inflated zone (docks are 0.3 m apart).
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
+        cost_scaling_factor: 3.0
         inflation_radius: 0.6
       always_send_full_costmap: true
