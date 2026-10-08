@@ -201,6 +201,9 @@ class TagDockServer(Node):
         # docking_server cannot undock from it, so an undock request just clears
         # this and succeeds; the next navigation goal drives away.
         self._nav2_docked = None
+        # (dock, measured pose) of the dock docking_server last reversed into, or
+        # None. Undocking checks that dock's pre-dock pose before backing out.
+        self._docked_at = None
         self._fallback = bool(p('predock_fallback'))
         self._predock_radius = float(p('predock_clear_radius_m'))
         # Collects costmaps during a bay check; None otherwise, so it costs
@@ -401,6 +404,7 @@ class TagDockServer(Node):
                 raise _Abort(Result.DOCK_NOT_IN_DB,
                              f'dock {request.dock_id!r} is not in docking.yaml')
             self._nav2_docked = None
+            self._docked_at = None
             with self._lock:
                 self._target_tag = dock.tag_id
                 self._window.clear()
@@ -494,7 +498,10 @@ class TagDockServer(Node):
         # Step 4: Nav2 turns the robot onto the staging pose, then the docking
         # controller reverses in at the limits in docking.yaml.
         self._turn_to_staging(goal_handle, dock, estimate, request)
-        return self._dock(goal_handle, dock, estimate)
+        result = self._dock(goal_handle, dock, estimate)
+        if result.success:
+            self._docked_at = (dock, estimate)
+        return result
 
     def _predock_taken(self, goal_handle, dock, estimate: Pose2D) -> bool:
         """Returns whether something stands on the pre-dock pose.
@@ -505,10 +512,19 @@ class TagDockServer(Node):
         """
         if self._in_predock_box(estimate)[0]:
             return False
+        taken = self._predock_occupied(goal_handle, dock, estimate)
+        return bool(taken)
+
+    def _predock_occupied(self, goal_handle, dock, estimate: Pose2D):
+        """Returns whether the costmap shows something on the pre-dock pose.
+
+        Returns:
+            True if taken, False if free, None if no costmap arrived.
+        """
         predock = predock_pose_for(estimate, self._standoff)
         snapshots = self._costmap_snapshots(goal_handle)
         if not snapshots:
-            return False
+            return None
         counts = [points_near(points, predock, self._predock_radius)
                   for points in snapshots]
         taken = bay_occupied(counts, self._bay_min_cells)
@@ -864,6 +880,16 @@ class TagDockServer(Node):
                 self._nav2_docked = None
                 goal_handle.succeed()
                 return UndockRobot.Result(success=True)
+            if self._docked_at is not None:
+                dock, estimate = self._docked_at
+                if self._predock_occupied(goal_handle, dock, estimate) is not False:
+                    self.get_logger().warning(
+                        f'undock: the pre-dock pose of dock {dock.letter} is not '
+                        f'free (or unknown); not backing out, now undocked. The '
+                        f'next goal leaves the dock with Nav2')
+                    self._docked_at = None
+                    goal_handle.succeed()
+                    return UndockRobot.Result(success=True)
             if not self._undock_client.wait_for_server(timeout_sec=5.0):
                 raise _Abort(Result.UNKNOWN, 'docking_server undock not available')
             handle = self._wait(goal_handle, self._undock_client.send_goal_async(
@@ -873,6 +899,7 @@ class TagDockServer(Node):
             response = self._wait(goal_handle, handle.get_result_async(), handle)
             result = response.result
             if response.status == GoalStatus.STATUS_SUCCEEDED and result.success:
+                self._docked_at = None
                 goal_handle.succeed()
             else:
                 self.get_logger().error(

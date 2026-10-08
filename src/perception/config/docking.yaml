@@ -1,7 +1,7 @@
 ### opennav_docking's `docking_server` (nav2_util::LifecycleNode) parameters.
 #
 # Dock x/y are derived from `src/mission/config/docks.yaml`, the source of truth
-# for where the docks are. Each pose here is that dock's pose moved 0.126 m
+# for where the docks are. Each pose here is that dock's pose moved 0.101 m
 # outward along its approach heading, because docks.yaml's dock_pose is the
 # dock's back wall and this file's pose is where the robot must end up (see the
 # chassis standoff note on the `docks:` block). If you change a dock's x/y in
@@ -102,9 +102,9 @@ docking_server:
             # offset puts staging behind dock_pose along its heading, as
             # opennav_docking documents. The yaw offset is pi because the robot
             # reverses in, facing away from the dock (nose-first uses 0).
-            # -0.624 is tag_dock_server's predock_standoff_m: 0.75 m from the
-            # wall less the 0.126 m chassis standoff.
-            staging_x_offset: -0.624
+            # -0.649 is tag_dock_server's predock_standoff_m: 0.75 m from the
+            # wall less the 0.101 m docking offset (see the poses below).
+            staging_x_offset: -0.649
             staging_yaw_offset: 3.141592653589793
 
         # The 8 arena docks. `pose` is [x, y, theta] in `frame`, with theta =
@@ -112,12 +112,18 @@ docking_server:
         # header). `id` is the AprilTag id, unused by SimpleChargingDock in
         # fixed-pose mode and kept for documentation.
         #
-        # Chassis standoff (0.126 m), measured 2026-10-02. x/y are not a verbatim
-        # copy of docks.yaml's dock_pose: each is moved 0.126 m outward, back
-        # along the approach heading:
+        # Docking offset (0.101 m; DOCKING_CHASSIS_OFFSET_M in dock_capture.py).
+        # The chassis contact distance is 0.126 m, measured 2026-10-02 (the text
+        # below). The offset is 0.025 m less: on the robot, docking_server stopped
+        # about 10 cm from the wall, once within `docking_threshold`, and about
+        # 5 cm is wanted. 0.076 (0.05 less) was tried first; this is halfway
+        # back, for more margin. Aiming past the contact point leans on that
+        # threshold to stop in time, so check the gap on several docks. x/y are
+        # not a verbatim copy of docks.yaml's dock_pose: each is moved 0.101 m
+        # outward, back along the approach heading:
         #
-        #     pose.x = docks.yaml dock_pose.x - 0.126 * cos(theta)
-        #     pose.y = docks.yaml dock_pose.y - 0.126 * sin(theta)
+        #     pose.x = docks.yaml dock_pose.x - 0.101 * cos(theta)
+        #     pose.y = docks.yaml dock_pose.y - 0.101 * sin(theta)
         #
         # (theta being this file's, into the wall, so subtracting walks back out
         # into the room). It is uniform across all 8 docks, and docks.yaml stays
@@ -143,14 +149,14 @@ docking_server:
         # wrong. The target is now a pose the robot can reach, so it stops just
         # short of contact.
         docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
-        A: {type: "arena_dock", frame: "map", pose: [3.035, 0.891, -0.0404], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [3.087, -0.492, 0.06415], id: "1"}
-        C: {type: "arena_dock", frame: "map", pose: [2.030, -0.642, -1.52166], id: "2"}
-        D: {type: "arena_dock", frame: "map", pose: [0.126, -0.992, -1.53562], id: "3"}
-        E: {type: "arena_dock", frame: "map", pose: [-1.165, -0.874, -3.10042], id: "4"}
-        F: {type: "arena_dock", frame: "map", pose: [1.902, 0.429, 0.15974], id: "5"}
-        G: {type: "arena_dock", frame: "map", pose: [1.059, -0.743, -1.56092], id: "6"}
-        H: {type: "arena_dock", frame: "map", pose: [-1.153, -0.124, -3.11265], id: "7"}
+        A: {type: "arena_dock", frame: "map", pose: [3.060, 0.890, -0.0404], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [3.112, -0.491, 0.06415], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [2.031, -0.667, -1.52166], id: "2"}
+        D: {type: "arena_dock", frame: "map", pose: [0.153, -0.994, -1.57273], id: "3"}
+        E: {type: "arena_dock", frame: "map", pose: [-1.190, -0.875, -3.10042], id: "4"}
+        F: {type: "arena_dock", frame: "map", pose: [1.926, 0.433, 0.15974], id: "5"}
+        G: {type: "arena_dock", frame: "map", pose: [1.059, -0.768, -1.56092], id: "6"}
+        H: {type: "arena_dock", frame: "map", pose: [-1.178, -0.124, -3.11265], id: "7"}
         # Checked on a second dock (G, -Y wall, theta -pi/2): pose.y = -2.992 -
         # 0.126 * sin(-pi/2) = -2.866, so the nose lands at -2.9891, again 3 mm
         # short of the wall.
@@ -286,9 +292,9 @@ tag_dock_server:
     ros__parameters:
         # Pre-dock pose: this far straight back from the dock pose, putting it
         # 0.75 m from the wall, the middle of the box below ((0.5 + 1.0) / 2):
-        # 0.75 less the 0.126 m chassis standoff. Matches
+        # 0.75 less the 0.101 m docking offset. Matches
         # arena_dock.staging_x_offset and docks.yaml's staging poses.
-        predock_standoff_m: 0.624
+        predock_standoff_m: 0.649
         # Measure a tag only within this range (a 0.10 m tag is ~45 px wide at
         # 2 m), from detections and TF younger than max_detection_age_sec, and
         # trust it once samples_required measurements within sample_window_sec

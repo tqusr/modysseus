@@ -261,7 +261,7 @@ def test_capture_from_tag_transform_reproduces_dock_a(dock_a_capture):
     assert capture.staging_pose.y == pytest.approx(-1.500)
     assert capture.staging_pose.theta == pytest.approx(0.0, abs=1e-9)
     # And docking.yaml's own derived entry for the same dock.
-    assert capture.docking_pose.x == pytest.approx(2.866)
+    assert capture.docking_pose.x == pytest.approx(2.891)
     assert capture.docking_pose.y == pytest.approx(-1.500)
     assert capture.docking_pose.theta == pytest.approx(0.0, abs=1e-9)
 
@@ -304,14 +304,14 @@ EXPECTED_DOCKS_LINES = {
 }
 
 EXPECTED_DOCKING_LINES = {
-    'A': 'A: {type: "arena_dock", frame: "map", pose: [2.866, -1.500, 0.0], id: "0"}',
-    'B': 'B: {type: "arena_dock", frame: "map", pose: [2.866, 1.500, 0.0], id: "1"}',
-    'C': 'C: {type: "arena_dock", frame: "map", pose: [1.500, 2.866, 1.5708], id: "2"}',
-    'D': 'D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.866, 1.5708], id: "3"}',
-    'E': 'E: {type: "arena_dock", frame: "map", pose: [-2.866, 1.500, 3.14159], id: "4"}',
-    'F': 'F: {type: "arena_dock", frame: "map", pose: [-2.866, -1.500, 3.14159], id: "5"}',
-    'G': 'G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.866, -1.5708], id: "6"}',
-    'H': 'H: {type: "arena_dock", frame: "map", pose: [1.500, -2.866, -1.5708], id: "7"}',
+    'A': 'A: {type: "arena_dock", frame: "map", pose: [2.891, -1.500, 0.0], id: "0"}',
+    'B': 'B: {type: "arena_dock", frame: "map", pose: [2.891, 1.500, 0.0], id: "1"}',
+    'C': 'C: {type: "arena_dock", frame: "map", pose: [1.500, 2.891, 1.5708], id: "2"}',
+    'D': 'D: {type: "arena_dock", frame: "map", pose: [-1.500, 2.891, 1.5708], id: "3"}',
+    'E': 'E: {type: "arena_dock", frame: "map", pose: [-2.891, 1.500, 3.14159], id: "4"}',
+    'F': 'F: {type: "arena_dock", frame: "map", pose: [-2.891, -1.500, 3.14159], id: "5"}',
+    'G': 'G: {type: "arena_dock", frame: "map", pose: [-1.500, -2.891, -1.5708], id: "6"}',
+    'H': 'H: {type: "arena_dock", frame: "map", pose: [1.500, -2.891, -1.5708], id: "7"}',
 }
 
 
@@ -374,8 +374,8 @@ FIXTURE_DOCKING_YAML = """\
 docking_server:
     ros__parameters:
         docks: ["A", "B"]
-        A: {type: "arena_dock", frame: "map", pose: [2.866, -1.500, 0.0], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [2.866, 1.500, 0.0], id: "1"}
+        A: {type: "arena_dock", frame: "map", pose: [2.891, -1.500, 0.0], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [2.891, 1.500, 0.0], id: "1"}
         # a trailing comment about dock A
 """
 
@@ -453,7 +453,7 @@ def test_apply_capture_writes_both_files(yaml_pair):
             'staging_pose: {x: 1.984, y: -5.678, theta: 3.14159}}'
             in docks.read_text())
     assert ('        B: {type: "arena_dock", frame: "map", '
-            'pose: [1.360, -5.678, 3.14159], id: "1"}'
+            'pose: [1.335, -5.678, 3.14159], id: "1"}'
             in docking.read_text())
     # The other dock, and the comments, are untouched in both files.
     assert 'A: {tag_id: 0, dock_pose: {x: 2.992' in docks.read_text()

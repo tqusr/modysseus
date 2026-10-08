@@ -51,8 +51,8 @@ from tf2_ros import TransformBroadcaster  # noqa: E402
 
 import perception.tag_dock_server as server_module  # noqa: E402
 from perception.dock_capture import tag_tf_frame  # noqa: E402
-from perception.tag_docking import predock_pose_for  # noqa: E402
-from perception.dock_capture import Pose2D  # noqa: E402
+from perception.tag_docking import PREDOCK_STANDOFF_M, predock_pose_for  # noqa: E402
+from perception.dock_capture import DOCKING_CHASSIS_OFFSET_M, Pose2D  # noqa: E402
 from test_dock_capture import upright_wall_tag_quaternion  # noqa: E402
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -168,8 +168,8 @@ class Rig(Node):
         for i in range(0, 4):                               # wings, flared 45 degrees
             local.append((i * 0.05, 0.2 + i * 0.05))
             local.append((i * 0.05, -0.2 - i * 0.05))
-        return [(stored.x + (0.126 - out) * cos_t - lateral * sin_t,
-                 stored.y + (0.126 - out) * sin_t + lateral * cos_t)
+        return [(stored.x + (DOCKING_CHASSIS_OFFSET_M - out) * cos_t - lateral * sin_t,
+                 stored.y + (DOCKING_CHASSIS_OFFSET_M - out) * sin_t + lateral * cos_t)
                 for out, lateral in local]
 
     def _publish_costmap(self):
@@ -254,7 +254,7 @@ class Rig(Node):
     def _bay_point(self, out, lateral):
         stored = _stored_pose()
         cos_t, sin_t = math.cos(stored.theta), math.sin(stored.theta)
-        along = 0.126 - out                                # + = towards the wall
+        along = DOCKING_CHASSIS_OFFSET_M - out                                # + = towards the wall
         return (stored.x + along * cos_t - lateral * sin_t,
                 stored.y + along * sin_t + lateral * cos_t)
 
@@ -503,7 +503,7 @@ def test_a_tag_that_is_never_seen_docks_against_the_stored_pose(sequence):
 
 def _park_on_predock_and_start_outside_the_box(run):
     stored = _stored_pose()
-    run.rig.robot = predock_pose_for(stored, 0.624 + 0.7)   # 0.7 m behind the pre-dock pose
+    run.rig.robot = predock_pose_for(stored, PREDOCK_STANDOFF_M + 0.7)   # 0.7 m behind the pre-dock pose
     run.rig.put_obstacle_on_predock()
 
 
@@ -544,7 +544,7 @@ def test_a_taken_predock_pose_and_an_occupied_bay_waits(sequence):
 
 def test_a_free_predock_pose_still_takes_the_normal_route(sequence):
     run = sequence
-    run.rig.robot = predock_pose_for(_stored_pose(), 0.624 + 0.7)
+    run.rig.robot = predock_pose_for(_stored_pose(), PREDOCK_STANDOFF_M + 0.7)
     response = result_of(send_goal(run)[1])
     assert response.result.success
     assert run.rig.events == ['nav', 'nav', 'dock']
@@ -591,3 +591,30 @@ def test_a_new_docking_clears_the_nav2_flag(sequence):
     assert result_of(send_goal(run)[1]).result.success      # normal
     assert undock(run).result.success
     assert run.rig.undock_calls == 1
+
+
+def test_undocking_with_another_robot_on_the_predock_pose_just_reports_undocked(sequence):
+    run = sequence
+    assert result_of(send_goal(run)[1]).result.success      # normal dock
+    run.rig.put_obstacle_on_predock()
+    run.rig.events.clear()
+    parked = run.rig.robot
+
+    response = undock(run)
+    assert response.status == GoalStatus.STATUS_SUCCEEDED and response.result.success
+    assert run.rig.undock_calls == 0, 'must not back out into the other robot'
+    assert run.rig.events == [] and run.rig.robot == parked, 'the robot does not move'
+
+    # The dock is spent: with nothing remembered, a second undock goes to docking_server.
+    assert undock(run).result.success
+    assert run.rig.undock_calls == 1
+
+
+def test_undocking_without_a_costmap_does_not_back_out_blind(sequence):
+    run = sequence
+    assert result_of(send_goal(run)[1]).result.success
+    run.rig.costmap_enabled = False
+    time.sleep(0.6)                 # lets a costmap already in flight arrive and age out
+
+    assert undock(run).result.success
+    assert run.rig.undock_calls == 0

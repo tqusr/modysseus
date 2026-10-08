@@ -136,10 +136,12 @@ def test_a_docking_pose_round_trips_through_the_capture(theta):
 
 
 def test_the_capture_puts_the_wall_ahead_and_the_staging_pose_in_the_middle_of_the_box():
-    docking = Pose2D(0.0, 0.0, 0.0)           # heading +x, into a wall at x = 0.126
+    docking = Pose2D(0.0, 0.0, 0.0)           # heading +x, wall DOCKING_CHASSIS_OFFSET_M ahead
     capture = capture_from_docking_pose(0, docking)
-    assert (capture.dock_pose.x, capture.dock_pose.y) == pytest.approx((0.126, 0.0))
-    assert capture.staging_pose.x == pytest.approx(0.126 - PREDOCK_TAG_DISTANCE_M)
+    assert (capture.dock_pose.x, capture.dock_pose.y) == pytest.approx(
+        (DOCKING_CHASSIS_OFFSET_M, 0.0))
+    assert capture.staging_pose.x == pytest.approx(
+        DOCKING_CHASSIS_OFFSET_M - PREDOCK_TAG_DISTANCE_M)
     assert capture.staging_pose == staging_pose_for(capture.dock_pose)
 
 

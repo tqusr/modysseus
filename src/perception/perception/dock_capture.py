@@ -68,10 +68,13 @@ PREDOCK_TAG_DISTANCE_M = 0.75
 # the dock's back wall (docks.yaml's dock_pose).
 STAGING_STANDOFF_M = PREDOCK_TAG_DISTANCE_M
 
-# Chassis standoff between `docks.yaml`'s `dock_pose` (the back wall) and
-# docking.yaml's `pose` (where the robot ends up). Measured live at dock A (see
-# the docking.yaml header); only re-applied here.
-DOCKING_CHASSIS_OFFSET_M = 0.126
+# Standoff between `docks.yaml`'s `dock_pose` (the back wall) and docking.yaml's
+# `pose` (where the robot ends up). The chassis touches the wall at 0.126 m
+# (measured live at dock A, see the docking.yaml header). This is 0.025 m less:
+# docking_server stops once within `docking_threshold` of the pose, and the robot
+# was stopping about 10 cm from the wall where about 5 cm is wanted. 0.076 (0.05
+# less) was tried first; this is halfway back to leave more margin.
+DOCKING_CHASSIS_OFFSET_M = 0.101
 
 # The arena's fixed tag id to dock letter table: 8 docks, 8 tags, as in
 # `docks.yaml`'s `tag_id` fields.
