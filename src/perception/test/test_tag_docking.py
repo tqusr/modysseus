@@ -1,7 +1,6 @@
-"""Unit tests for perception.tag_docking -- the pure logic behind
-`tag_dock_server` (which answers /dock_robot).
+"""Unit tests for perception.tag_docking, the logic behind `tag_dock_server`.
 
-Plain Python only, like test_dock_capture.py: no rclpy, tf2 or ROS graph.
+Plain Python, like test_dock_capture.py: no rclpy, tf2 or ROS graph.
 """
 
 import math
@@ -95,9 +94,10 @@ def test_yaw_from_quaternion_round_trips():
 
 @pytest.mark.parametrize('outward_theta', [-3.1, -1.6, -0.08, 0.0, 1.55, 3.0])
 def test_docking_pose_maths_is_frame_independent(outward_theta):
-    """A tag converted to a docking pose in odom and then moved to map equals
-    the same tag converted in map. The server relies on this to measure in
-    odom with capture_from_tag_transform (written for map)."""
+    """A tag converted in odom and then moved to map equals the same tag converted in map.
+
+    The server relies on this to measure in odom with capture_from_tag_transform
+    (written for map)."""
     map_to_odom = Pose2D(0.31, -0.12, 0.2)
     tag_in_odom = Pose2D(-0.9, -1.2, outward_theta)
     tag_in_map = compose(map_to_odom, tag_in_odom)
@@ -136,10 +136,11 @@ def test_predock_is_straight_back_from_the_dock(theta):
 
 
 def test_predock_matches_capture_staging_convention():
-    """capture_dock_pose's docks.yaml staging pose sits 0.75 m out from the
-    dock WALL; the pre-dock sits 0.624 m back from the ROBOT's docked pose,
-    which is itself 0.126 m out from the wall: the same place. Both share the
-    approach heading."""
+    """capture_dock_pose's staging pose and the pre-dock pose are the same place.
+
+    The docks.yaml staging pose is 0.75 m out from the dock wall. The pre-dock is
+    0.624 m back from the robot's docked pose, itself 0.126 m out from the wall.
+    Both share the approach heading."""
     capture = capture_from_tag_transform(4, (0.0, 0.0), wall_tag_quaternion(0.0))
     predock = predock_pose_for(capture.docking_pose)
     assert predock.theta == pytest.approx(capture.staging_pose.theta)

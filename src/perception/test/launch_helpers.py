@@ -1,19 +1,17 @@
-"""Evaluate a launch description in-process, without starting any node.
+"""Evaluates a launch description in-process, without starting any node.
 
-Used by the launch-description tests of this package and of `localization`
-(whose hardware mapping launch includes perception's apriltag launch).
+Used by the launch tests of this package and of `localization` (whose hardware
+mapping launch includes perception's apriltag launch).
 
-Technique: a `LaunchContext` is filled with the launch configurations the
-description declares (their defaults, then the test's overrides). Entities
-whose content depends on those values are `OpaqueFunction`s; calling
-`execute(context)` on one returns the actions it builds. Nothing is ever
-passed to a launch service, so no process starts and no ROS graph is needed.
-`Node` keeps its remappings and parameters in private attributes until it is
-executed, so `describe_node` reads those, evaluating their substitutions.
+A `LaunchContext` is filled with the launch configurations the description
+declares (defaults, then the test's overrides). Entities that depend on them are
+`OpaqueFunction`s, and `execute(context)` returns the actions they build.
+Nothing goes to a launch service, so no process starts and no ROS graph is
+needed. `Node` keeps its remappings and parameters in private attributes until
+executed, so `describe_node` reads those and evaluates their substitutions.
 
-The name-mangled private attributes were checked against launch 3.4.11 and
-launch_ros 0.26.12 (ROS Jazzy); a different version that renames them fails
-loudly with an AttributeError rather than passing silently.
+The name-mangled attributes were checked against launch 3.4.11 and launch_ros
+0.26.12 (Jazzy); a version that renames them fails with an AttributeError.
 """
 
 import importlib.util
@@ -101,11 +99,11 @@ def describe_node(node, context):
 
 
 def describe_include(include, context):
-    """An IncludeLaunchDescription's file path and its launch arguments.
+    """Returns an IncludeLaunchDescription's file path and launch arguments.
 
-    Arguments and location may be plain strings or substitutions; both are
-    normalised. `location` is read from the private attribute because the
-    public property only prints the substitutions until the file is loaded.
+    Arguments and location may be strings or substitutions; both are normalised.
+    `location` is read from the private attribute because the public property
+    prints only the substitutions until the file is loaded.
     """
     def text(value):
         return perform_substitutions(

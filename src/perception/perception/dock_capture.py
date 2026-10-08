@@ -1,65 +1,56 @@
-"""Pure geometry + YAML-editing logic behind `ros2 run perception capture_dock_pose`.
+"""Pure geometry and YAML-editing logic behind `ros2 run perception capture_dock_pose`.
 
-NOTHING HERE IMPORTS rclpy, tf2_ros OR apriltag_msgs, on purpose. Every number
-this feature writes into `mission/config/docks.yaml` and
-`perception/config/docking.yaml` is computed by a plain function in this
-module, so the whole conversion -- tag TF -> dock_pose -> staging_pose ->
-opennav_docking pose -> the exact text of one YAML line -- is unit-testable
-without a ROS graph, a TF broadcaster or a camera (see
-`perception/test/test_dock_capture.py`). `capture_dock_pose.py` is then a thin
-ROS shell: subscribe, look up TF, call in here, print.
+Imports no rclpy, tf2_ros or apriltag_msgs. Every number written into
+`mission/config/docks.yaml` and `perception/config/docking.yaml` comes from a
+plain function here, so the whole conversion (tag TF to dock_pose to
+staging_pose to opennav_docking pose to the text of one YAML line) is
+unit-testable without a ROS graph or camera (see
+`perception/test/test_dock_capture.py`). `capture_dock_pose.py` is a thin ROS
+shell: subscribe, look up TF, call in here, print.
 
-THE ORIENTATION CONVENTION, AND WHERE IT COMES FROM.
+Orientation convention. `docks.yaml`'s `dock_pose.theta` is the dock tag's
+outward (room-facing) normal, pointing from the wall into the arena. Getting
+that backwards is a bug class already hit in this repo (see the header of
+`perception/config/docking.yaml` for the pi-rotation false start), so the
+mapping from the tag's TF orientation to that angle was derived, not assumed:
 
-`docks.yaml`'s `dock_pose.theta` is the dock/tag's own OUTWARD (room-facing)
-normal: the direction pointing away from the wall the dock is mounted on, out
-into the arena. Getting that backwards is a real, already-hit bug class in
-this repo (see `perception/config/docking.yaml`'s header comment for the
-pi-rotation false start it cost), so the mapping from an AprilTag's TF
-orientation to that angle was DERIVED, not assumed:
-
-1. `apriltag_ros` 3.4.0 (the version installed at /opt/ros/jazzy) estimates
-   each tag's pose with `pnp()`, which hands `cv::solvePnP` these object
-   points, in this order (read out of the installed `libAprilTagNode.so`,
-   since only the binary ships -- no sources in the share directory):
+1. `apriltag_ros` 3.4.0 (installed at /opt/ros/jazzy) estimates each tag pose
+   with `pnp()`, which gives `cv::solvePnP` these object points (read out of
+   the installed `libAprilTagNode.so`; only the binary ships):
 
        objectPoints = [(-s,-s,0), (+s,-s,0), (+s,+s,0), (-s,+s,0)],
        s = tagsize/2
 
-   paired index-for-index with `det->p[0..3]`, the detected corner pixels.
+   paired index-for-index with the detected corner pixels `det->p[0..3]`.
 
-2. `apriltag` itself (probed offline: render `tag36h11` id 0 with the
-   library's own `apriltag_to_image()`, upscale, detect) puts those corners
-   at, for an upright tag as a human looking at it sees it:
+2. `apriltag` puts those corners (probed offline by rendering `tag36h11` id 0
+   with `apriltag_to_image()`, upscaling and detecting), for an upright tag as
+   a viewer sees it, at:
 
        p[0] = bottom-left, p[1] = bottom-right,
        p[2] = top-right,   p[3] = top-left
 
-   which also matches `apriltag.h`'s documented ideal-tag corner order
-   ((-1,1), (1,1), (1,-1), (-1,-1), i.e. +y of the homography's ideal frame
-   points DOWN the image).
+   This matches `apriltag.h`'s ideal-tag corner order ((-1,1), (1,1), (1,-1),
+   (-1,-1); +y of the homography's ideal frame points down the image).
 
-3. Composing 1 and 2: the tag's own frame has +x to the viewer's RIGHT and +y
-   UP as seen facing the tag, hence (right-handed) +z OUT OF THE TAG'S FACE,
-   toward whoever is looking at it. `apriltag_ros` broadcasts that pose
-   unmodified as the TF `<camera optical frame> -> <tag frame>` (its
-   `tf2::toMsg<apriltag_pose_t, Transform>` is a plain rotation-matrix ->
-   quaternion conversion, no axis remapping).
+3. Combining 1 and 2, the tag frame has +x to the viewer's right and +y up, so
+   (right-handed) +z points out of the tag's face toward the viewer.
+   `apriltag_ros` broadcasts that pose unmodified as the TF `<camera optical
+   frame> -> <tag frame>` (a plain rotation-matrix to quaternion conversion).
 
-So for a wall-mounted dock tag facing into the room, the tag frame's local +z
-axis IS the outward/room-facing normal, and
+For a wall-mounted tag facing the room, the tag's local +z is the outward
+normal, so
 
     dock_pose.theta = atan2(z_axis.y, z_axis.x)   (z_axis expressed in `map`)
 
-which is what `tag_outward_theta()` computes. Cross-checked end-to-end against
-`cv2.solvePnP` for dock A's real geometry -- see
+which is `tag_outward_theta()`. It is cross-checked against `cv2.solvePnP` for
+dock A's geometry in
 `test_dock_capture.py::test_solvepnp_round_trip_reproduces_dock_a_theta`.
 
-!!! STILL UNVERIFIED AGAINST A LIVE TAG !!! Everything above is derived from
-the installed binaries and libraries, offline. It has NOT been confirmed
-against a real `/detections` + TF stream. Capture dock A (tag id 0) first and
-compare against its known-good entry before trusting the rest --
-see this feature's report for the step-by-step procedure.
+STILL UNVERIFIED AGAINST A LIVE TAG. All of this was derived offline from the
+installed binaries and libraries and has not been confirmed against a real
+`/detections` and TF stream. Capture dock A (tag id 0) first and compare it with
+its known-good entry before trusting the rest.
 """
 
 import math
@@ -68,70 +59,59 @@ import re
 from dataclasses import dataclass
 
 
-#: Distance from a dock's back wall to the PRE-DOCK pose: the middle of the
-#: acceptable pre-dock box (`predock_min_tag_distance_m` 0.5 to
-#: `predock_max_tag_distance_m` 1.0 in docking.yaml), so a Nav2 goal that lands
-#: anywhere near it is inside the box.
+# Distance from a dock's back wall to the pre-dock pose: the middle of the
+# acceptable box (`predock_min_tag_distance_m` 0.5 to `predock_max_tag_distance_m`
+# 1.0 in docking.yaml), so a Nav2 goal landing near it is inside the box.
 PREDOCK_TAG_DISTANCE_M = 0.75
 
-#: Standoff used for `docks.yaml`'s `staging_pose`: the pre-dock pose, measured
-#: from the dock's back wall (docks.yaml's dock_pose). It used to be 0.6.
+# Standoff for `docks.yaml`'s `staging_pose`: the pre-dock pose, measured from
+# the dock's back wall (docks.yaml's dock_pose).
 STAGING_STANDOFF_M = PREDOCK_TAG_DISTANCE_M
 
-#: Chassis standoff separating `docks.yaml`'s `dock_pose` (the dock's back
-#: wall) from `perception/config/docking.yaml`'s `pose` (where the ROBOT must
-#: end up). Measured live at dock A -- see docking.yaml's own header comment;
-#: this module only re-applies that measurement, it does not re-derive it.
+# Chassis standoff between `docks.yaml`'s `dock_pose` (the back wall) and
+# docking.yaml's `pose` (where the robot ends up). Measured live at dock A (see
+# the docking.yaml header); only re-applied here.
 DOCKING_CHASSIS_OFFSET_M = 0.126
 
-#: The arena's fixed tag-id -> dock-letter table. 8 docks, 8 tags, as placed
-#: in `arena.sdf` and recorded in `docks.yaml`'s `tag_id` fields.
+# The arena's fixed tag id to dock letter table: 8 docks, 8 tags, as in
+# `docks.yaml`'s `tag_id` fields.
 TAG_ID_TO_LETTER = {0: 'A', 1: 'B', 2: 'C', 3: 'D',
                     4: 'E', 5: 'F', 6: 'G', 7: 'H'}
 
-#: `opennav_docking` dock-plugin instance name, as configured in
-#: `perception/config/docking.yaml` (`dock_plugins: ["arena_dock"]`).
+# opennav_docking dock plugin name, from docking.yaml (`dock_plugins`).
 DOCKING_PLUGIN_TYPE = 'arena_dock'
 
-#: Frame all captured poses are expressed in.
+# Frame all captured poses are expressed in.
 MAP_FRAME = 'map'
 
-#: Decimals used when writing numbers back into the two YAML files. Chosen so
-#: that re-capturing a dock at its currently-recorded pose reproduces the
-#: existing line BYTE FOR BYTE (see test_formatting_reproduces_existing_*):
-#: x/y are written with a fixed 3 decimals (the files use -1.500, 2.992),
-#: theta with up to 5 and trailing zeros trimmed (the files use 3.14159,
-#: -1.5708, 0.0). Sub-millimetre / sub-0.001-rad precision is well below what
-#: SLAM localization and a hand-driven capture can deliver anyway.
+# Decimals written back into the two YAML files. Chosen so re-capturing a dock
+# at its recorded pose reproduces the existing line byte for byte (see
+# test_formatting_reproduces_existing_*): x/y use a fixed 3 decimals (-1.500),
+# theta up to 5 with trailing zeros trimmed (3.14159, -1.5708, 0.0). That is
+# finer than SLAM or a hand-driven capture can deliver.
 POSITION_DECIMALS = 3
 THETA_DECIMALS = 5
 
-#: Below this, the tag's normal is too close to vertical for its projection
-#: into the map XY-plane to mean anything (1e-3 ~ within 0.06 deg of straight
-#: up or straight down).
+# Below this the tag's normal is too close to vertical for its XY projection to
+# mean anything (1e-3 is within 0.06 deg of straight up or down).
 MIN_HORIZONTAL_NORMAL = 1e-3
 
-#: `classify_detection_age` verdicts.
+# `classify_detection_age` verdicts.
 AGE_OK = 'ok'
 AGE_STALE = 'stale'
 AGE_CLOCK_MISMATCH = 'clock_mismatch'
 
-#: An age this absurd is not staleness, it is two different clock domains
-#: (a node with `use_sim_time:=true` next to a wall-clock publisher, or vice
-#: versa) -- a mistake this stack has made on itself before, so it
-#: gets its own diagnosis instead of being reported as a stale tag.
+# An age this large is two clock domains (use_sim_time:=true next to a
+# wall-clock publisher, or vice versa), a mistake made here before, so it gets
+# its own diagnosis instead of "stale tag".
 CLOCK_MISMATCH_AGE_SEC = 1000.0
 
-#: Default for capture_dock_pose's `max_detection_age_sec`: reject a detection
-#: older (or further in the future) than this. It must cover the END-TO-END
-#: latency of the image pipeline, not just the camera frame period. On the
-#: Jetson (OAK-D 1280x720 -> rectify_node -> apriltag_node, decimate 1.0) the
-#: detection stamp -- the camera image's stamp -- was measured 0.86-2.4 s old
-#: (median 1.4 s) on arrival; the original 0.5 s, sized for a faster camera
-#: pipeline, rejected every hardware detection as "no tag currently visible".
-#: 3 s still stops a tag that has left the view from being captured after the
-#: robot has been driven on, and is far below CLOCK_MISMATCH_AGE_SEC, so a
-#: use_sim_time mix-up is still diagnosed as such.
+# Default `max_detection_age_sec` for capture_dock_pose: reject a detection
+# older (or further in the future) than this. It must cover the end-to-end image
+# pipeline latency. On the Jetson (OAK-D 1280x720, rectify_node, apriltag_node)
+# detection stamps arrived 0.86-2.4 s old (median 1.4 s), so the original 0.5 s
+# rejected every hardware detection. 3 s still stops a tag that has left the view
+# being captured, and stays far below CLOCK_MISMATCH_AGE_SEC.
 DEFAULT_MAX_DETECTION_AGE_SEC = 3.0
 
 
@@ -152,19 +132,17 @@ class DockEntryNotFound(DockCaptureError):
 
 
 class TagTransformUnavailable(DockCaptureError):
-    """`map` -> tag TF could not be resolved for this tag.
+    """The `map` -> tag TF could not be resolved for this tag.
 
-    Raised by the caller's own lookup callable (the node wraps
-    `tf2_ros.TransformException` in it), so that `capture_visible_tags` can
-    treat a TF failure as just another per-tag outcome without this module
-    importing tf2.
+    Raised by the caller's lookup callable (the node wraps
+    `tf2_ros.TransformException`), so `capture_visible_tags` can treat a TF
+    failure as a per-tag outcome without importing tf2.
     """
 
 
-#: `CaptureOutcome.error_kind` values -- which stage of one tag's capture
-#: failed. The node words its log message differently for each, so this is not
-#: decoration: a frame-name problem and a bad tag id need completely different
-#: things from the operator.
+# `CaptureOutcome.error_kind` values: which stage of one tag's capture failed.
+# The node words its log differently for each, since a frame-name problem and a
+# bad tag id need different things from the operator.
 ERROR_TRANSFORM = 'transform'
 ERROR_TAG_ID = 'tag_id'
 ERROR_ORIENTATION = 'orientation'
@@ -173,7 +151,13 @@ ERROR_WRITE = 'write'
 
 @dataclass(frozen=True)
 class Pose2D:
-    """A planar pose in `map`. `theta` is always normalized to (-pi, pi]."""
+    """A planar pose in `map`.
+
+    Attributes:
+        x: Metres.
+        y: Metres.
+        theta: Heading in radians, normalized to (-pi, pi].
+    """
 
     x: float
     y: float
@@ -182,7 +166,15 @@ class Pose2D:
 
 @dataclass(frozen=True)
 class DockCapture:
-    """Everything one captured tag implies, ready to be written out."""
+    """Everything one captured tag implies, ready to be written out.
+
+    Attributes:
+        letter: Dock letter.
+        tag_id: AprilTag id.
+        dock_pose: Pose of the dock's back wall (docks.yaml).
+        staging_pose: Pre-dock pose (docks.yaml).
+        docking_pose: Docked robot pose (docking.yaml).
+    """
 
     letter: str
     tag_id: int
@@ -192,18 +184,12 @@ class DockCapture:
 
 
 def normalize_angle(theta: float) -> float:
-    """Normalize an angle to (-pi, pi], matching `docks.yaml`'s convention.
+    """Normalizes an angle to (-pi, pi], matching `docks.yaml`'s convention.
 
-    `math.remainder` lands in the CLOSED range [-pi, pi]; the explicit -pi ->
-    +pi fold is what makes the range half-open the way docks.yaml's header
-    comment specifies. It matters in practice: a dock on the +x wall has
-    theta = pi exactly, and `atan2(-0.0, -1.0)` returns -pi, so without this
-    fold half the +x-wall captures would be written as -3.14159 and half as
-    3.14159 depending on a sign of zero.
-
-    The `+ 0.0` kills negative zero for the same reason: `-0.0` formats as
-    "-0.0", which would make an otherwise byte-identical re-capture show up as
-    a spurious diff.
+    `math.remainder` returns the closed range [-pi, pi], so -pi is folded to +pi.
+    Otherwise `atan2(-0.0, -1.0)` returning -pi would write some +x-wall
+    captures as -3.14159 and others as 3.14159. The `+ 0.0` removes negative
+    zero, which formats as "-0.0" and would show up as a spurious diff.
     """
     wrapped = math.remainder(theta, math.tau)
     if wrapped <= -math.pi:
@@ -212,28 +198,22 @@ def normalize_angle(theta: float) -> float:
 
 
 def tag_outward_theta(rotation_xyzw) -> float:
-    """Map heading of the tag's outward (room-facing) normal, from its TF quaternion.
+    """Returns the map heading of the tag's outward (room-facing) normal.
 
-    `rotation_xyzw` is the (x, y, z, w) of a `map` -> tag-frame transform's
-    rotation, i.e. `TransformStamped.transform.rotation`.
+    Uses the tag frame's local +z axis, which points out of the printed face
+    (see the module docstring). For a tag flat on a dock's back wall that is
+    away from the wall, into the room, which is what `dock_pose.theta` means.
+    Only the third column of the rotation matrix (that axis in `map`) is built.
 
-    WHICH LOCAL AXIS AND WHY: the tag frame's local **+z** axis, because
-    apriltag_ros's tag frame has +x right / +y up as seen facing the tag,
-    hence +z out of the tag's printed face toward the observer -- see this
-    module's header for the full derivation out of the installed
-    libAprilTagNode.so and the apriltag library's own corner order. For a tag
-    mounted flat on a dock's back wall, "out of the printed face" is exactly
-    "away from the wall, into the room", which is what docks.yaml means by
-    `dock_pose.theta`.
+    Args:
+        rotation_xyzw: `(x, y, z, w)` rotation of the `map` -> tag transform,
+            i.e. `TransformStamped.transform.rotation`.
 
-    Only the third COLUMN of the rotation matrix is needed (the local +z axis
-    expressed in `map`); the full matrix is not built.
-
-    Raises DegenerateTagOrientation if that axis is (near) vertical in `map`,
-    i.e. the tag is facing the floor or the ceiling rather than into the room.
-    A real wall dock cannot do that, so it means the detection or the TF chain
-    is wrong, and silently projecting it would invent a heading out of
-    rounding noise.
+    Raises:
+        DegenerateTagOrientation: If the quaternion is zero or the axis is
+            near vertical (the tag faces the floor or ceiling). A real wall
+            dock cannot, so the detection or TF chain is wrong, and projecting
+            it would invent a heading from rounding noise.
     """
     x, y, z, w = (float(value) for value in rotation_xyzw)
     norm = math.sqrt(x * x + y * y + z * z + w * w)
@@ -242,7 +222,7 @@ def tag_outward_theta(rotation_xyzw) -> float:
             'tag orientation quaternion is all zeros (not a rotation)')
     x, y, z, w = x / norm, y / norm, z / norm, w / norm
 
-    # Third column of the rotation matrix = the tag's local +z axis in `map`.
+    # Third column of the rotation matrix: the tag's local +z axis in `map`.
     axis_x = 2.0 * (x * z + w * y)
     axis_y = 2.0 * (y * z - w * x)
 
@@ -259,12 +239,15 @@ def tag_outward_theta(rotation_xyzw) -> float:
 
 def staging_pose_for(dock_pose: Pose2D,
                      standoff_m: float = STAGING_STANDOFF_M) -> Pose2D:
-    """`docks.yaml`'s documented staging formula: stand `standoff_m` out along
-    the dock's own outward normal and look back at it.
+    """Returns the staging pose: `standoff_m` out along the outward normal, facing the dock.
 
         staging.x     = dock.x + d * cos(dock.theta)
         staging.y     = dock.y + d * sin(dock.theta)
         staging.theta = dock.theta + pi
+
+    Args:
+        dock_pose: The dock's back-wall pose.
+        standoff_m: Distance out from the wall in metres.
     """
     return Pose2D(
         x=dock_pose.x + standoff_m * math.cos(dock_pose.theta),
@@ -275,19 +258,19 @@ def staging_pose_for(dock_pose: Pose2D,
 
 def docking_server_pose_for(dock_pose: Pose2D,
                             offset_m: float = DOCKING_CHASSIS_OFFSET_M) -> Pose2D:
-    """`perception/config/docking.yaml`'s pose for the same dock.
+    """Returns docking.yaml's pose for the same dock.
 
-    Two differences from `dock_pose`, both documented at length in that file's
-    own header comment and only re-applied here:
+    Two differences from `dock_pose` (see that file's header):
 
-    - position moved `offset_m` OUTWARD along the dock's outward normal,
-      because docks.yaml's dock_pose is the dock's back WALL while
-      opennav_docking's pose is where the robot's `base_frame` must end up,
-      and the chassis nose physically cannot get closer than ~0.123 m to that
-      wall;
-    - theta rotated by pi, because opennav_docking's dock pose.theta is the
-      robot's own final NOSE-FORWARD heading once docked (into the wall), not
-      the tag's outward normal.
+    - Position moves `offset_m` outward along the normal, because `dock_pose` is
+      the back wall while opennav_docking's pose is where `base_frame` ends up,
+      and the nose cannot get closer than ~0.123 m to the wall.
+    - Theta rotates by pi, because opennav_docking's theta is the robot's
+      nose-forward heading once docked (into the wall), not the outward normal.
+
+    Args:
+        dock_pose: The dock's back-wall pose.
+        offset_m: Chassis standoff from the wall in metres.
     """
     return Pose2D(
         x=dock_pose.x + offset_m * math.cos(dock_pose.theta),
@@ -297,7 +280,11 @@ def docking_server_pose_for(dock_pose: Pose2D,
 
 
 def letter_for_tag_id(tag_id: int) -> str:
-    """Dock letter for an arena tag id. Raises UnknownTagId outside 0-7."""
+    """Returns the dock letter for an arena tag id.
+
+    Raises:
+        UnknownTagId: If `tag_id` is outside 0-7.
+    """
     try:
         return TAG_ID_TO_LETTER[int(tag_id)]
     except (KeyError, TypeError, ValueError):
@@ -309,11 +296,15 @@ def capture_from_tag_transform(tag_id: int, translation_xy, rotation_xyzw,
                                standoff_m: float = STAGING_STANDOFF_M,
                                docking_offset_m: float = DOCKING_CHASSIS_OFFSET_M,
                                ) -> DockCapture:
-    """Everything one visible tag implies, from its `map` -> tag transform.
+    """Returns everything one visible tag implies.
 
-    `translation_xy` is (x, y) in `map` (the tag's own height is irrelevant --
-    all three poses are planar); `rotation_xyzw` is that transform's
-    quaternion.
+    Args:
+        tag_id: AprilTag id.
+        translation_xy: `(x, y)` of the tag in `map`; height is irrelevant as
+            all three poses are planar.
+        rotation_xyzw: Quaternion of the `map` -> tag transform.
+        standoff_m: Staging standoff in metres.
+        docking_offset_m: Chassis standoff from the wall in metres.
     """
     letter = letter_for_tag_id(tag_id)
     theta = tag_outward_theta(rotation_xyzw)
@@ -333,12 +324,18 @@ def capture_from_docking_pose(tag_id: int, docking_pose: Pose2D,
                               standoff_m: float = STAGING_STANDOFF_M,
                               docking_offset_m: float = DOCKING_CHASSIS_OFFSET_M,
                               ) -> DockCapture:
-    """Everything implied by a measured DOCKING pose (the robot's docked pose).
+    """Returns everything implied by a measured docking pose.
 
-    The inverse of `docking_server_pose_for`: the wall pose that function would
-    have been given. `docking_pose` is where base_footprint ends up (heading
-    into the wall, `docking_offset_m` out from it), so the wall is that far
-    further along the heading and its outward normal is the opposite way.
+    The inverse of `docking_server_pose_for`. `docking_pose` is where
+    base_footprint ends up (heading into the wall, `docking_offset_m` out from
+    it), so the wall is that far further along the heading and its outward
+    normal points the opposite way.
+
+    Args:
+        tag_id: AprilTag id.
+        docking_pose: The docked robot pose.
+        standoff_m: Staging standoff in metres.
+        docking_offset_m: Chassis standoff from the wall in metres.
     """
     wall = Pose2D(
         x=docking_pose.x + docking_offset_m * math.cos(docking_pose.theta),
@@ -356,7 +353,15 @@ def capture_from_docking_pose(tag_id: int, docking_pose: Pose2D,
 
 @dataclass(frozen=True)
 class CaptureOutcome:
-    """What happened to ONE tag in one capture."""
+    """What happened to one tag in one capture.
+
+    Attributes:
+        tag_id: AprilTag id.
+        frame: TF frame name of the tag.
+        capture: The `DockCapture`, or None on failure.
+        error_kind: One of the `ERROR_*` constants, or None on success.
+        error: Error message, or None on success.
+    """
 
     tag_id: int
     frame: str
@@ -366,31 +371,30 @@ class CaptureOutcome:
 
     @property
     def succeeded(self) -> bool:
+        """Returns True if the tag was captured."""
         return self.capture is not None
 
 
 def capture_visible_tags(tags, lookup_transform, write_capture):
-    """Capture every tag in one detection message, independently of the others.
+    """Captures every tag in one detection message, independently.
 
-    `tags` is an iterable of (tag_id, family) pairs -- whatever was in the
-    detection array. `lookup_transform(frame)` returns
-    ((x, y), (qx, qy, qz, qw)) in `map` or raises TagTransformUnavailable.
-    `write_capture(capture)` persists one capture (normally `apply_capture`
-    bound to the two file paths).
+    Every expected per-tag failure (broken TF, id outside 0-7, no horizontal
+    normal, a missing YAML entry) becomes an outcome instead of an exception,
+    so it cannot abort the other tags in the message. Two neighbouring docks in
+    one frame is normal, and losing the good one would mean re-driving. Other
+    errors, such as a bug or a vanished disk, still propagate. The caller does
+    the reporting; this does not log.
 
-    Returns one CaptureOutcome per tag, in order. Every EXPECTED per-tag
-    failure -- a broken TF, an id outside 0-7, a tag with no horizontal normal,
-    an entry missing from a YAML file -- becomes an outcome rather than an
-    exception, so it cannot abort the capture of the other tags in the same
-    message. Two neighbouring docks in one camera frame is the normal case
-    here, not an edge case, and losing the good one because the other failed
-    would mean re-driving the robot for nothing. Anything else (a genuine bug
-    in here, a disk that vanished mid-write) still propagates: this is not a
-    blanket `except Exception`.
+    Args:
+        tags: Iterable of `(tag_id, family)` pairs from the detection array.
+        lookup_transform: Callable taking a frame name and returning
+            `((x, y), (qx, qy, qz, qw))` in `map`, or raising
+            `TagTransformUnavailable`.
+        write_capture: Callable persisting one `DockCapture` (normally
+            `apply_capture` bound to the two file paths).
 
-    The caller does the reporting. This function does not log, so the whole
-    per-tag success/failure behaviour is testable with two callables and no
-    ROS node (see test_dock_capture.py).
+    Returns:
+        One `CaptureOutcome` per tag, in order.
     """
     outcomes = []
     for tag_id, family in tags:
@@ -426,14 +430,18 @@ def capture_visible_tags(tags, lookup_transform, write_capture):
 
 
 def classify_detection_age(age_sec: float, max_age_sec: float) -> str:
-    """AGE_OK / AGE_STALE / AGE_CLOCK_MISMATCH for a detection message's age.
+    """Classifies a detection message's age.
 
-    `age_sec` is (now - message stamp), so it is NEGATIVE for a stamp in the
-    future. Both directions are bounded, because both are real failures here:
-    an old stamp means the tag left the camera's view (or the robot has since
-    moved, which is exactly what a stale capture would silently mis-record),
-    and a wildly off stamp in either direction means the detection and this
-    node are on different clocks.
+    Both directions are bounded: an old stamp means the tag left the view or the
+    robot has moved (a stale capture would be silently wrong), and a wildly off
+    stamp either way means the detection and this node use different clocks.
+
+    Args:
+        age_sec: Now minus the message stamp; negative for a future stamp.
+        max_age_sec: Largest acceptable absolute age.
+
+    Returns:
+        `AGE_OK`, `AGE_STALE` or `AGE_CLOCK_MISMATCH`.
     """
     if abs(age_sec) >= CLOCK_MISMATCH_AGE_SEC:
         return AGE_CLOCK_MISMATCH
@@ -443,27 +451,24 @@ def classify_detection_age(age_sec: float, max_age_sec: float) -> str:
 
 
 def tag_tf_frame(family: str, tag_id: int) -> str:
-    """The TF frame name apriltag_ros broadcasts for one detected tag.
+    """Returns the TF frame name apriltag_ros broadcasts for one detected tag.
 
-    `family` is the detection message's own `family` field, NOT the `family`
-    parameter from apriltag.yaml ("36h11"): apriltag_ros fills both the
-    message field and the TF `child_frame_id` from the same
-    `det->family->name` string ("tag36h11" for this arena's tags), joined to
-    the id with a single ":" -- verified by reading the installed
-    libAprilTagNode.so, where both assignments load offset 0x38 of the
-    apriltag family struct (its `name`). Deriving the frame name from the
-    message's own field rather than hardcoding it is what makes this correct
-    by construction instead of by assumption.
+    `family` must be the detection message's own `family` field, not the
+    `family` parameter in apriltag.yaml ("36h11"). apriltag_ros fills the field
+    and the TF `child_frame_id` from the same `det->family->name`
+    ("tag36h11" here), joined to the id with ":" (verified in the installed
+    libAprilTagNode.so, where both load offset 0x38 of the family struct).
+    This is apriltag_ros's default naming; apriltag.yaml sets no `tag.frames`.
 
-    (This is apriltag_ros's DEFAULT naming, which is what
-    `perception/config/apriltag.yaml` uses -- it deliberately sets no
-    `tag.frames` overrides.)
+    Args:
+        family: The message's `family` field.
+        tag_id: AprilTag id.
     """
     return f'{family}:{int(tag_id)}'
 
 
 def _fixed(value: float, decimals: int) -> str:
-    """Fixed-decimal formatting with "-0.000" normalized to "0.000"."""
+    """Formats `value` with fixed decimals, turning "-0.000" into "0.000"."""
     text = f'{value:.{decimals}f}'
     if text.startswith('-') and float(text) == 0.0:
         text = text[1:]
@@ -471,12 +476,10 @@ def _fixed(value: float, decimals: int) -> str:
 
 
 def _theta(value: float) -> str:
-    """Theta formatting: up to THETA_DECIMALS decimals, trailing zeros
-    trimmed, always at least one decimal place.
+    """Formats a theta with up to THETA_DECIMALS decimals, trimmed, at least one.
 
-    This is what makes a re-capture of an unchanged dock produce a
-    byte-identical line: the existing files write 3.14159, -1.5708 and 0.0,
-    which is exactly this rule applied to pi, -pi/2 and 0.
+    Applied to pi, -pi/2 and 0 it gives 3.14159, -1.5708 and 0.0, which is what
+    makes re-capturing an unchanged dock byte-identical.
     """
     text = _fixed(value, THETA_DECIMALS)
     trimmed = text.rstrip('0')
@@ -486,16 +489,17 @@ def _theta(value: float) -> str:
 
 
 def _pose_fields(pose: Pose2D) -> str:
+    """Formats a pose as the `x: .., y: .., theta: ..` fields of a flow mapping."""
     return (f'x: {_fixed(pose.x, POSITION_DECIMALS)}, '
             f'y: {_fixed(pose.y, POSITION_DECIMALS)}, '
             f'theta: {_theta(pose.theta)}')
 
 
 def format_docks_entry(capture: DockCapture) -> str:
-    """One `mission/config/docks.yaml` dock line, WITHOUT its leading indent.
+    """Returns one `mission/config/docks.yaml` dock line without its indent.
 
-    Matches that file's existing flow-style one-line-per-dock format exactly;
-    the caller re-uses the indentation of the line being replaced.
+    Matches the file's flow-style one-line-per-dock format; the caller reuses the
+    indentation of the line being replaced.
     """
     return (f'{capture.letter}: {{tag_id: {capture.tag_id}, '
             f'dock_pose: {{{_pose_fields(capture.dock_pose)}}}, '
@@ -503,12 +507,11 @@ def format_docks_entry(capture: DockCapture) -> str:
 
 
 def format_docking_entry(capture: DockCapture) -> str:
-    """One `perception/config/docking.yaml` dock line, WITHOUT its indent.
+    """Returns one `perception/config/docking.yaml` dock line without its indent.
 
-    A DIFFERENT schema from docks.yaml's -- this is opennav_docking's own
-    dock-database format (`{type, frame, pose: [x, y, theta], id}`, parsed by
-    its `parseDockParams`), with `id` the AprilTag id as a STRING and the pose
-    a 3-element flow sequence rather than a mapping.
+    A different schema from docks.yaml: opennav_docking's dock database format
+    (`{type, frame, pose: [x, y, theta], id}`, parsed by `parseDockParams`),
+    with `id` the AprilTag id as a string and the pose a 3-element sequence.
     """
     pose = capture.docking_pose
     return (f'{capture.letter}: {{type: "{DOCKING_PLUGIN_TYPE}", '
@@ -520,18 +523,23 @@ def format_docking_entry(capture: DockCapture) -> str:
 
 
 def replace_entry_line(text: str, letter: str, new_body: str) -> str:
-    """Replace exactly the one line defining dock `letter`, nothing else.
+    """Replaces exactly the one line defining dock `letter`.
 
-    Targeted line surgery rather than a YAML load/dump round trip, because
-    both files are ~60-350 lines of load-bearing header comments explaining
-    measurements, false starts and safety exceptions, and `yaml.safe_dump`
-    would silently delete every one of them (and re-flow the surviving
-    entries' formatting for good measure).
+    Edits the line directly instead of a YAML load/dump round trip, which would
+    delete the files' header comments and reflow the other entries. The line's
+    indentation is kept, so one function serves docks.yaml (2 spaces) and
+    docking.yaml (8 spaces).
 
-    The matched line's own indentation is preserved, so the same function
-    serves docks.yaml's 2-space `docks:` mapping and docking.yaml's 8-space
-    `ros__parameters:` block. Raises DockEntryNotFound unless exactly one line
-    matches, rather than guessing which of several to rewrite.
+    Args:
+        text: The YAML file's contents.
+        letter: Dock letter to replace.
+        new_body: The new line without indentation.
+
+    Returns:
+        The updated text.
+
+    Raises:
+        DockEntryNotFound: If not exactly one line matches.
     """
     pattern = re.compile(
         rf'^(?P<indent>[ \t]*){re.escape(letter)}:[ \t]*\{{.*$', re.MULTILINE)
@@ -548,13 +556,20 @@ def replace_entry_line(text: str, letter: str, new_body: str) -> str:
 
 def apply_capture(capture: DockCapture, docks_path: str,
                   docking_path: str) -> None:
-    """Write one capture into both YAML files, or into neither.
+    """Writes one capture into both YAML files, or into neither.
 
-    BOTH replacements are computed in memory before EITHER file is written. The
-    two files describe the same physical dock through two different schemas and
-    are only useful in agreement (docks.yaml is the source of truth; docking
-    .yaml is derived from it), so a dock whose line is missing or duplicated in
-    one of them must not leave the other half-updated.
+    Both replacements are computed before either file is written. The files
+    describe one dock in two schemas and are only useful in agreement
+    (docks.yaml is the source of truth), so a line missing or duplicated in one
+    must not leave the other half-updated.
+
+    Args:
+        capture: The capture to write.
+        docks_path: Path to docks.yaml.
+        docking_path: Path to docking.yaml.
+
+    Raises:
+        DockEntryNotFound: If a dock line is missing or duplicated.
     """
     with open(docks_path) as handle:
         docks_text = handle.read()
@@ -572,24 +587,25 @@ def apply_capture(capture: DockCapture, docks_path: str,
         handle.write(new_docking_text)
 
 
-#: `interpret_command` verdicts.
+# `interpret_command` verdicts.
 COMMAND_CAPTURE = 'capture'
 COMMAND_EMPTY = 'empty'
 COMMAND_UNKNOWN = 'unknown'
 
-#: What the operator types to capture, and the prompt they see.
+# What the operator types to capture, and the prompt they see.
 CAPTURE_KEY = 'i'
 PROMPT = "[capture_dock_pose] ready -- 'i' + Enter to capture, Ctrl-C to quit"
 
 
 def interpret_command(line: str) -> str:
-    """Classify one line typed by the operator.
+    """Classifies one line typed by the operator.
 
-    Whitespace-trimmed and case-insensitive, so "I", " i " and "i\\n" all
-    capture. A bare Enter is COMMAND_EMPTY rather than COMMAND_UNKNOWN: it is
-    how people check that an interactive prompt is still alive, and scolding
-    them for it would be noise, not feedback (the loop just re-prints the
-    prompt).
+    Trimmed and case-insensitive, so "I", " i " and "i\\n" all capture. A bare
+    Enter is `COMMAND_EMPTY`, not unknown: people press it to check the prompt
+    is alive, so the loop just re-prints the prompt.
+
+    Returns:
+        `COMMAND_CAPTURE`, `COMMAND_EMPTY` or `COMMAND_UNKNOWN`.
     """
     stripped = line.strip()
     if not stripped:
@@ -600,23 +616,20 @@ def interpret_command(line: str) -> str:
 
 
 def run_command_loop(stream, on_capture, emit=print, prompt: str = PROMPT) -> None:
-    """Read lines off `stream` and dispatch captures until EOF or Ctrl-C.
+    """Reads lines off `stream` and dispatches captures until EOF or Ctrl-C.
 
-    Plain blocking line reads, NOT raw/termios single-keypress mode: this has
-    to work in whatever terminal, multiplexer or IDE console the operator
-    happens to be in, and over ssh, without leaving a half-configured tty
-    behind if it dies. The cost is one extra Enter per capture, which is
-    nothing next to driving the robot to the next dock.
+    Uses plain blocking line reads, not raw single-keypress mode, so it works in
+    any terminal or over ssh and cannot leave the tty half-configured; the cost
+    is one extra Enter. It is ROS-free so it is testable with a StringIO. Ctrl-C
+    propagates as KeyboardInterrupt for `main`. The prompt is a whole line,
+    re-printed each iteration, because ROS log output shares the terminal and
+    would leave an inline "> " dangling.
 
-    This function is deliberately ROS-free -- `on_capture` is just a callable
-    and `emit` a one-argument writer -- so the dispatch behaviour is
-    unit-testable with a StringIO and a list. Ctrl-C is left to propagate as
-    KeyboardInterrupt for `main` to handle; it is the documented way out.
-
-    The prompt is a whole line of its own, re-printed every iteration, rather
-    than an inline "> " cursor: this node shares its terminal with its own ROS
-    log output (every capture result and every per-tag failure), and an inline
-    prompt would be left dangling mid-line by the next log message.
+    Args:
+        stream: Object with `readline()`.
+        on_capture: Callable run for a capture command.
+        emit: One-argument writer for prompts and messages.
+        prompt: The prompt line.
     """
     while True:
         emit(prompt)
@@ -633,21 +646,18 @@ def run_command_loop(stream, on_capture, emit=print, prompt: str = PROMPT) -> No
 
 
 def frame_names_from_tf_yaml(tf_yaml: str):
-    """Frame names out of `tf2_ros.Buffer.all_frames_as_yaml()`'s output.
+    """Returns the sorted frame names in `tf2_ros.Buffer.all_frames_as_yaml()` output.
 
-    Used only to make a failed `map` -> tag lookup diagnosable live: if
-    apriltag_ros ever names its tag frames differently from what
-    `tag_tf_frame` builds, the list of frames tf2 actually knows is the one
-    piece of evidence that says so immediately. Parsed by hand rather than with
-    yaml.safe_load because the buffer returns "{}" when empty and because the
-    only thing wanted is the top-level keys.
+    Makes a failed `map` -> tag lookup diagnosable: if apriltag_ros names its
+    frames differently from `tag_tf_frame`, the frames tf2 knows show it. Parsed
+    by hand because the buffer returns "{}" when empty and only the top-level
+    keys are wanted.
     """
     names = []
     for line in tf_yaml.splitlines():
         if not line or line[0].isspace():
             continue
-        # rsplit, not split: a tag frame name CONTAINS a colon
-        # ("tag36h11:0"), so only the last one separates key from value.
+        # rsplit: tag frame names contain a colon ("tag36h11:0").
         name = line.rsplit(':', 1)[0].strip()
         if name and name != '{}':
             names.append(name)
@@ -656,18 +666,20 @@ def frame_names_from_tf_yaml(tf_yaml: str):
 
 def find_workspace_source_file(share_dir: str, relative_path: str,
                                max_levels: int = 8):
-    """Locate the SOURCE copy of a config file, given a package's share dir.
+    """Locates the source copy of a config file from a package's share dir.
 
-    Captures have to edit `<workspace>/src/<relative_path>`, not the installed
-    `share/` copy: the installed copy is overwritten by the next `colcon
-    build`, so a capture written there would silently evaporate (and never
-    reach git). Walk up from the installed share directory looking for a
-    `src/<relative_path>` sibling, which finds the workspace for both the
-    merged and the isolated install layouts, and for `--symlink-install`.
+    Captures must edit `<workspace>/src/<relative_path>`, not the installed
+    `share/` copy, which the next `colcon build` overwrites. Walks up from the
+    share directory looking for a `src/<relative_path>` sibling, which works for
+    merged, isolated and `--symlink-install` layouts.
 
-    Returns the absolute path, or None if no workspace source tree is in sight
-    (an installed-from-a-release deployment, say) -- the caller decides what
-    to do about that rather than having a guess forced on it.
+    Args:
+        share_dir: The package's installed share directory.
+        relative_path: Path under `src/` to find.
+        max_levels: Directory levels to climb.
+
+    Returns:
+        The absolute path, or None if no workspace source tree is found.
     """
     current = os.path.abspath(share_dir)
     for _ in range(max_levels):

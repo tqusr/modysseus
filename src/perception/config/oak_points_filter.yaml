@@ -1,67 +1,59 @@
 # The OAK-D depth pipeline for Nav2's camera obstacle layers, built in one
-# container by launch/oak_points_filter.launch.py: a quarter-resolution XYZ
-# cloud from the depth image, then a voxel filter, published as
-# /oak/points_filtered. There is no crop box: the real OAK-D does not see the
-# robot (checked in its frames, and measured 2026-10-05: zero voxel points
-# inside a +-0.40 m box over 80 clouds), so every obstacle point is kept,
-# however close.
+# container by launch/oak_points_filter.launch.py: a quarter-resolution XYZ cloud
+# from the depth image, then a voxel filter, published as /oak/points_filtered.
+# There is no crop box: the real OAK-D does not see the robot (checked in its
+# frames; measured 2026-10-05: zero voxel points inside a +-0.40 m box over 80
+# clouds), so every obstacle point is kept, however close.
 #
-# 1280x720 -> 320x180 = 57,600 points, 16 bytes each (XYZ, no colour) = 0.9 MB,
-# against /oak/points' 921,600 points at 32 bytes = 29.5 MB. What it costs:
-# one pixel now spans 4x the angle, 0.35 deg (HFOV 69.85 deg / 320 px), which
-# is 1.8 cm at 3 m and 3.1 cm at 5 m - still at or under the 3 cm voxel leaf
-# below and the costmaps' 5 cm cells, so nav sees nothing coarser in the
-# arena. The OAK's own depth is already computed at half resolution (the
-# ROBOTICS preset decimates by 2, see the vendor's oak_d_lite.yaml), so the
-# full image held less detail than its pixel count suggests anyway.
+# 1280x720 -> 320x180 = 57,600 points at 16 bytes (XYZ, no colour) = 0.9 MB,
+# against /oak/points' 921,600 points at 32 bytes = 29.5 MB. One pixel now spans
+# 0.35 deg (HFOV 69.85 deg / 320 px): 1.8 cm at 3 m and 3.1 cm at 5 m, still at
+# or under the 3 cm voxel leaf and the costmaps' 5 cm cells. The OAK's own depth
+# is already computed at half resolution (the ROBOTICS preset decimates by 2, see
+# the vendor's oak_d_lite.yaml), so the full image held less detail than its
+# pixel count suggests.
 oak_depth_resize:
   ros__parameters:
     use_scale: true
     scale_width: 0.25
     scale_height: 0.25
-    # 0 = nearest neighbour. Not the default 1 (linear): averaging depth
-    # across an object's edge invents points floating between the object and
-    # the wall behind it, and averaging with a 0 (no depth) pixel invents
-    # points near the camera. Nearest keeps every value a real measurement.
-    # ResizeNode scales camera_info's K and P with the image, so the cloud
-    # below lands in the same place as one built at full resolution.
+    # 0 = nearest neighbour, not the default 1 (linear): averaging across an
+    # object's edge invents points between it and the wall behind, and averaging
+    # with a 0 (no depth) pixel invents points near the camera. ResizeNode
+    # scales camera_info's K and P with the image, so the cloud lands where a
+    # full-resolution one would.
     interpolation: 0
 
 oak_depth_points:
   ros__parameters:
-    # Drop a frame rather than queue it: same reason as the filter's own
-    # max_queue_size below.
+    # Drop a frame rather than queue it (see max_queue_size below).
     queue_size: 1
 
-# Voxel downsample. A LATENCY fix, not a filtering one: nav2_collision_monitor
+# Voxel downsample, a latency fix and not a filtering one: nav2_collision_monitor
 # discards a camera source older than its `source_timeout` (nav2_params.yaml),
-# and the full 921,600-point cloud (29.5 MB per message) crossing DDS starved
-# it of fresh data, so safety stopping fell back to the lidar alone.
+# and the full 29.5 MB cloud crossing DDS starved it of fresh data, so safety
+# stopping fell back to the lidar alone.
 #
-# leaf_size 0.03 m is deliberately FINER than anything downstream can
-# represent, so this discards no information any consumer could have used:
-# both costmaps run `resolution: 0.05` (nav2_params.yaml), and
-# collision_monitor's PolygonStop/PolygonSlow are 0.5 m / 0.8 m squares
-# needing `min_points: 4`. It is purely a density cut, not a field-of-view or
-# height cut: no point is removed for WHERE it is, only merged with its 3 cm
-# neighbours.
+# leaf_size 0.03 m is finer than anything downstream represents: both costmaps
+# use `resolution: 0.05` and collision_monitor's PolygonStop/PolygonSlow are
+# 0.5 m / 0.8 m squares needing `min_points: 4`. It cuts density only, not field
+# of view or height: points are merged with their 3 cm neighbours, never removed
+# for where they are.
 #
-# Runs in the cloud's own frame (the camera's optical frame) on purpose: this
-# node type declares no input_frame/output_frame.
+# It runs in the cloud's own (optical) frame because this node type declares no
+# input_frame/output_frame.
 filter_voxel_grid_node:
   ros__parameters:
     leaf_size: 0.03
-    # pcl_ros's VoxelGrid ALSO range-filters, by default on z in [0, 1.0] -
-    # and this stage runs in the optical frame, where z is distance from the
-    # camera. Left at the default it silently dropped every point beyond 1 m
-    # (found on a synthetic wall at 2 m: the voxelled cloud came out empty).
+    # pcl_ros's VoxelGrid also range-filters, by default on z in [0, 1.0]. In
+    # the optical frame z is distance from the camera, so the default silently
+    # dropped every point beyond 1 m (a synthetic wall at 2 m came out empty).
     # 3.5 m covers nav2_params.yaml's camera layers (obstacle_max_range 2.5,
-    # raytrace_max_range 3.0) with margin; anything further is never used.
+    # raytrace_max_range 3.0) with margin.
     filter_field_name: z
     filter_limit_min: 0.0
     filter_limit_max: 3.5
     # Keep only the newest pending cloud. The default 3 lets a slow consumer
-    # build a backlog and then serve collision_monitor a sample that is
-    # already several frames old. Depth 1 drops old frames instead of queueing
-    # them, so worst-case staleness is bounded by one processing period.
+    # build a backlog and serve collision_monitor frames already old. Depth 1
+    # bounds staleness to one processing period.
     max_queue_size: 1

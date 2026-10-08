@@ -1,9 +1,8 @@
 """Launch-description tests for launch/apriltag.launch.py.
 
-Plain pytest: the launch file is imported and its description evaluated
-in-process (see launch_helpers). No process is started, no camera.
-Needs `perception` built and its install sourced, because the launch file
-resolves its params file through the package share directory.
+Plain pytest: the description is evaluated in-process (see launch_helpers); no
+process or camera is started. Needs `perception` built and sourced, since the
+launch file resolves its params file through the share directory.
 """
 
 import os

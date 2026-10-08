@@ -1,24 +1,19 @@
-"""Unit tests for perception.dock_capture -- the pure logic behind
-`ros2 run perception capture_dock_pose`.
+"""Unit tests for perception.dock_capture, the logic behind `capture_dock_pose`.
 
-No rclpy, no tf2, no ROS graph, no camera: every test here is plain
-Python against plain functions, which is the reason that module exists
-separately from the node at all.
+No ROS or camera: plain Python against plain functions, which is why that module
+is separate from the node.
 
-The ONE thing these tests cannot do is confirm that a real AprilTag detection
-produces the orientation this code expects. What they do instead, and the
-closest available substitute:
+They cannot confirm that a real AprilTag detection produces the orientation this
+code expects. The closest substitutes are:
 
-  - reproduce dock A's existing known-good `docks.yaml` entry from a synthetic
-    tag TF built under the derived convention, and
-  - independently re-derive that same convention through `cv2.solvePnP`, using
-    apriltag_ros's own object points and apriltag's own corner order (both
-    read out of the installed binaries -- see dock_capture's module docstring),
-    so the convention is checked against the actual pose-estimation maths and
-    not just against itself.
+  - reproducing dock A's known-good `docks.yaml` entry from a synthetic tag TF
+    built under the derived convention, and
+  - independently re-deriving the convention through `cv2.solvePnP` with
+    apriltag_ros's object points and apriltag's corner order (see dock_capture's
+    docstring), so it is checked against the real pose-estimation maths and not
+    only itself.
 
-See this feature's report for the live-validation procedure that is still
-owed.
+A live validation is still owed.
 """
 
 import io
@@ -58,12 +53,10 @@ def test_perception_package_importable():
 # --------------------------------------------------------------------------
 
 def rotation_matrix_to_quaternion(matrix):
-    """(x, y, z, w) for a 3x3 rotation matrix, as a TF message would carry it.
+    """Returns the (x, y, z, w) quaternion for a 3x3 rotation matrix.
 
-    Test-side helper only: the production code never needs to go this
-    direction. Shepherd's/standard trace method, branching on the largest
-    diagonal term for numerical stability -- the same approach tf2's own
-    Matrix3x3::getRotation uses.
+    Test helper only. Uses the standard trace method, branching on the largest
+    diagonal term for stability, as tf2's Matrix3x3::getRotation does.
     """
     m = matrix
     trace = m[0][0] + m[1][1] + m[2][2]
@@ -95,17 +88,17 @@ def rotation_matrix_to_quaternion(matrix):
 
 
 def upright_wall_tag_quaternion(outward_theta):
-    """Quaternion of an upright wall-mounted tag whose outward normal is `outward_theta`.
+    """Returns the quaternion of an upright wall tag with outward normal `outward_theta`.
 
-    Built from the convention under test, stated as axes rather than as a
-    formula so a reader can check it by eye:
+    Built from the convention under test, stated as axes so it can be checked by
+    eye:
 
       tag local +z = the outward (room-facing) normal, horizontal
       tag local +y = straight up in `map` (the tag is not tilted)
-      tag local +x = +y cross +z, i.e. the viewer's right facing the tag
+      tag local +x = +y cross +z, the viewer's right facing the tag
 
-    which is exactly apriltag_ros's tag frame (x right, y up, z out of the
-    printed face) for a tag hanging flat and upright on a wall.
+    which is apriltag_ros's tag frame (x right, y up, z out of the face) for a tag
+    flat and upright on a wall.
     """
     z_axis = (math.cos(outward_theta), math.sin(outward_theta), 0.0)
     y_axis = (0.0, 0.0, 1.0)
@@ -156,12 +149,10 @@ def test_tag_outward_theta_recovers_the_normal_it_was_built_from(outward_theta):
 
 
 def test_tag_outward_theta_uses_local_z_not_local_x():
-    """A tag whose +z and +x point in different directions must follow +z.
+    """A tag whose +z and +x point different ways must follow +z.
 
-    Guards the specific mistake this convention is most likely to be got
-    wrong by: reading the tag frame's "forward" as +x (the ROS body-frame
-    habit) instead of +z (the camera/optical habit apriltag_ros actually
-    follows).
+    Guards the likeliest mistake: reading the tag frame's "forward" as +x (the ROS
+    body-frame habit) instead of +z (the optical-frame habit apriltag_ros follows).
     """
     quaternion = upright_wall_tag_quaternion(math.pi)
     # For outward_theta = pi: +z is -x of map, while +x of the tag is +y of map.
@@ -174,9 +165,9 @@ def test_tag_outward_theta_is_insensitive_to_quaternion_scale():
     assert tag_outward_theta(scaled) == pytest.approx(0.7, abs=1e-9)
 
 
-#: Columns are the tag's local x/y/z axes in `map`. The identity is a tag lying
-#: flat on the floor facing the CEILING (local +z == map +z); the second is the
-#: same tag face-down. Neither has a heading in the XY plane.
+#: Columns are the tag's local x/y/z axes in `map`. The identity is a tag flat on
+#: the floor facing the ceiling (local +z == map +z); the second is the same tag
+#: face-down. Neither has a heading in the XY plane.
 CEILING_FACING_TAG = [[1.0, 0.0, 0.0],
                       [0.0, 1.0, 0.0],
                       [0.0, 0.0, 1.0]]
@@ -229,9 +220,8 @@ def test_docking_server_pose_matches_docking_yaml_derivation():
 def test_docking_pose_sits_between_dock_and_staging():
     """The robot's docked pose must be inside the dock's staging standoff.
 
-    Sanity check on the two offsets' signs relative to each other: both walk
-    outward along the same normal, and the chassis standoff is much the
-    smaller of the two.
+    Checks the two offsets' signs against each other: both go outward along the
+    same normal and the chassis standoff is the much smaller.
     """
     dock = Pose2D(x=1.500, y=2.992, theta=-math.pi / 2)
     docking = docking_server_pose_for(dock)
@@ -251,16 +241,15 @@ def test_letter_for_tag_id_rejects_non_dock_tags(tag_id):
 
 
 def test_capture_from_tag_transform_reproduces_dock_a(dock_a_capture):
-    """The anchor test: dock A's KNOWN-GOOD entry, from a synthetic tag TF.
+    """The anchor test: dock A's known-good entry, from a synthetic tag TF.
 
-    `docks.yaml` currently records, from arena.sdf's model origins:
+    `docks.yaml` records, from arena.sdf's model origins:
         A: {tag_id: 0, dock_pose: {x: 2.992, y: -1.500, theta: 3.14159},
                        staging_pose: {x: 2.242, y: -1.500, theta: 0.0}}
 
-    Dock A is on the arena's +x wall, so its tag faces -x (into the room): an
-    upright tag at (2.992, -1.500) whose outward normal is -x. Feed exactly
-    that through the real code path and the recorded numbers must come back
-    out. This is the best available stand-in for live validation.
+    Dock A is on the +x wall, so its tag faces -x: an upright tag at (2.992,
+    -1.500) with outward normal -x. Feeding that through the real code path must
+    return the recorded numbers, the best stand-in for live validation.
     """
     capture = dock_a_capture
     assert capture.letter == 'A'
@@ -287,10 +276,10 @@ def test_capture_from_tag_transform_rejects_unknown_tag():
 # Line formatting -- against the real files' current contents
 # --------------------------------------------------------------------------
 
-#: The arena's 8 docks as the two config files currently record them, with
-#: theta as the EXACT geometry (0, +-pi/2, pi) the files' rounded constants
-#: stand for. `expected_docks_line` / `expected_docking_line` are verbatim from
-#: the files, minus their leading indentation.
+#: The 8 docks as the two config files record them, with theta as the exact
+#: geometry (0, +-pi/2, pi) their rounded constants stand for.
+#: `expected_docks_line` / `expected_docking_line` are verbatim from the files,
+#: minus their indentation.
 ARENA_DOCKS = [
     # letter, tag_id, dock x, dock y, dock theta
     ('A', 0, 2.992, -1.500, math.pi),
@@ -333,13 +322,11 @@ def capture_for(letter, tag_id, x, y, theta):
 
 @pytest.mark.parametrize('letter, tag_id, x, y, theta', ARENA_DOCKS)
 def test_formatting_reproduces_existing_docks_yaml_lines(letter, tag_id, x, y, theta):
-    """Re-capturing an unchanged dock must produce a BYTE-IDENTICAL line.
+    """Re-capturing an unchanged dock must produce a byte-identical line.
 
-    Not cosmetic: it is what makes the live dock-A sanity check readable as
-    `git diff` showing nothing at all, and it pins the number formatting
-    (fixed 3 decimals on x/y, up to 5 with trailing zeros trimmed on theta)
-    against the files as they actually are rather than against a description
-    of them.
+    Not cosmetic: it makes the live dock-A check readable as an empty `git diff`
+    and pins the formatting (3 decimals on x/y, up to 5 trimmed on theta) against
+    the real files and not a description of them.
     """
     capture = capture_for(letter, tag_id, x, y, theta)
     assert format_docks_entry(capture) == EXPECTED_DOCKS_LINES[letter]
@@ -504,11 +491,11 @@ def test_apply_capture_writes_nothing_when_one_file_lacks_the_dock(tmp_path):
 # --------------------------------------------------------------------------
 
 def upright_lookup(poses):
-    """A lookup_transform stand-in: frame -> ((x, y), quaternion), or failure.
+    """Returns a lookup_transform stand-in: frame to `((x, y), quaternion)`, or failure.
 
-    `poses` maps a TF frame name to (x, y, outward_theta). Any frame not in it
-    raises TagTransformUnavailable, which is what the node's real lookup does
-    when tf2 cannot resolve the chain.
+    `poses` maps a TF frame name to (x, y, outward_theta). Any other frame raises
+    TagTransformUnavailable, as the node's real lookup does when tf2 cannot
+    resolve the chain.
     """
     def lookup(frame):
         if frame not in poses:
@@ -534,9 +521,9 @@ def test_capture_visible_tags_captures_every_tag_in_one_message():
 def test_capture_visible_tags_skips_only_the_tag_whose_tf_failed():
     """The edge case this function exists for.
 
-    Three tags visible, the middle one's TF unresolvable: the other two are
-    still captured and written, and the failure is reported against that tag
-    alone with the frame name that failed.
+    With three tags visible and the middle one's TF unresolvable, the other two
+    are still captured and written, and the failure is reported against that tag
+    alone, with the frame name.
     """
     written = []
     outcomes = capture_visible_tags(
@@ -629,10 +616,9 @@ def test_classify_detection_age(age_sec, expected):
 
 @pytest.mark.parametrize('age_sec', [0.86, 1.4, 2.4])
 def test_default_age_limit_accepts_measured_hardware_latency(age_sec):
-    # Ages of /detections measured on the Jetson (OAK-D 720p -> rectify_node ->
-    # apriltag_node) while looking straight at tag 7: min 0.86 s, median 1.4 s,
-    # max 2.4 s. The old 0.5 s default rejected every one of them as "no tag
-    # currently visible".
+    # /detections ages measured on the Jetson (OAK-D 720p, rectify_node,
+    # apriltag_node) facing tag 7: min 0.86 s, median 1.4 s, max 2.4 s. The old
+    # 0.5 s default rejected all of them as "no tag currently visible".
     assert (classify_detection_age(age_sec, DEFAULT_MAX_DETECTION_AGE_SEC)
             == AGE_OK)
 
@@ -742,28 +728,25 @@ def test_find_workspace_source_file_ignores_a_directory_of_the_same_name(tmp_pat
 # --------------------------------------------------------------------------
 
 def test_solvepnp_round_trip_reproduces_dock_a_theta():
-    """Re-derive the convention through the actual pose-estimation maths.
+    """Re-derives the convention through the actual pose-estimation maths.
 
-    Every other test in this file takes the convention as given (they build a
-    synthetic quaternion with `upright_wall_tag_quaternion` and check it comes
-    back out). This one does not: it starts from a physical tag's four corners
-    in the `map` frame, projects them into a synthetic camera, and hands
-    `cv2.solvePnP` exactly what apriltag_ros's `pnp()` hands it --
+    The other tests take the convention as given (a synthetic quaternion from
+    `upright_wall_tag_quaternion` comes back out). This one starts from a
+    physical tag's four corners in `map`, projects them into a synthetic camera
+    and gives `cv2.solvePnP` what apriltag_ros's `pnp()` gives it:
 
       objectPoints = [(-s,-s,0), (+s,-s,0), (+s,+s,0), (-s,+s,0)]
       imagePoints  = det->p[0..3] = bottom-left, bottom-right, top-right,
                      top-left of the upright tag as a viewer sees it
 
-    -- the first read out of the installed libAprilTagNode.so, the second
-    probed from the apriltag library itself by rendering tag36h11 id 0 with
-    `apriltag_to_image()` and detecting it (and consistent with apriltag.h's
-    documented ideal-corner order). It then checks that the recovered tag
-    frame's +z axis is the outward/room-facing normal and that
-    `tag_outward_theta` on the recovered quaternion gives dock A's recorded
-    theta.
+    The first was read from the installed libAprilTagNode.so; the second was
+    probed by rendering tag36h11 id 0 with `apriltag_to_image()` and detecting it
+    (it matches apriltag.h's ideal-corner order). It then checks that the
+    recovered +z axis is the outward normal and that `tag_outward_theta` on the
+    recovered quaternion gives dock A's recorded theta.
 
-    Skipped where cv2 is unavailable: this is a verification test, not a
-    gate on the feature's own logic.
+    Skipped where cv2 is unavailable: a verification test, not a gate on the
+    feature's own logic.
     """
     cv2 = pytest.importorskip('cv2', reason='opencv-python not installed')
     numpy = pytest.importorskip('numpy')

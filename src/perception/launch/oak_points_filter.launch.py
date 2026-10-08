@@ -3,22 +3,22 @@
     /oak/stereo/image_raw --> resize 4x per side --> XYZ cloud --> voxel
                           --> /oak/points_filtered
 
-navigation's nav2_params.yaml points its camera costmap layers and
+navigation's nav2_params.yaml points its camera costmap layers and the
 collision_monitor's camera source at /oak/points_filtered.
 
-Why not filter the vendor's /oak/points: the vendor's camera container builds
-it (921,600 points, ~29.5 MB) and it then crosses DDS to reach a filter, over
-UDP only (/etc/default/einride-mini-truck sets FASTDDS_BUILTIN_TRANSPORTS=
-UDPv4). The collision monitor's camera source stalled and stopped the robot.
-Here the 1.8 MB depth image is the only thing that crosses DDS: it is shrunk
-4x per side (nearest neighbour, so no depth is invented at object edges),
-turned into a 320x180 XYZ cloud (57,600 points, no colour: nothing in nav
-reads it), and voxelled, all in one container with intra-process transport.
-Once nothing subscribes to /oak/points the vendor's colour-cloud node stops
-computing it. config/oak_points_filter.yaml has the sizing.
+Why not filter the vendor's /oak/points: the vendor's camera container builds it
+(921,600 points, ~29.5 MB) and it crosses DDS over UDP only
+(/etc/default/einride-mini-truck sets FASTDDS_BUILTIN_TRANSPORTS=UDPv4) to reach
+a filter, which stalled the collision monitor's camera source and stopped the
+robot. Here only the 1.8 MB depth image crosses DDS. It is shrunk 4x per side
+(nearest neighbour, so no depth is invented at object edges), turned into a
+320x180 XYZ cloud (57,600 points, no colour since nav does not read it) and
+voxelled, all in one container with intra-process transport. Once nothing
+subscribes to /oak/points the vendor's colour-cloud node stops computing it.
+config/oak_points_filter.yaml has the sizing.
 
-No crop box: the real camera does not see the robot, so nothing near it is
-cut. Every node runs on wall-clock time.
+There is no crop box: the real camera does not see the robot. Every node runs
+on wall-clock time.
 """
 
 import os
@@ -31,7 +31,11 @@ from launch_ros.descriptions import ComposableNode
 
 
 def _depth_container(config):
-    """Depth image -> small XYZ cloud -> voxel, all in one container."""
+    """Returns one container: depth image to small XYZ cloud to voxel.
+
+    Args:
+        config: Path to oak_points_filter.yaml.
+    """
     # A bool, not text: rclpy declares `use_sim_time` as a bool.
     use_sim_time = False
     parameters = [config, {'use_sim_time': use_sim_time}]
@@ -84,6 +88,7 @@ def _depth_container(config):
 
 
 def generate_launch_description():
+    """Returns the OAK-D point cloud filter container."""
     config = os.path.join(
         get_package_share_directory('perception'), 'config', 'oak_points_filter.yaml')
     return LaunchDescription([_depth_container(config)])

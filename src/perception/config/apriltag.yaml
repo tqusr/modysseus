@@ -1,23 +1,18 @@
-### apriltag_ros (AprilTagNode) parameters
+# apriltag_ros (AprilTagNode) parameters.
 #
-# Detects the dock AprilTags (family 36h11, 0.100 m edge, per the dock
-# model's own built-in comment) from the OAK-D RGB camera.
+# Detects the dock AprilTags (family 36h11, 0.100 m edge) from the OAK-D RGB
+# camera. Every dock tag (ids 0-7) is the same size, so one default `size`
+# covers them and the optional `tag.ids`/`tag.sizes`/`tag.frames` overrides are
+# not needed.
 #
-# Uniform tag size: every dock tag (ids 0-7) is the same physical size, so a
-# single default `size` covers all of them. apriltag_ros's own shipped
-# example (tags_36h11.yaml) treats the `tag.ids`/`tag.sizes`/`tag.frames`
-# block as optional, used only to override individual tags (different size,
-# or a specific TF frame name) -- not needed here since all tags share one
-# size and the node's default per-id frame naming is fine.
-#
-# image topic is remapped in launch/apriltag.launch.py, not here --
-# apriltag_ros does not take topic names as ros__parameters. camera_info is
-# always the sibling `<image topic namespace>/camera_info` (image_transport).
+# The image topic is remapped in launch/apriltag.launch.py, since apriltag_ros
+# takes no topic names as parameters. camera_info is always the sibling
+# `<image topic namespace>/camera_info` (image_transport).
 /**:
     ros__parameters:
-        # use_sim_time is set by launch/apriltag.launch.py, not here.
+        # use_sim_time is set by launch/apriltag.launch.py.
 
-        image_transport: raw     # the real driver publishes raw images
+        image_transport: raw     # The real driver publishes raw images.
         family: 36h11
         size: 0.100               # meters
         max_hamming: 0            # exact decode only
@@ -25,7 +20,7 @@
 
         detector:
             threads: 1
-            decimate: 1.0          # no decimation: tags are small/far in the arena
+            decimate: 1.0          # No decimation: tags are small and far in the arena.
             blur: 0.0
             refine: true
             sharpening: 0.25

@@ -1,30 +1,28 @@
 """tag_dock_server end to end: the whole docking sequence against fake nodes.
 
-The real server runs in this process, talking over real ROS 2 topics, services
-and actions to a rig that stands in for the rest of the robot: TF (the robot
-pose and the dock's tag), the AprilTag detections and their image gate, the
-local costmap (with the dock's own wall and wings marked in it, and inflation
-around them), Nav2's `navigate_to_pose` and opennav_docking's `docking_server`. What is
-checked is the SEQUENCE:
+The real server runs in this process over real ROS 2 topics, services and
+actions, against a rig standing in for the rest of the robot: TF (robot pose and
+the dock's tag), the AprilTag detections and image gate, the local costmap (the
+dock's wall and wings marked, with inflation), Nav2's `navigate_to_pose` and
+opennav_docking's `docking_server`. What is checked is the sequence:
 
   - Nav2 takes the robot to the pre-dock pose only when it is outside the box;
-  - the bay is checked first, in the local costmap (which lidar and camera
-    both fill), and while another robot or an object is in it nothing else
-    happens (no tag measurement, no docking) until it has left, however long
-    that takes, and cancelling the goal ends the wait;
-  - then the tag is measured and the measured pose is written into docks.yaml
-    and docking.yaml (TEMPORARY COPIES here; the real source files are checked
-    to be untouched);
-  - then Nav2 turns the robot round onto the staging pose (the pre-dock
-    position, facing away from the dock), and docking_server is called with the
-    measured pose; it, not a hand-written manoeuvre, reverses the robot in.
+  - the bay is checked first in the local costmap (lidar and camera both fill
+    it), and while another robot or an object is in it nothing else happens (no
+    measurement, no docking) however long that takes; cancelling ends the wait;
+  - then the tag is measured and the pose written into docks.yaml and
+    docking.yaml (temporary copies here; the real source files are checked
+    untouched);
+  - then Nav2 turns the robot onto the staging pose (the pre-dock position,
+    facing away) and docking_server is called with the measured pose; it, not a
+    hand-written manoeuvre, reverses the robot in.
 
-WHAT THIS CANNOT DO: say whether the lidar and camera mark a real robot in a real dock, how
+It cannot say whether lidar and camera mark a real robot in a real dock, how
 Nav2's docking controller behaves at 0.08 m/s on the floor, or how long the real
 camera takes to deliver a tag. Those are checks on the robot.
 
-Runs on its own ROS domain (set below, before rclpy starts), so it neither
-sees nor disturbs a robot stack running on the same machine.
+It runs on its own ROS domain (set before rclpy starts), so it neither sees nor
+disturbs a robot stack on the same machine.
 """
 
 import math
@@ -175,11 +173,11 @@ class Rig(Node):
                 for out, lateral in local]
 
     def _publish_costmap(self):
-        """A 3 x 3 m rolling window around the robot, like the local costmap's.
+        """Returns a 3 x 3 m rolling window around the robot, like the local costmap.
 
-        Obstacle cells are 100 (Nav2's lethal). Cells within 0.23 m of one are
-        99 (inflation), which the bay check must NOT count; the dock's own wall
-        and wings are marked and inflated like any other obstacle.
+        Obstacle cells are 100 (lethal). Cells within 0.23 m of one are 99
+        (inflation), which the bay check must not count. The dock's wall and
+        wings are marked and inflated like any obstacle.
         """
         if not self.costmap_enabled:
             return
@@ -388,9 +386,8 @@ def test_free_bay_in_the_box_measures_saves_and_docks_without_navigating(sequenc
     response = result_of(result_future)
 
     assert response.status == GoalStatus.STATUS_SUCCEEDED and response.result.success
-    # Already in the box: Nav2 is used once only, to TURN the robot onto the
-    # staging pose (the pre-dock position facing away from the dock), and that
-    # happens before docking_server is called.
+    # Already in the box: Nav2 is used once, to turn the robot onto the staging
+    # pose (pre-dock position, facing away), before docking_server is called.
     assert run.rig.events == ['nav', 'dock']
     assert_is_staging_pose(run.rig.nav_goals[0], run.rig.dock_goals[0])
     assert run.rig.gate_calls and run.rig.gate_calls[0] is True \

@@ -1,10 +1,9 @@
-"""The docking sequence's pure parts: is the dock bay free, saving a measured
-dock pose, and that the config files agree about where the pre-dock pose is.
+"""The docking sequence's pure parts.
 
-No rclpy, no ROS graph, no robot. WHAT THESE CANNOT DO: say whether the lidar
-sees a real robot in a real dock bay (the bay's size comes from the
-dock model), or whether Nav2's docking controller completes the approach at the
-configured speed. Those are checks on the robot.
+Covers whether the dock bay is free, saving a measured dock pose, and whether the
+config files agree on the pre-dock pose. No ROS or robot. They cannot say whether
+the lidar sees a real robot in a real bay (its size comes from the dock model) or
+whether Nav2's docking controller completes the approach at the configured speed.
 """
 
 import math
@@ -218,10 +217,11 @@ def test_the_sequence_parameters_are_set():
 
 
 def test_the_robot_backs_in_and_docking_servers_staging_pose_is_where_we_turn_to():
-    """docking.yaml's staging pose (dock pose + staging_x_offset along its
-    heading, heading + staging_yaw_offset) is the pre-dock position facing AWAY
-    from the dock; the mission's docks.yaml staging pose is the same position
-    facing the dock."""
+    """docking.yaml's staging pose is the pre-dock position facing away from the dock.
+
+    It is the dock pose plus staging_x_offset along its heading, with the heading
+    plus staging_yaw_offset. The mission's docks.yaml staging pose is the same
+    position facing the dock."""
     server = _docking_params()['docking_server']['ros__parameters']
     assert server['dock_backwards'] is True
     offset = server['arena_dock']['staging_x_offset']

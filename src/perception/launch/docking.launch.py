@@ -1,64 +1,48 @@
-"""Bring up opennav_docking's real `DockRobot` action server.
+"""Brings up opennav_docking's `DockRobot` action server and `tag_dock_server`.
 
-Runs the `opennav_docking` package's `docking_server` node, configured against
-the real arena dock poses (`config/docking.yaml`, itself hand-transcribed from
-`mission/config/docks.yaml` -- see that file's header comment for the
-staging-pose formula and why fixed-pose docking was chosen over a vision-
-corrected AprilTag approach for this iteration).
+Runs `docking_server` from `opennav_docking`, configured with the real arena dock
+poses in `config/docking.yaml` (hand-transcribed from `mission/config/docks.yaml`;
+see that file's header for the staging-pose formula).
 
-EVERY DOCKING MOTION GOES THROUGH THE COLLISION MONITOR.
+Every docking motion goes through the collision monitor. Velocity commands
+reach the robot only via controller or behavior_server -> `cmd_vel_nav` ->
+velocity_smoother -> nav2_collision_monitor -> `/cmd_vel_ctrl`
+(navigation/launch/navigation.launch.py), so the lidar and camera stop and
+slowdown zones guard docking and undocking too.
 
-Everywhere in this stack a velocity command reaches the robot only through
-controller/behavior_server -> `cmd_vel_nav` -> velocity_smoother ->
-nav2_collision_monitor -> `/cmd_vel_ctrl` (navigation/launch/navigation.launch.py),
-so the lidar and camera stop/slowdown zones guard docking and undocking too:
-an obstacle can appear in a dock bay like anywhere else.
-
-  - tag_dock_server (`/dock_robot`, `/undock_robot`, what the mission uses)
-    publishes no velocity itself. It moves the robot only with Nav2's own
-    NavigateToPose (to the pre-dock pose, then turned round onto the staging
-    pose) and docking_server (which REVERSES the robot in, at the slow speed
-    limits in docking.yaml), all inside that chain.
-  - docking_server (explicit-pose goals passed through, and its own
+  - `tag_dock_server` (`/dock_robot`, `/undock_robot`, used by the mission)
+    publishes no velocity. It moves the robot with Nav2's NavigateToPose (to
+    the pre-dock pose, then turned onto the staging pose) and docking_server
+    (which reverses the robot in at the slow limits in docking.yaml), all inside
+    that chain.
+  - `docking_server` (explicit-pose goals passed through, and its own
     `/docking_server/*` actions) publishes `cmd_vel`, remapped below into
-    `cmd_vel_nav`. It used to publish `/cmd_vel` directly, a deliberate
-    exception from when the stop polygon was +-0.25 m and fired on the dock's
-    back wall. The stop square is now +-0.15 m and tag docking ends with the
-    front edge 0.15 m from the wall (0.273 m from base_footprint), so the
-    wall is outside it; the wall is inside the 0.30 m slowdown circle, which
-    only slows the last few cm. An explicit-pose goal that drives
-    docking_server closer than ~3 cm to a wall WILL be stopped by the monitor:
-    that is the point.
+    `cmd_vel_nav`. It used to publish `/cmd_vel` directly because the stop
+    polygon (+-0.25 m) fired on the dock's back wall. The stop square is now
+    +-0.15 m and tag docking ends with the front edge 0.15 m from the wall
+    (0.273 m from base_footprint), outside it; the wall is inside the 0.30 m
+    slowdown circle, which only slows the last few cm. An explicit-pose goal
+    that drives closer than ~3 cm to a wall will be stopped by the monitor.
 
-docking_server's own `controller.use_collision_detection` (config/
-docking.yaml) stays on as a second, trajectory-ahead check against the local
-costmap.
+docking_server's `controller.use_collision_detection` (config/docking.yaml)
+stays on as a second, trajectory-ahead check against the local costmap.
 
-LIFECYCLE -- same issue class as Tasks 2/3's `slam_toolbox` nodes, confirmed
-(not assumed) before writing this file: `ros2 node info` against a running
-`opennav_docking` process shows `/docking_server/change_state` and
-`/docking_server/get_state` services, i.e. `opennav_docking::DockingServer`
-is a `nav2_util::LifecycleNode` (it subclasses `rclcpp_lifecycle::LifecycleNode`)
-like every other Nav2 server -- it does nothing (the `dock_robot` action
-server isn't even active) until CONFIGUREd and ACTIVATEd. This environment
-has shown `change_state` responses go missing for lifecycle nodes before
-(slam_toolbox, Tasks 2/3), so this launch reuses the exact same proven
-two-layer approach as `localization/launch/localize.launch.py`:
+Lifecycle: `opennav_docking::DockingServer` is a `nav2_util::LifecycleNode`
+(`/docking_server/change_state` and `get_state` exist, confirmed with
+`ros2 node info`) and does nothing until configured and activated. Because
+`change_state` responses go missing in this environment (as with slam_toolbox),
+this launch reuses the two-layer approach of
+`localization/launch/localize.launch.py`:
 
-1. A fast-path `OnStateTransition` event handler that reacts the instant the
-   real `configuring -> inactive` transition is observed, firing `ACTIVATE`
-   immediately.
-2. `slam_lifecycle_watchdog.py` (from the `localization` package -- it is
-   node-name-agnostic, taking only a node name and timeout as argv, so it
-   works unmodified here) as the actual authority: it polls `get_state`
-   directly and re-issues whatever transition is needed, so a lost
-   `change_state` response just means the next poll retries, and it fails
-   loudly (ERROR + non-zero exit) if `docking_server` never reaches `active`.
+1. A fast-path `OnStateTransition` handler fires ACTIVATE as soon as
+   `configuring -> inactive` is observed.
+2. `slam_lifecycle_watchdog.py` (from `localization`; it takes only a node name
+   and timeout) is the authority. It polls `get_state`, re-issues transitions,
+   and fails loudly (ERROR, non-zero exit) if `docking_server` never reaches
+   `active`.
 
-Do not trust the vendor's own lifecycle-manager pattern (`nav2_lifecycle_manager`)
-or a bare `LifecycleNode` with no activation path here without the watchdog --
-see the lesson in this repo's task briefs: it is exactly the race that cost
-real time in Tasks 2/3.
+Do not rely on `nav2_lifecycle_manager` or a bare `LifecycleNode` without the
+watchdog.
 
 Every node runs on wall-clock time: there is no /clock on the robot.
 """
@@ -78,12 +62,12 @@ from launch_ros.events.lifecycle import ChangeState
 from launch.actions import EmitEvent
 from lifecycle_msgs.msg import Transition
 
-#: Generous, same rationale as localize.launch.py: only bounds how long we
-#: wait before declaring the run dead.
+# Generous, as in localize.launch.py: bounds the wait before declaring the run dead.
 ACTIVATION_TIMEOUT = 60.0
 
 
 def _launch_nodes(context):
+    """Returns docking_server, tag_dock_server and the activation machinery."""
     # A bool, not text: rclpy declares `use_sim_time` as a bool.
     use_sim_time = False
     config = os.path.join(
@@ -96,22 +80,17 @@ def _launch_nodes(context):
         namespace='',
         output='screen',
         parameters=[config, {'use_sim_time': use_sim_time}],
-        # tag_dock_server answers /dock_robot and /undock_robot (Nav2 to the
-        # pre-dock pose, wait while the bay is occupied, measure the tag and
-        # save the pose, turn round, then call this server to back in); this server's own
-        # actions move aside and serve its explicit-pose goals.
-        # cmd_vel -> cmd_vel_nav: into the velocity smoother and collision
-        # monitor like every other motion (see the docstring above).
+        # tag_dock_server answers /dock_robot and /undock_robot and calls this
+        # server to back in, so this server's own actions move aside and serve
+        # explicit-pose goals. cmd_vel goes into the velocity smoother and
+        # collision monitor like every other motion.
         remappings=[('dock_robot', 'docking_server/dock_robot'),
                     ('undock_robot', 'docking_server/undock_robot'),
                     ('cmd_vel', 'cmd_vel_nav')],
     )
 
-    # /dock_robot + /undock_robot: Nav2 to the requested dock's pre-dock pose,
-    # waits (without limit) while another robot or an obstacle is in the bay,
-    # measures the dock's AprilTag, saves the measured pose, and has
-    # docking_server drive in. Undocking backs out again. Reads its own
-    # `tag_dock_server:` block and the dock list from the same docking.yaml.
+    # /dock_robot and /undock_robot. Reads its `tag_dock_server:` block and the
+    # dock list from the same docking.yaml.
     tag_dock_server = Node(
         package='perception',
         executable='tag_dock_server',
@@ -126,7 +105,7 @@ def _launch_nodes(context):
             transition_id=transition_id,
         ))
 
-    # Fast path: react to the real transition the instant it is observed.
+    # Fast path: activate as soon as the transition is observed.
     activate_on_configured = RegisterEventHandler(OnStateTransition(
         target_lifecycle_node=docking_node,
         start_state='configuring',
@@ -134,7 +113,7 @@ def _launch_nodes(context):
         entities=[change_state(Transition.TRANSITION_ACTIVATE)],
     ))
 
-    # Authority: polls get_state, retries as needed, and fails loudly.
+    # Authority: polls get_state, retries and fails loudly.
     watchdog = ExecuteProcess(
         cmd=['ros2', 'run', 'localization', 'slam_lifecycle_watchdog.py',
              '/docking_server', str(ACTIVATION_TIMEOUT)],
@@ -163,6 +142,7 @@ def _launch_nodes(context):
 
 
 def generate_launch_description():
+    """Returns the docking launch description."""
     return LaunchDescription([
         OpaqueFunction(function=_launch_nodes),
     ])

@@ -1,40 +1,32 @@
-"""Interactive capture of real-world dock poses from AprilTag detections.
+"""Interactive capture of real dock poses from AprilTag detections.
 
-`ros2 run perception capture_dock_pose` -- terminal 3 of the mapping-mission
-workflow described at length in
-`localization/launch/mapping_mission_hardware.launch.py`'s docstring (read that
-first; it is the primary documentation for this feature). No `use_sim_time`
-flag is passed: there is no /clock on the robot and the default (false) is
-right.
+`ros2 run perception capture_dock_pose` is terminal 3 of the mapping-mission
+workflow described in the docstring of
+`localization/launch/mapping_mission_hardware.launch.py`, which is the primary
+documentation. No `use_sim_time` flag is passed: there is no /clock on the robot.
 
-WHAT THIS IS FOR. `mission/config/docks.yaml`'s 8 dock poses are wherever
-somebody physically put the docks. This node captures them without anybody doing trigonometry on a tape measure.
-Drive the robot (keyboard teleop, terminal 2) until a dock's tag is in the
-camera's view, type `i` + Enter here, and this node reads that tag's pose out
-of TF in the `map` frame, converts it into docks.yaml's dock_pose/staging_pose
-convention and docking.yaml's own (different) schema, and rewrites just those
-two lines in the workspace SOURCE files.
+`mission/config/docks.yaml`'s 8 dock poses are wherever the docks were placed.
+Drive the robot (teleop, terminal 2) until a dock's tag is in view and type `i`
+and Enter here. The node reads that tag's pose from TF in `map`, converts it to
+docks.yaml's dock_pose/staging_pose convention and docking.yaml's different
+schema, and rewrites just those two lines in the workspace source files.
 
-WHAT IT DELIBERATELY DOES NOT DO.
+What it deliberately does not do:
 
-- It does not average, filter or re-sample. One keypress is one snapshot of
-  TF. Localization noise, a glancing viewing angle or a tag detected at the
-  edge of the frame all go straight into the file. Capture from roughly where
-  the robot would stage (~0.6 m out, square on to the tag) and re-capture if a
-  value looks wrong -- re-capturing is idempotent, it rewrites the same line.
-- It does not touch the installed `share/` copies, so a capture only takes
-  effect on the next `colcon build`. That is deliberate: the source files are
-  what git tracks and what the next build installs, and a capture written into
-  `install/` would be silently discarded by that build.
-- It does not validate that the captured pose is physically plausible (inside
-  the arena, on a wall, 1.5 m from its neighbour). `git diff` is that check,
-  and the dock-A sanity check in this feature's report is how you earn the
-  right to trust the other 7.
+- Average, filter or resample. One keypress is one TF snapshot, so localization
+  noise, a glancing angle or a tag at the frame edge go straight into the file.
+  Capture from roughly the staging pose, square on, and re-capture if a value
+  looks wrong (re-capturing rewrites the same line).
+- Touch the installed `share/` copies. Git tracks the source files and the next
+  `colcon build` installs them, and a capture written to `install/` would be
+  discarded by that build.
+- Check that the pose is plausible (inside the arena, on a wall, 1.5 m from its
+  neighbour). `git diff` is that check, and a good dock A capture earns trust
+  in the other 7.
 
-ALL the arithmetic and all the file editing live in `perception.dock_capture`,
-which imports no ROS at all, so both are unit-tested without a ROS graph. In
-particular the tag-orientation -> `dock_pose.theta` convention (the part most
-easily got backwards) is derived and documented in that module's header.
+All arithmetic and file editing lives in `perception.dock_capture` (no ROS,
+unit-tested). The tag-orientation to `dock_pose.theta` convention, the part most
+easily got backwards, is derived in that module's docstring.
 """
 
 import math
@@ -62,8 +54,7 @@ from perception.dock_capture import (AGE_CLOCK_MISMATCH, AGE_STALE,
                                      run_command_loop)
 
 
-#: Source-relative paths of the two files a capture rewrites, used to find the
-#: workspace copies from the installed share directories.
+# Paths under `src/` of the two files a capture rewrites.
 DOCKS_YAML_RELATIVE = 'mission/config/docks.yaml'
 DOCKING_YAML_RELATIVE = 'perception/config/docking.yaml'
 
@@ -71,9 +62,15 @@ DOCKING_YAML_RELATIVE = 'perception/config/docking.yaml'
 class CaptureDockPoseNode(Node):
     """Keeps the newest /detections message and turns a keypress into a capture.
 
-    The only state is the latest detection array. Captures are driven from the
-    stdin thread (see `main`), so that one attribute is the whole thread
-    boundary and it is guarded by a lock.
+    Captures run on the stdin thread (see `main`), so the latest detection array
+    is the whole thread boundary and is guarded by a lock.
+
+    Parameters:
+        detections_topic: AprilTagDetectionArray topic.
+        map_frame: Frame the poses are expressed in.
+        max_detection_age_sec: Oldest detection accepted, seconds.
+        docks_file, docking_file: Paths to rewrite; empty means locate the
+            workspace source copies automatically.
     """
 
     def __init__(self):
@@ -83,9 +80,8 @@ class CaptureDockPoseNode(Node):
         self.declare_parameter('map_frame', MAP_FRAME)
         self.declare_parameter('max_detection_age_sec',
                                DEFAULT_MAX_DETECTION_AGE_SEC)
-        # Empty => auto-locate the workspace source copies. Override when the
-        # files live somewhere this node cannot infer (a deployment installed
-        # from a release, a second workspace).
+        # Empty auto-locates the workspace sources; override for a release
+        # deployment or a second workspace.
         self.declare_parameter('docks_file', '')
         self.declare_parameter('docking_file', '')
 
@@ -98,14 +94,12 @@ class CaptureDockPoseNode(Node):
 
         self._lock = threading.Lock()
         self._latest = None
-        # Per-capture scratch: tag height and TF age per frame, for the success
-        # report only. Not part of the capture itself, which is planar.
+        # Per-capture scratch (tag height, TF age per frame) for the report only.
         self._detail = {}
 
         self._tf_buffer = tf2_ros.Buffer()
-        # spin_thread=False: this node is spun by main's own executor thread,
-        # which is also what delivers TF messages into the buffer -- matching
-        # mission_tree.py's shared Buffer/TransformListener idiom.
+        # spin_thread=False: main's executor thread spins this node and
+        # delivers TF into the buffer, as in mission_tree.py.
         self._tf_listener = tf2_ros.TransformListener(
             self._tf_buffer, self, spin_thread=False)
 
@@ -115,16 +109,19 @@ class CaptureDockPoseNode(Node):
         self._topic = topic
 
     def _resolve_config(self, parameter_name, relative_path):
-        """Absolute path of a config file to rewrite, or raise.
+        """Returns the absolute path of a config file to rewrite.
 
-        Failing loudly at startup is the point: the alternative is discovering
-        after eight captures that they all went into a share/ copy that the
-        next build overwrote.
+        Fails at startup, not after eight captures went into a `share/` copy that
+        the next build overwrote. Both files are found by walking up from this
+        package's share directory, including docks.yaml; package.xml explains why
+        mission's own share directory would close a dependency cycle.
 
-        Both files are located by walking up to the workspace source tree from
-        THIS package's share directory, including `mission/config/docks.yaml` --
-        see package.xml for why this must not go through mission's own share
-        directory (it would close a dependency cycle).
+        Args:
+            parameter_name: Parameter that may override the path.
+            relative_path: Path under `src/` to search for.
+
+        Raises:
+            RuntimeError: If the file cannot be found and no override is given.
         """
         override = self.get_parameter(parameter_name).value
         if override:
@@ -140,11 +137,12 @@ class CaptureDockPoseNode(Node):
         return found
 
     def _on_detections(self, msg):
+        """Stores the newest detection array."""
         with self._lock:
             self._latest = msg
 
     def describe_setup(self):
-        """Lines summarising what this node will read and write, for startup."""
+        """Returns startup lines summarising what this node reads and writes."""
         return [
             f'  detections topic : {self._topic}',
             f'  map frame        : {self._map_frame}',
@@ -155,14 +153,11 @@ class CaptureDockPoseNode(Node):
         ]
 
     def capture(self):
-        """Capture every tag in the newest /detections message. Never raises.
+        """Captures every tag in the newest /detections message; never raises.
 
-        Called from the stdin thread. This method owns only the "is there a
-        current detection at all" decision; the per-tag work is
-        `dock_capture.capture_visible_tags`, which keeps each tag independent
-        (an unknown id or a failed TF lookup reports itself and the remaining
-        tags in the same message are still captured -- two neighbouring docks
-        in one frame is the normal case) and is unit-tested without a node.
+        Called from the stdin thread. It decides only whether a current
+        detection exists; the per-tag work is
+        `dock_capture.capture_visible_tags`, which keeps tags independent.
         """
         logger = self.get_logger()
         with self._lock:
@@ -208,21 +203,24 @@ class CaptureDockPoseNode(Node):
             self._report(outcome, detection)
 
     def _lookup_tag_transform(self, frame):
-        """`map` -> tag translation and rotation, for capture_visible_tags.
+        """Looks up the `map` -> tag transform for `capture_visible_tags`.
 
-        Wraps tf2's exception in TagTransformUnavailable so the pure capture
-        logic never has to know what tf2 is.
+        Args:
+            frame: The tag's TF frame name.
+
+        Returns:
+            `((x, y), (qx, qy, qz, qw))`.
+
+        Raises:
+            TagTransformUnavailable: If the lookup fails, so the pure capture
+                logic never sees tf2.
         """
         try:
-            # Time() (zero) is tf2's "latest available transform", not a
-            # literal timestamp -- the same idiom mission_tree.py uses, and
-            # deliberately NOT a lookup at the detection's own stamp:
-            # slam_toolbox here publishes map->odom stamped ~0.9 s INTO THE
-            # FUTURE (see mission_tree._transform_is_recent's note), so asking
-            # for the chain at an older image stamp is an extrapolation
-            # request, while "latest available" resolves cleanly. The staleness
-            # check on the detection is what guarantees "latest available"
-            # means "the tag this keypress is about".
+            # Time() (zero) means "latest available" in tf2, not a timestamp, as
+            # in mission_tree.py. Not the detection's stamp: slam_toolbox stamps
+            # map->odom ~0.9 s into the future, so an older stamp would need
+            # extrapolation. The detection staleness check ensures "latest" is
+            # the tag this keypress is about.
             transform = self._tf_buffer.lookup_transform(
                 self._map_frame, frame, Time())
         except tf2_ros.TransformException as error:
@@ -231,7 +229,7 @@ class CaptureDockPoseNode(Node):
 
         translation = transform.transform.translation
         rotation = transform.transform.rotation
-        # Stashed for the success report only; the capture itself is planar.
+        # For the report only; the capture itself is planar.
         self._detail[frame] = (
             translation.z,
             (self.get_clock().now()
@@ -241,9 +239,11 @@ class CaptureDockPoseNode(Node):
                 (rotation.x, rotation.y, rotation.z, rotation.w))
 
     def _write_capture(self, capture):
+        """Writes `capture` into both YAML files."""
         apply_capture(capture, self._docks_path, self._docking_path)
 
     def _report(self, outcome, detection):
+        """Logs the result of capturing one tag."""
         logger = self.get_logger()
         if outcome.succeeded:
             capture = outcome.capture
@@ -287,10 +287,12 @@ class CaptureDockPoseNode(Node):
 
 
 def _pose(pose):
+    """Formats a pose as "x, y, theta"."""
     return f'{pose.x:.3f}, {pose.y:.3f}, {pose.theta:.5f}'
 
 
 def _print_instructions(node):
+    """Prints the startup banner and usage."""
     print()
     print('=' * 72)
     print('capture_dock_pose -- interactive dock-pose capture')
@@ -315,6 +317,7 @@ def _print_instructions(node):
 
 
 def main():
+    """Runs the capture loop; returns the process exit code."""
     rclpy.init()
     try:
         node = CaptureDockPoseNode()
@@ -323,9 +326,7 @@ def main():
         rclpy.shutdown()
         return 1
 
-    # ROS spins on its own thread so the stdin loop can block on the main
-    # thread: that way Ctrl-C lands as a KeyboardInterrupt in the thread that
-    # is waiting for input, which is the documented way to quit.
+    # ROS spins on its own thread so Ctrl-C reaches the thread waiting on stdin.
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
