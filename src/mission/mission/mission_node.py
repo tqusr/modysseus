@@ -1,3 +1,4 @@
+"""ROS 2 node that runs the mission behaviour tree."""
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from rclpy.node import Node
@@ -13,6 +14,15 @@ import py_trees_ros
 
 
 class MissionNode(Node):
+    """Builds the mission tree and ticks it at `tick_hz`.
+
+    Parameters:
+        saga_url: Saga server base URL.
+        saga_token: Saga bearer token.
+        docks_file: Path to the docks YAML.
+        tick_hz: Tree tick rate in Hz.
+    """
+
     def __init__(self):
         super().__init__('mission_node')
         self.declare_parameter('saga_url', 'http://localhost:8000')
@@ -26,17 +36,15 @@ class MissionNode(Node):
         )
         docks = load_docks(self.get_parameter('docks_file').value)
 
-        # Latched, so Foxglove/RViz get the markers whenever they subscribe.
+        # Latched so late subscribers still get the markers.
         self._dock_markers_pub = self.create_publisher(
             MarkerArray, '~/dock_markers',
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self._dock_markers_pub.publish(build_dock_markers(docks))
 
         root = build_mission_tree(self, saga_client, docks)
-        # py_trees_ros.trees.BehaviourTree (not plain py_trees.trees.BehaviourTree) is the
-        # ROS2-integrated tree class: its setup() wires the tree to this node (blackboard
-        # exchange, snapshot-stream services, a declared `setup_timeout` parameter) instead
-        # of just calling each behaviour's setup() in isolation.
+        # The ROS tree class wires setup() to this node (blackboard exchange,
+        # snapshot services); plain py_trees only calls each behaviour's setup().
         self.tree = py_trees_ros.trees.BehaviourTree(root)
         self.tree.setup(node=self, timeout=15.0)
 
@@ -45,6 +53,7 @@ class MissionNode(Node):
 
 
 def main():
+    """Runs the mission node until shutdown."""
     rclpy.init()
     node = MissionNode()
     try:

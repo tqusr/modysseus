@@ -31,16 +31,13 @@ from mission.stub_action_servers import StubActionServers
 
 
 def _serve_lifecycle_manager_is_active(node, success=True, call_log=None):
-    """Fakes nav2_lifecycle_manager's is_active service so VehicleStatusOK's
-    real check has something to poll -- this test has no real Nav2 stack.
+    """Fakes nav2_lifecycle_manager's is_active service for VehicleStatusOK to poll.
 
-    `success=False` fakes a reachable-but-unhealthy lifecycle manager (some
-    managed node not active), as distinct from the service being absent
-    altogether. `call_log`, when given, is appended to on every request so a
-    test can confirm the fake was actually reached at least once before
-    asserting on its effect (success=False and "never polled yet" both read
-    as "not confirmed active" from VehicleStatusOK's own state, so that
-    alone can't distinguish the two without this)."""
+    `success=False` fakes a reachable but unhealthy manager (a managed node not
+    active), as distinct from the service being absent. `call_log`, if given, is
+    appended to on every request, so a test can confirm the fake was reached
+    before asserting on its effect ("never polled" and "reported False" both
+    read as "not confirmed active")."""
     def handle(request, response):
         if call_log is not None:
             call_log.append(True)
@@ -60,11 +57,11 @@ def _stamped_transform(stamp_msg, parent, child):
 
 
 def _stamped_transform_at(stamp_msg, parent, child, x, y):
-    """Like _stamped_transform, but at an explicit (x, y) translation --
-    needed for the UndockRobot TF-ground-truth tests below, where the
-    robot's position relative to specific dock poses is exactly what's
-    under test (unlike _stamped_transform's implicit (0, 0, 0), which
-    would silently coincide with whatever dock sits at the origin)."""
+    """Like _stamped_transform, but at an explicit (x, y) translation.
+
+    Needed by the UndockRobot TF tests, where the position relative to specific
+    docks is what is under test (the implicit origin would coincide with
+    whichever dock sits there)."""
     transform = _stamped_transform(stamp_msg, parent, child)
     transform.transform.translation.x = x
     transform.transform.translation.y = y
@@ -72,9 +69,9 @@ def _stamped_transform_at(stamp_msg, parent, child, x, y):
 
 
 def _broadcast_fake_localization(broadcaster, node):
-    """Fakes slam_toolbox's map->odom plus the sim's odom->base_footprint,
-    both re-stamped with "now" on every call -- VehicleStatusOK/Localize's
-    real TF recency checks need a live-looking broadcaster, not a one-shot
+    """Fakes map->odom and odom->base_footprint, re-stamped with "now" on every call.
+
+    The real TF recency checks need a live-looking broadcaster, not a one-shot
     static transform that goes stale after MAX_TF_AGE_SEC."""
     now = node.get_clock().now().to_msg()
     transforms = [_stamped_transform(now, parent, child)
@@ -125,11 +122,10 @@ def _docks():
 
 
 def _dock_pose_docks():
-    """Unlike _docks() above (every letter at the same (0,0,0), fine for
-    tests that don't care about specific dock geometry), the UndockRobot
-    ground-truth tests below need well-separated dock poses so a TF
-    position can be placed unambiguously "at dock B" vs "nowhere near any
-    dock"."""
+    """Docks at well-separated poses, unlike _docks() (all at (0, 0, 0)).
+
+    The UndockRobot TF tests need a position to be unambiguously "at dock B" or
+    "nowhere near any dock"."""
     return {
         letter: Dock(letter=letter, tag_id=i,
                      dock_pose={"x": float(i * 10), "y": float(i * 10), "theta": 0.0},
@@ -139,14 +135,11 @@ def _dock_pose_docks():
 
 
 class _CountingUndockServer:
-    """Lightweight fake for just the `undock_robot` action -- always
-    succeeds immediately, counting how many goals it actually received.
-    Deliberately NOT the full StubActionServers (which also stands up
-    navigate_to_pose/dock_robot, irrelevant noise for these focused gating
-    tests -- see Task 8 review finding #2: the point here is to prove
-    _not_docked_anywhere/build_ensure_undocked's own gating logic fires (or
-    doesn't) correctly, independent of the rest of the dock/navigate
-    subtree)."""
+    """Lightweight fake for just the `undock_robot` action.
+
+    Always succeeds at once and counts the goals it received. It is not the full
+    StubActionServers, whose navigate_to_pose and dock_robot would be noise: the
+    point is to prove build_ensure_undocked's gating fires, or not, on its own."""
 
     def __init__(self, node):
         self.goal_count = 0
@@ -161,10 +154,11 @@ class _CountingUndockServer:
 
 
 def _tick_until_settled(tree, executor, deadline_sec=5.0):
-    """Ticks `tree` (wrapping a build_ensure_undocked subtree), draining the
-    executor between ticks so CallAction's async action futures actually
-    get a chance to resolve, until the root settles on SUCCESS/FAILURE (not
-    RUNNING) or deadline_sec elapses."""
+    """Ticks `tree` (a build_ensure_undocked subtree) until it settles or times out.
+
+    Drains the executor between ticks so CallAction's futures can resolve, and
+    stops when the root is SUCCESS/FAILURE (not RUNNING) or `deadline_sec`
+    elapses."""
     deadline = time.monotonic() + deadline_sec
     status = py_trees.common.Status.RUNNING
     while time.monotonic() < deadline:
@@ -186,11 +180,9 @@ def test_mission_tree_completes_a_route_cycle():
         executor.add_node(action_server)
         executor.add_node(client_node)
 
-        # VehicleStatusOK/Localize (Task 7) now do real checks -- fake their
-        # two dependencies (nav2_lifecycle_manager's is_active service and a
-        # live map->odom->base_footprint TF chain) the same way StubActionServers
-        # fakes NavigateToPose/DockRobot above, so this test still exercises the
-        # saga/route logic without needing the full real stack running.
+        # VehicleStatusOK and Localize do real checks, so fake their dependencies
+        # (the is_active service and a live TF chain) as StubActionServers fakes
+        # the actions, keeping this test on the saga/route logic.
         lifecycle_service = _serve_lifecycle_manager_is_active(client_node)
         tf_broadcaster = tf2_ros.TransformBroadcaster(client_node)
 
@@ -205,27 +197,20 @@ def test_mission_tree_completes_a_route_cycle():
         observer.register_key(key=BB_SOURCE, access=py_trees.common.Access.READ)
         observer.register_key(key=BB_DESTINATION, access=py_trees.common.Access.READ)
 
-        # Two full routes cross several real-time poll_sec=1.0 WaitUntil gates
-        # (DockIsFree x2, SagaLoaded, SagaUnloaded) using the real wall clock,
-        # not a fake one -- give it real margin. Also exercises UndockRobot
-        # (Task 8) three times (A->B, B->C across the route boundary, C->D),
-        # each a cheap extra CallAction round trip against the stub.
+        # Two routes cross several real-time poll_sec=1.0 WaitUntil gates
+        # (DockIsFree x2, SagaLoaded, SagaUnloaded) on the wall clock, so allow
+        # real margin. It also runs UndockRobot three times (A->B, B->C, C->D).
         deadline = time.monotonic() + 40.0
         route_ids_seen = set()
         route_id_existed = False
         while time.monotonic() < deadline and len(route_ids_seen) < 2:
             _broadcast_fake_localization(tf_broadcaster, client_node)
-            # Drain, don't just sample once: a single spin_once(timeout_sec=0.05)
-            # processes at most ONE ready callback per call (that's spin_once's
-            # own contract), not everything that's ready. The real MissionNode
-            # drains continuously via rclpy.spin(), but this test now has several
-            # concurrent ROS streams in flight at once (TF broadcasts for Task 7's
-            # VehicleStatusOK/Localize, the fake lifecycle-manager Trigger polls,
-            # plus the existing action goal/result futures) -- sampling only one
-            # per iteration let a backlog build up (TF lookups kept returning an
-            # ever-staler "latest" transform, eventually older than
-            # MAX_TF_AGE_SEC), which read as a real localization dropout and
-            # wrongly failed the health check mid-route.
+            # Drain, don't sample once: spin_once(timeout_sec=0.05) processes at
+            # most one ready callback. Several ROS streams run at once here (TF,
+            # the fake Trigger polls, action futures), and sampling one per
+            # iteration let a backlog build until "latest" TF exceeded
+            # MAX_TF_AGE_SEC, which read as a localization dropout and failed the
+            # health check mid-route.
             inner_deadline = time.monotonic() + 0.05
             while time.monotonic() < inner_deadline:
                 executor.spin_once(timeout_sec=0.0)
@@ -234,18 +219,16 @@ def test_mission_tree_completes_a_route_cycle():
             route_id_exists_now = observer.exists(BB_ROUTE_ID)
             if route_id_exists_now:
                 route_ids_seen.add(observer.get(BB_ROUTE_ID))
-            # ClearRoute unsets BB_ROUTE_ID within the same tick it completes a
-            # route; GetRouteFromSaga only repopulates it on a LATER tick, so
-            # this existed->not-existed transition is a reliable, non-transient
-            # signal that a route just finished (unlike peeking at
-            # BB_PACKAGE_DELIVERED, which gets reset in the same tick).
+            # ClearRoute unsets BB_ROUTE_ID in the tick a route completes and
+            # GetRouteFromSaga repopulates it on a later tick, so this existed to
+            # not-existed transition reliably marks a finished route (unlike
+            # BB_PACKAGE_DELIVERED, which resets in the same tick).
             if route_id_existed and not route_id_exists_now:
                 saga.advance_to_next_route()
             route_id_existed = route_id_exists_now
 
-            # Drive the fake Saga status forward based on where the robot has
-            # reported itself, mirroring an organizer observing arrival and
-            # pressing the real admin-page buttons.
+            # Advance the fake Saga status from where the robot says it is,
+            # mirroring an organizer pressing the admin-page buttons.
             if observer.exists(BB_CURRENT_POSITION) and observer.exists(BB_SOURCE) and \
                     observer.get(BB_CURRENT_POSITION) == f"dock:{observer.get(BB_SOURCE)}":
                 saga.set_status("loading_complete")
@@ -261,19 +244,17 @@ def test_mission_tree_completes_a_route_cycle():
 
 
 def _spin_and_drain(executor, duration_sec):
-    """Spin for duration_sec, processing every ready callback along the way
-    (not just one per call -- see test_mission_tree_completes_a_route_cycle's
-    own comment on why a plain single spin_once() call isn't enough once
-    there's more than one concurrent ROS stream in play)."""
+    """Spins for `duration_sec`, processing every ready callback.
+
+    A single spin_once() is not enough with several concurrent ROS streams (see
+    the comment in test_mission_tree_completes_a_route_cycle)."""
     deadline = time.monotonic() + duration_sec
     while time.monotonic() < deadline:
         executor.spin_once(timeout_sec=0.0)
 
 
 def test_vehicle_status_ok_fails_with_no_lifecycle_manager_and_no_tf():
-    """Neither of VehicleStatusOK's two dependencies exist in this bare test
-    node -- it must FAILURE, not default to SUCCESS just because nothing
-    actively errored."""
+    """With neither dependency present, VehicleStatusOK must FAILURE, not default to SUCCESS."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_vsok_nothing_live")
@@ -376,10 +357,10 @@ def test_localize_succeeds_once_map_to_base_footprint_is_live():
 
 
 def test_vehicle_status_ok_fails_when_lifecycle_manager_reports_not_active():
-    """Distinct from "service absent" (covered above): the service is up and
-    reachable, but reports success=False, as it would if some real managed
-    navigation node were not active. TF is live/fresh throughout, isolating
-    this to the lifecycle-manager half of the check."""
+    """The service is up but reports success=False, as if a managed node were inactive.
+
+    Distinct from "service absent". TF is fresh throughout, isolating the
+    lifecycle-manager half of the check."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_vsok_lifecycle_reports_false")
@@ -394,10 +375,8 @@ def test_vehicle_status_ok_fails_when_lifecycle_manager_reports_not_active():
 
         behaviour = VehicleStatusOK("VehicleStatusOK", node, tf_buffer, tf_listener=None)
 
-        # Poll until the fake service has actually been reached at least once --
-        # "not yet polled" and "polled, reported False" both look like "not
-        # confirmed active" from the behaviour's own state alone, so wait for
-        # call_log instead of trusting behaviour.update()'s result here.
+        # Wait on call_log: "not yet polled" and "polled, reported False" look
+        # the same from the behaviour's own state.
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not call_log:
             _spin_and_drain(executor, 0.05)
@@ -410,11 +389,10 @@ def test_vehicle_status_ok_fails_when_lifecycle_manager_reports_not_active():
 
 
 def test_localize_fails_when_tf_is_present_but_too_stale_in_the_past():
-    """A transform that actually resolves, but whose own stamp is older than
-    MAX_TF_AGE_SEC -- distinct from the "no transform published at all" case
-    covered above. Inserted directly via Buffer.set_transform (what
-    TransformListener itself calls on message receipt) rather than via a
-    live broadcaster, for a deterministic stamp with no spin-timing
+    """A transform that resolves but whose stamp is older than MAX_TF_AGE_SEC.
+
+    Distinct from "no transform published". Inserted with Buffer.set_transform
+    (what TransformListener calls) for a deterministic stamp with no spin-timing
     dependency."""
     rclpy.init()
     try:
@@ -431,13 +409,12 @@ def test_localize_fails_when_tf_is_present_but_too_stale_in_the_past():
 
 
 def test_localize_fails_when_tf_is_stamped_too_far_in_the_future():
-    """The mirror case of the above, exercising the new future-side ceiling:
-    slam_toolbox's own ~0.9s look-ahead is tolerated (see
+    """The mirror case: the future-side ceiling.
+
+    slam_toolbox's ~0.9 s look-ahead is tolerated (see
     test_localize_succeeds_once_map_to_base_footprint_is_live and
-    _transform_is_recent's docstring), but a stamp further in the future
-    than FUTURE_TF_TOLERANCE_SEC -- e.g. what a clock-domain mismatch
-    somewhere upstream (a node missing use_sim_time:true) would produce --
-    must still FAILURE, not be waved through as "extra fresh"."""
+    _transform_is_recent), but a stamp beyond FUTURE_TF_TOLERANCE_SEC, as a clock
+    domain mismatch upstream would produce, must still FAILURE."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_localize_stale_future")
@@ -453,10 +430,10 @@ def test_localize_fails_when_tf_is_stamped_too_far_in_the_future():
 
 
 def test_ensure_undocked_fires_when_blackboard_says_docked():
-    """The normal, fast path: BB_CURRENT_POSITION == "dock:<letter>" alone
-    (TF placed far from every known dock, isolating this to the blackboard
-    signal) is enough to trigger a real UndockRobot call, and a successful
-    one clears BB_CURRENT_POSITION afterward."""
+    """The fast path: BB_CURRENT_POSITION == "dock:<letter>" alone triggers UndockRobot.
+
+    TF is placed far from every dock to isolate the blackboard signal, and a
+    successful undock clears BB_CURRENT_POSITION."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_undock_bb_docked")
@@ -484,9 +461,8 @@ def test_ensure_undocked_fires_when_blackboard_says_docked():
         assert status == py_trees.common.Status.SUCCESS
         assert not position_writer.exists(BB_CURRENT_POSITION), \
             "a successful UndockRobot should have cleared BB_CURRENT_POSITION"
-        # An empty dock_type makes the server fall back to its own stashed
-        # state, which is gone after a docking_server restart -- see
-        # build_ensure_undocked's undock_goal().
+        # An empty dock_type makes the server use its stashed state, which is
+        # gone after a docking_server restart (see undock_goal()).
         assert undock_server.dock_types == [DOCK_PLUGIN_TYPE], \
             "UndockRobot goal must name the dock plugin explicitly"
     finally:
@@ -494,13 +470,11 @@ def test_ensure_undocked_fires_when_blackboard_says_docked():
 
 
 def test_ensure_undocked_fires_from_tf_ground_truth_when_blackboard_is_unset():
-    """Task 8 review finding #1's restart-recovery scenario: BB_CURRENT_
-    POSITION is unset -- exactly as it would be right after mission_node
-    crashes/restarts -- but the robot's real TF position sits at a known
-    dock pose. The independent TF ground-truth signal must still trigger
-    UndockRobot; relying on the blackboard alone would silently skip it and
-    reintroduce the planner deadlock this whole mechanism exists to
-    prevent."""
+    """Restart recovery: the blackboard is unset but TF places the robot at a dock.
+
+    This is the state right after mission_node restarts. The TF ground-truth
+    signal must still trigger UndockRobot; the blackboard alone would skip it and
+    bring back the planner deadlock."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_undock_tf_ground_truth")
@@ -519,12 +493,9 @@ def test_ensure_undocked_fires_from_tf_ground_truth_when_blackboard_is_unset():
 
         position_writer = py_trees.blackboard.Client(name="test-position-writer-b")
         position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
-        # Explicitly unset (py_trees' Blackboard storage is a process-wide
-        # global, shared across every Client regardless of name -- confirmed
-        # directly, not assumed -- so a prior test, e.g. the full-route
-        # integration test above, can leave this set; relying on it being
-        # "naturally" absent would make this test's isolation depend on
-        # pytest's execution order).
+        # Unset explicitly: py_trees' blackboard storage is process-wide, shared
+        # across all Clients, so an earlier test (e.g. the full-route test) can
+        # leave this set, making isolation depend on pytest's order.
         if position_writer.exists(BB_CURRENT_POSITION):
             position_writer.unset(BB_CURRENT_POSITION)
         # Left unset from here on -- simulates the mission_node restart.
@@ -543,12 +514,11 @@ def test_ensure_undocked_fires_from_tf_ground_truth_when_blackboard_is_unset():
 
 
 def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
-    """The common case this must NOT regress: the very first leg of a fresh
-    mission (or any leg where the robot genuinely isn't docked anywhere) --
-    neither the blackboard nor TF ground truth says "docked" -- must resolve
-    immediately with NO UndockRobot call at all, not just "eventually
-    succeeds after a harmless extra call". Confirms the gate is still a
-    real gate, not a change that fires unconditionally."""
+    """The common case must not regress: a robot not docked anywhere makes no undock call.
+
+    Neither the blackboard nor TF says "docked" (e.g. the first leg of a fresh
+    mission), so the tree resolves at once with no UndockRobot goal at all.
+    Confirms the gate is a real gate, not one that fires unconditionally."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_undock_neither_signal")
@@ -564,10 +534,8 @@ def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
 
         position_writer = py_trees.blackboard.Client(name="test-position-writer-c")
         position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
-        # Explicitly unset -- see test_ensure_undocked_fires_from_tf_ground_
-        # truth_when_blackboard_is_unset's comment on why this can't just be
-        # assumed absent. Left unset from here on, like a fresh mission
-        # that's never docked anywhere yet.
+        # Unset explicitly (see test_ensure_undocked_fires_from_tf_ground_truth_
+        # when_blackboard_is_unset); left unset like a fresh mission.
         if position_writer.exists(BB_CURRENT_POSITION):
             position_writer.unset(BB_CURRENT_POSITION)
 
@@ -585,16 +553,16 @@ def test_ensure_undocked_does_not_fire_when_neither_signal_says_docked():
 
 
 def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
-    """A dropped service RESPONSE (this environment does drop them under
-    load -- Nav2's own lifecycle manager logs it) leaves the is_active future
-    pending forever. Without a bound on that wait, VehicleStatusOK keeps
-    returning its latched False and mission stays failing for good, with
-    a healthy Nav2 right there. The poll must time out and be re-sent.
+    """A dropped service response must not wedge VehicleStatusOK.
 
-    The client is faked rather than the server: rclpy's own service plumbing
-    refuses to "just not answer" (a callback returning None raises), and what
-    is under test is purely the client-side bound -- requests go out, a
-    response never comes back, so a new request must eventually go out."""
+    Responses do get dropped under load (Nav2's lifecycle manager logs it) and
+    leave the is_active future pending forever. Without a bound, VehicleStatusOK
+    would return its latched False for good with a healthy Nav2. The poll must
+    time out and be re-sent.
+
+    The client is faked, not the server: rclpy's service plumbing refuses to "not
+    answer" (a callback returning None raises), and only the client-side bound is
+    under test."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_vsok_poll_timeout")
@@ -640,12 +608,11 @@ def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
 
 
 def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
-    """Sanity bound on DOCK_PROXIMITY_TOLERANCE_M itself: a position roughly
-    midway between two docks placed 10m apart (well outside the configured
-    tolerance) must NOT read as "docked" via the TF ground-truth check --
-    guards against the tolerance constant ever being accidentally set to
-    something so large it stops discriminating "docked" from "just
-    somewhere in the arena"."""
+    """Sanity bound on DOCK_PROXIMITY_TOLERANCE_M itself.
+
+    A position midway between two docks 10 m apart must not read as "docked" via
+    TF, which guards against the constant becoming so large that it stops
+    telling "docked" from "somewhere in the arena"."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_undock_tolerance_sanity")
@@ -656,9 +623,8 @@ def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
         docks = _dock_pose_docks()  # A=(0,0), B=(10,10), ...
         tf_buffer = tf2_ros.Buffer()
         now = node.get_clock().now().to_msg()
-        # Comfortably farther from every dock than DOCK_PROXIMITY_TOLERANCE_M,
-        # but still well inside the arena's own coordinate range (unlike the
-        # other tests' deliberately absurd (1000, 1000) "nowhere" position).
+        # Well beyond DOCK_PROXIMITY_TOLERANCE_M from every dock but inside the
+        # arena's range, unlike the other tests' absurd (1000, 1000).
         midpoint = 5.0
         assert midpoint > DOCK_PROXIMITY_TOLERANCE_M * 5, \
             "test fixture assumption broken: tighten the midpoint or the docks spacing"
@@ -667,9 +633,8 @@ def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
 
         position_writer = py_trees.blackboard.Client(name="test-position-writer-d")
         position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
-        # Explicitly unset -- see test_ensure_undocked_fires_from_tf_ground_
-        # truth_when_blackboard_is_unset's comment on why this can't just be
-        # assumed absent.
+        # Unset explicitly (see test_ensure_undocked_fires_from_tf_ground_truth_
+        # when_blackboard_is_unset).
         if position_writer.exists(BB_CURRENT_POSITION):
             position_writer.unset(BB_CURRENT_POSITION)
 

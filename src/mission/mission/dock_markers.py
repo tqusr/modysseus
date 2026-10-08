@@ -1,9 +1,8 @@
-"""Dock poses from docks.yaml as a MarkerArray, for viewing on the map in
-Foxglove or RViz.
+"""Dock poses from docks.yaml as a MarkerArray for Foxglove or RViz.
 
-Per dock: a green arrow at `dock_pose` pointing along the tag's outward
-normal, a blue arrow at `staging_pose` pointing the way the robot faces
-there, and a text label with the dock letter and tag id.
+Each dock gets a green arrow at `dock_pose` along the tag's outward normal,
+a blue arrow at `staging_pose` along the robot's heading there, and a text
+label with the dock letter and tag id.
 """
 import math
 
@@ -16,10 +15,12 @@ LABEL_COLOR = (1.0, 1.0, 1.0, 1.0)
 
 
 def _yaw_to_quaternion(yaw: float) -> Quaternion:
+    """Returns the quaternion for a rotation of `yaw` radians about z."""
     return Quaternion(z=math.sin(yaw / 2.0), w=math.cos(yaw / 2.0))
 
 
 def _marker(frame_id, ns, marker_id, marker_type, pose, color) -> Marker:
+    """Returns a marker of `marker_type` at `pose` (x, y, theta) in `color` (RGBA)."""
     marker = Marker()
     marker.header.frame_id = frame_id
     marker.ns = ns
@@ -34,6 +35,7 @@ def _marker(frame_id, ns, marker_id, marker_type, pose, color) -> Marker:
 
 
 def _arrow(frame_id, ns, marker_id, pose, color) -> Marker:
+    """Returns an arrow marker; see `_marker` for the arguments."""
     marker = _marker(frame_id, ns, marker_id, Marker.ARROW, pose, color)
     marker.scale.x = 0.25
     marker.scale.y = 0.04
@@ -42,6 +44,15 @@ def _arrow(frame_id, ns, marker_id, pose, color) -> Marker:
 
 
 def build_dock_markers(docks: dict, frame_id: str = "map") -> MarkerArray:
+    """Builds the markers for all docks.
+
+    Args:
+        docks: Dock letter to `mission.docks.Dock`.
+        frame_id: Frame the poses are expressed in.
+
+    Returns:
+        Three markers per dock: dock arrow, staging arrow and label.
+    """
     array = MarkerArray()
     for index, letter in enumerate(sorted(docks)):
         dock = docks[letter]
@@ -59,7 +70,7 @@ def build_dock_markers(docks: dict, frame_id: str = "map") -> MarkerArray:
 
 
 def main():
-    """Publish the dock markers without the mission, e.g. with mission:=false."""
+    """Publishes the dock markers without the mission (e.g. `mission:=false`)."""
     import rclpy
     from ament_index_python.packages import get_package_share_directory
     from rclpy.node import Node
