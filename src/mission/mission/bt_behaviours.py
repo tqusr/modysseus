@@ -98,9 +98,8 @@ class CallAction(py_trees.behaviour.Behaviour):
     exactly when the result is SUCCEEDED, before returning SUCCESS.
 
     SAFETY: an action goal is state held by a *remote* server, not by this
-    behaviour. py_trees invalidating this behaviour (the root Selector
-    switching to `safe_stop`, or a reactive Sequence killing a dangling
-    runner -- see mission_tree.build_mission_tree) only drops this side's
+    behaviour. py_trees invalidating this behaviour (a reactive Sequence
+    killing a dangling runner when a guard fails -- see mission_tree.build_mission_tree) only drops this side's
     futures; Nav2's controller_server / opennav_docking's docking_server go
     right on executing the goal, i.e. right on driving the robot, with
     nobody left watching. `terminate()` below closes that by actually
@@ -159,7 +158,7 @@ class CallAction(py_trees.behaviour.Behaviour):
         INVALID (as opposed to SUCCESS/FAILURE, where update() has already
         seen a terminal result and cleared the handle) is py_trees' "you are
         no longer part of the active branch" signal -- for this tree, that's
-        the safe-stop path: VehicleStatusOK/Localize failing makes the
+        a failed guard: VehicleStatusOK/Localize failing makes the
         reactive `Mission` Sequence invalidate the whole `route` subtree
         underneath it, which propagates down to whichever CallAction was
         RUNNING. Letting that goal keep running would mean the behaviour

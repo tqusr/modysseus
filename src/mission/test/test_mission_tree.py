@@ -3,7 +3,7 @@ import time
 import py_trees
 import rclpy
 import tf2_ros
-from geometry_msgs.msg import TransformStamped, Twist
+from geometry_msgs.msg import TransformStamped
 from nav2_msgs.action import UndockRobot
 from rclpy.action import ActionServer
 from rclpy.duration import Duration
@@ -11,7 +11,6 @@ from rclpy.executors import SingleThreadedExecutor
 from rclpy.task import Future
 from std_srvs.srv import Trigger
 
-from mission import mission_tree as mission_tree_module
 from mission.docks import Dock
 from mission.mission_tree import (
     BB_CURRENT_POSITION,
@@ -24,7 +23,6 @@ from mission.mission_tree import (
     LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
     MAX_TF_AGE_SEC,
     Localize,
-    StopRobot,
     VehicleStatusOK,
     build_ensure_undocked,
     build_mission_tree,
@@ -227,7 +225,7 @@ def test_mission_tree_completes_a_route_cycle():
             # per iteration let a backlog build up (TF lookups kept returning an
             # ever-staler "latest" transform, eventually older than
             # MAX_TF_AGE_SEC), which read as a real localization dropout and
-            # wrongly tripped the safe-stop branch mid-route.
+            # wrongly failed the health check mid-route.
             inner_deadline = time.monotonic() + 0.05
             while time.monotonic() < inner_deadline:
                 executor.spin_once(timeout_sec=0.0)
@@ -590,7 +588,7 @@ def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
     """A dropped service RESPONSE (this environment does drop them under
     load -- Nav2's own lifecycle manager logs it) leaves the is_active future
     pending forever. Without a bound on that wait, VehicleStatusOK keeps
-    returning its latched False and mission stays in safe_stop for good, with
+    returning its latched False and mission stays failing for good, with
     a healthy Nav2 right there. The poll must time out and be re-sent.
 
     The client is faked rather than the server: rclpy's own service plumbing
@@ -632,202 +630,11 @@ def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
 
         assert len(client.requests) >= 2, \
             ("VehicleStatusOK never re-polled: one lost response would wedge it "
-             f"in safe_stop forever (requests seen: {len(client.requests)})")
+             f"failing forever (requests seen: {len(client.requests)})")
         assert client.abandoned, \
             "the timed-out request must be removed from the client's pending map"
         assert behaviour.update() == py_trees.common.Status.FAILURE, \
             "an unanswered lifecycle-manager poll must still read as NOT ok"
-    finally:
-        rclpy.shutdown()
-
-
-def _count_cmd_vel_messages(node, received):
-    return node.create_subscription(
-        Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
-
-
-def test_stop_robot_publishes_a_zero_twist_on_every_tick():
-    """The safe-stop fix: a SINGLE zero Twist (what this used to publish) is
-    simply overwritten by the next message from collision_monitor or
-    docking_server, both of which publish /cmd_vel far faster than Mission
-    ticks. Every tick must publish, and every published command must be
-    zero."""
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_stop_robot_per_tick")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        _count_cmd_vel_messages(node, received)
-
-        # publish_hz effectively disabled, so this test measures ONLY the
-        # per-tick publishes (the timer gets its own test below).
-        behaviour = StopRobot("StopRobot", node, publish_hz=0.001)
-
-        for _ in range(3):
-            assert behaviour.update() == py_trees.common.Status.SUCCESS
-            _spin_and_drain(executor, 0.1)
-
-        assert len(received) >= 3, \
-            f"expected at least one zero Twist per tick, got {len(received)}"
-        assert all(msg.linear.x == 0.0 and msg.angular.z == 0.0 for msg in received)
-    finally:
-        rclpy.shutdown()
-
-
-def test_stop_robot_keeps_publishing_between_ticks_and_stops_when_invalidated():
-    """Mission ticks at 1 Hz and `safe_stop` is a memory=True Sequence, so
-    ticking alone leaves multi-second holes against a 20 Hz publisher. The
-    behaviour starts a timer on its first tick to fill them -- and must tear
-    that timer down when py_trees invalidates it (the root Selector switching
-    back to `Mission`), or it would fight healthy navigation forever."""
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_stop_robot_timer")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        _count_cmd_vel_messages(node, received)
-
-        behaviour = StopRobot("StopRobot", node, publish_hz=20.0)
-        behaviour.update()  # one tick only -- the rest must come from the timer
-        _spin_and_drain(executor, 0.5)
-
-        during_stop = len(received)
-        assert during_stop > 2, \
-            f"timer should have republished zero between ticks, got {during_stop}"
-
-        behaviour.terminate(py_trees.common.Status.INVALID)
-        # Drain whatever was already in flight when the timer was cancelled
-        # (a message published a moment before the cancel still gets
-        # delivered), THEN measure a clean window.
-        _spin_and_drain(executor, 0.2)
-        received.clear()
-        _spin_and_drain(executor, 0.5)
-
-        assert received == [], \
-            "StopRobot must stop publishing once the safe-stop branch is invalidated"
-    finally:
-        rclpy.shutdown()
-
-
-def test_stop_robot_keeps_its_timer_across_an_ongoing_safe_stop():
-    """terminate() fires on ordinary SUCCESS too (py_trees calls
-    stop(SUCCESS) from tick()) -- tearing the timer down there would undo
-    the whole point, since StopRobot returns SUCCESS on every single tick of
-    an active safe stop."""
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_stop_robot_timer_survives_success")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        _count_cmd_vel_messages(node, received)
-
-        behaviour = StopRobot("StopRobot", node, publish_hz=20.0)
-        behaviour.update()
-        behaviour.terminate(py_trees.common.Status.SUCCESS)
-        received.clear()
-        _spin_and_drain(executor, 0.5)
-
-        assert len(received) > 2, \
-            "the holding timer must survive a SUCCESS terminate, only INVALID stops it"
-    finally:
-        rclpy.shutdown()
-
-
-def _find_behaviour(root, name):
-    for behaviour in root.iterate():
-        if behaviour.name == name:
-            return behaviour
-    raise AssertionError(f"no behaviour named {name!r} in the real mission tree")
-
-
-def test_safe_stop_hold_is_released_when_mission_recovers_right_after_safe_stop_succeeds():
-    """REGRESSION (re-review finding N1, Critical): the zero-/cmd_vel hold
-    must be released when the tree returns to `Mission`, in the ONE tick
-    phase where py_trees' Selector does not invalidate the losing branch.
-
-    The first fix wave's teardown (StopRobot.terminate(INVALID)) was correct
-    but unreachable here, so this test drives the REAL tree from
-    build_mission_tree() -- not a simplified standalone Selector/Sequence --
-    the way mission_node.py drives it (py_trees tree, one tick per
-    iteration), through: healthy -> unhealthy (safe_stop engages and
-    completes SUCCESS on its own via Pause) -> healthy on the VERY NEXT
-    tick.
-
-    That phase is the whole point. A recovery landing mid-cycle (while the
-    root Selector is still RUNNING on safe_stop) takes py_trees'
-    priority-interrupt path and tears the timer down correctly even against
-    the pre-fix code -- so a test that doesn't control the phase passes
-    either way and proves nothing. Here the root Selector has just returned
-    SUCCESS, so its next tick re-enters the `self.status != RUNNING` reset
-    (composites.py:384-388) and `previous == current_child == mission`
-    suppresses the invalidation at composites.py:424-431.
-
-    Health is stubbed at its two I/O boundaries only (the lifecycle-manager
-    service poll and the TF lookups); every behaviour and every composite in
-    the tree is the real one, because the composite wiring is exactly what
-    is under test. The Pause is compressed to 0 s so `safe_stop` reaches
-    SUCCESS on its first tick deterministically, instead of making the test
-    sleep through the production 2 s and hope it lands on the right tick."""
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_safe_stop_recovery")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        _count_cmd_vel_messages(node, received)
-
-        healthy = {"value": False}
-        real_transform_is_recent = mission_tree_module._transform_is_recent
-        # Both health behaviours read TF through this one helper, so the
-        # whole health verdict follows `healthy` -- no broadcaster races to
-        # make the critical tick phasing non-deterministic.
-        mission_tree_module._transform_is_recent = lambda *args, **kwargs: healthy["value"]
-        try:
-            root = build_mission_tree(node, _FakeSagaApi(), _docks())
-            tree = py_trees.trees.BehaviourTree(root)
-            tree.setup(node=node, timeout=5.0)
-
-            _find_behaviour(root, "VehicleStatusOK")._lifecycle_manager_reports_active = \
-                lambda: healthy["value"]
-            stop_robot = _find_behaviour(root, "StopRobot")
-            _find_behaviour(root, "Sleep 2s").duration_sec = 0.0
-            safe_stop = _find_behaviour(root, "Safe stop")
-
-            # --- tick 1: unhealthy. safe_stop engages AND completes. ---
-            tree.tick()
-            _spin_and_drain(executor, 0.2)
-
-            assert stop_robot._timer is not None, \
-                "the safe stop never engaged -- this test can't prove anything about release"
-            assert received, "safe_stop must actually hold /cmd_vel at zero while engaged"
-            assert all(msg.linear.x == 0.0 and msg.angular.z == 0.0 for msg in received)
-            assert safe_stop.status == py_trees.common.Status.SUCCESS, \
-                ("fixture assumption broken: safe_stop must have completed SUCCESS on its "
-                 "own this tick -- that is the phase N1 is about")
-
-            # --- tick 2: healthy again, on the very next tick. ---
-            healthy["value"] = True
-            tree.tick()
-
-            assert stop_robot._timer is None, \
-                ("the zero-velocity holding timer survived recovery: /cmd_vel stays pinned "
-                 "at zero for the life of the process, interleaving zeros with Nav2's own "
-                 "commands (re-review finding N1)")
-
-            # And prove the symptom is gone, not just the bookkeeping: drain
-            # whatever was already in flight when the timer died, then watch
-            # a clean window.
-            _spin_and_drain(executor, 0.2)
-            received.clear()
-            _spin_and_drain(executor, 0.5)
-
-            assert received == [], \
-                f"/cmd_vel is still being held at zero after recovery ({len(received)} msgs)"
-        finally:
-            mission_tree_module._transform_is_recent = real_transform_is_recent
     finally:
         rclpy.shutdown()
 
@@ -915,21 +722,5 @@ def test_vehicle_status_ok_fails_while_a_health_topic_is_silent():
             status = behaviour.update()
         assert status == py_trees.common.Status.SUCCESS
         assert behaviour._last_fault is None
-    finally:
-        rclpy.shutdown()
-
-
-def test_stop_robot_publishes_nothing_when_the_hold_is_disabled():
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_stop_robot_disabled")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        _count_cmd_vel_messages(node, received)
-        behaviour = StopRobot("StopRobot", node, publish_hz=20.0, hold_zero=False)
-        assert behaviour.update() == py_trees.common.Status.SUCCESS
-        _spin_and_drain(executor, 0.3)
-        assert received == []
     finally:
         rclpy.shutdown()

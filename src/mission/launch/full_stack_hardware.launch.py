@@ -123,7 +123,6 @@ def generate_launch_description():
     mission = _include('mission', 'mission.launch.py', {
         'saga_url': LaunchConfiguration('saga_url'),
         'saga_token': LaunchConfiguration('saga_token'),
-        'safe_stop_zero_hold': LaunchConfiguration('safe_stop_zero_hold'),
         'health_config': PathJoinSubstitution(
             [FindPackageShare('mission'), 'config', 'health_hardware.yaml'])},
         'mission')
@@ -151,10 +150,6 @@ def generate_launch_description():
         *[DeclareLaunchArgument(
             name, default_value='true', description=f'Run {what}')
           for name, what in switches.items()],
-        DeclareLaunchArgument(
-            'safe_stop_zero_hold', default_value='true',
-            description='false = the mission safe stop does not publish zero '
-                        'velocity (diagnostic only; keep a hand on the e-stop)'),
         _warn_when('docking:=true with nav:=false: docking needs nav, its '
                    'collision checks use the Nav2 local costmap',
                    on='docking', off='nav'),

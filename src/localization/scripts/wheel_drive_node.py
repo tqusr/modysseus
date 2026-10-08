@@ -13,7 +13,7 @@ THIS IS A SECOND WRITER ON THE SERIAL PORT, ALONGSIDE THE VENDOR'S
 the sensors. This node only writes. The two must not both be commanded:
 anything the vendor node receives on `/cmd_vel` it sends as `T:13`, which
 would alternate with this node's `T:1`. So nothing here publishes `/cmd_vel`:
-Nav2 and the mission's safe-stop hold use `cmd_vel_ctrl`. Anything else that
+Nav2 uses `cmd_vel_ctrl`. Anything else that
 publishes `/cmd_vel` (teleop) still reaches the MCU directly.
 
 SAFETY. The MCU holds the last command forever, so this node re-sends it at

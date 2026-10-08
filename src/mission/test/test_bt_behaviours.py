@@ -174,8 +174,8 @@ def _call_action_with_fake_handle(node):
 
 
 def test_call_action_terminate_invalid_cancels_the_in_flight_goal():
-    """The safe-stop fix: py_trees invalidating a RUNNING CallAction (root
-    Selector switching to safe_stop) must actually cancel the goal on the
+    """py_trees invalidating a RUNNING CallAction (a failed Mission guard)
+    must actually cancel the goal on the
     server, not just drop this side's futures -- otherwise Nav2 /
     opennav_docking keeps driving the robot while the tree reports
     "stopped"."""
@@ -213,7 +213,7 @@ def test_call_action_terminate_success_does_not_cancel():
 
 
 def test_call_action_terminate_invalid_without_a_goal_handle_is_a_noop():
-    """Invalidated before ever sending/accepting a goal (e.g. safe-stop trips
+    """Invalidated before ever sending/accepting a goal (e.g. a guard fails
     on the very tick a branch is first reached) -- must not raise."""
     rclpy.init()
     try:
@@ -288,8 +288,8 @@ class _CancellableServer:
 def test_call_action_cancel_reaches_a_real_action_server():
     """End-to-end over real rclpy action plumbing, not a fake handle: tick
     CallAction until it holds an accepted goal, invalidate it the way
-    py_trees does on a safe stop, and assert the SERVER actually receives
-    the cancel request. This is the behaviour the whole safe-stop fix rests
+    py_trees does when a guard fails, and assert the SERVER actually receives
+    the cancel request. This is the behaviour the whole stop-on-fault design rests
     on -- Nav2/opennav_docking keep driving the robot until this request
     arrives."""
     rclpy.init()
@@ -337,7 +337,7 @@ def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal(
     the `route` subtree without ticking it again. Deferring the cancel onto
     an already-done future (add_done_callback) would be too late to matter,
     and the pre-fix `not done()` guard skipped the cancel entirely: the
-    server keeps driving the robot through the whole "safe stop".
+    server keeps driving the robot through the whole fault.
 
     Real rclpy plumbing and a real server, deliberately: the bug lives in
     the interaction between the future's resolved state and terminate(), so
@@ -360,7 +360,7 @@ def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal(
 
         # Spin until the server has accepted -- but NEVER call update(), so
         # the handle is never harvested. This is the exact interleaving a
-        # safe stop hits on the tick after a dispatch.
+        # fault hits on the tick after a dispatch.
         deadline = time.monotonic() + 10.0
         while not behaviour._send_future.done() and time.monotonic() < deadline:
             executor.spin_once(timeout_sec=0.05)
@@ -376,7 +376,7 @@ def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal(
 
         assert server.cancel_requests, \
             ("an accepted-but-unharvested goal was abandoned without a cancel -- "
-             "the server keeps driving the robot through the safe stop")
+             "the server keeps driving the robot through the fault")
     finally:
         rclpy.shutdown()
 

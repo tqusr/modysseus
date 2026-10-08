@@ -1,6 +1,6 @@
 # Topics VehicleStatusOK requires to keep arriving on the real robot, as
 # '<topic> <pkg/msg/Type> <max_age_sec>'. One that goes silent for longer than
-# its max age sends the mission to safe stop until it is back (see
+# its max age fails the mission's health check until it is back (see
 # mission/topic_health.py). Loaded by full_stack_hardware.launch.py.
 #
 # Rates measured on the robot (2026-10-05, drivers only): /scan 10 Hz,

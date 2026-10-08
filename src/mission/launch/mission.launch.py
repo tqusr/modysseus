@@ -4,11 +4,6 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
-def _as_bool(text):
-    """Launch arguments are text; node parameters must be typed."""
-    return text.strip().lower() in ('true', '1')
-
-
 def _launch_nodes(context):
     # Optional parameter file, e.g. config/health_hardware.yaml: the topics
     # VehicleStatusOK requires to keep arriving. Empty = no topic checks.
@@ -33,8 +28,6 @@ def _launch_nodes(context):
                 # the rest of the stack: wall clock, there is no /clock on the
                 # robot. A bool, not text.
                 'use_sim_time': False,
-                'safe_stop_zero_hold': _as_bool(
-                    LaunchConfiguration('safe_stop_zero_hold').perform(context)),
             }],
         ),
     ]
@@ -45,9 +38,5 @@ def generate_launch_description():
         DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
         DeclareLaunchArgument('saga_token', default_value=''),
         DeclareLaunchArgument('health_config', default_value=''),
-        DeclareLaunchArgument(
-            'safe_stop_zero_hold', default_value='true',
-            description='false = safe stop does not publish zero velocity '
-                        '(diagnostic only)'),
         OpaqueFunction(function=_launch_nodes),
     ])
