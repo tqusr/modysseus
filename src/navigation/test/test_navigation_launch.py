@@ -1,8 +1,7 @@
-"""navigation.launch.py: use_sim_time reaches every Nav2 node as a bool."""
+"""navigation.launch.py: every Nav2 node runs on wall-clock time, as a bool."""
 import importlib.util
 import os
 
-import pytest
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCH_PATH = os.path.join(PKG, 'launch', 'navigation.launch.py')
@@ -28,12 +27,10 @@ def _nodes(**args):
             for n in h.nodes_of(h.expand(description.entities, context))]
 
 
-@pytest.mark.parametrize('args,expected', [
-    ({}, True), ({'use_sim_time': 'false'}, False), ({'use_sim_time': '0'}, False)])
-def test_every_nav2_node_gets_a_bool_use_sim_time(args, expected):
-    nodes = _nodes(**args)
+def test_every_nav2_node_gets_a_false_bool_use_sim_time():
+    nodes = _nodes()
     assert len(nodes) == 7  # six servers + lifecycle manager
-    assert all(n['inline_parameters']['use_sim_time'] is expected for n in nodes)
+    assert all(n['inline_parameters']['use_sim_time'] is False for n in nodes)
 
 
 def test_nav_to_pose_replans_only_when_the_path_becomes_invalid():

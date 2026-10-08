@@ -1,8 +1,7 @@
 ### ekf_filter_node parameters
 #
 # Fuses wheel odometry (/odom) and the bias-corrected chassis gyro
-# (/imu/corrected, from gyro_bias_node) into /odometry/filtered, in simulation
-# and on the real robot. Plan: docs/superpowers/plans/
+# (/imu/corrected, from gyro_bias_node) into /odometry/filtered. Plan: docs/superpowers/plans/
 # 2026-10-03-imu-wheel-odometry-fusion.md.
 #
 # WHAT EACH SENSOR CONTRIBUTES. Velocities only; the EKF integrates them into
@@ -21,37 +20,26 @@
 #   - Wheel pose (x, y, yaw). It is the integral of the same wheel velocities,
 #     so fusing both counts the wheels twice, and the wheels' own heading
 #     would fight the gyro's.
-#   - Wheel yaw rate. In simulation Gazebo's /odom arrives with an all-zero
-#     covariance, which robot_localization clamps to 1e-9, i.e. "perfect" - so
-#     the wheel yaw rate would completely overrule the gyro there. Leaving it
-#     out keeps simulation and hardware fusing the same thing.
-#   - IMU orientation. The real robot's MCU sends raw rates only
-#     (orientation_covariance[0] = -1, REP-145). Gazebo does provide an
-#     orientation, close to ground truth, so fusing it made simulation look
-#     far better than the robot can ever be.
+#   - Wheel yaw rate. The wheels measure rotation badly (see above), so it
+#     would fight the gyro.
+#   - IMU orientation. The robot's MCU sends raw rates only
+#     (orientation_covariance[0] = -1, REP-145).
 #   - Accelerometer. Removing gravity needs the robot's tilt, which hardware
 #     does not have, so any tilt leaks gravity into forward acceleration.
 #
-# CLOCK AND TF are set by localization.launch.py, not here: use_sim_time
-# (true in simulation, false on the robot) and publish_tf. The values below
-# are the simulation defaults.
+# CLOCK AND TF are set by localization.launch.py, not here: use_sim_time is
+# false (wall clock) and publish_tf is true. This node owns
+# odom->base_footprint; hardware_odometry.launch.py turns
+# wheel_odometry_node's own TF off, because two publishers of one TF edge
+# fight (continuous TF_OLD_DATA warnings and cascading "Failed to meet update
+# rate" errors). slam_toolbox reads that TF, so it gets the fused estimate.
 #
-# publish_tf is false in simulation: Gazebo's DiffDrive plugin already
-# broadcasts odom->base_footprint, and with this node also broadcasting it the
-# two independent publishers of one TF edge fought, observed as continuous
-# TF_OLD_DATA warnings and cascading "Failed to meet update rate" errors. So in
-# simulation only Nav2 (which reads /odometry/filtered) gets the fused
-# estimate; slam_toolbox reads the TF. On the robot,
-# mapping_mission_hardware.launch.py turns wheel_odometry_node's TF off and
-# this node's on, so slam_toolbox gets the fused estimate there.
-#
-# Frame note: the sim's /odom message has child_frame_id "base_footprint" (not
-# "base_link"), and robot_state_publisher broadcasts a static
-# base_footprint->base_link transform. base_link_frame is set to
-# base_footprint to match that chain for internal sensor-frame transforms.
+# Frame note: the /odom message has child_frame_id "base_footprint" (not
+# "base_link"), and a static base_footprint->base_link transform is
+# broadcast. base_link_frame is set to base_footprint to match that chain for
+# internal sensor-frame transforms.
 ekf_filter_node:
   ros__parameters:
-    use_sim_time: true
     frequency: 30.0
     two_d_mode: true
     sensor_timeout: 0.1

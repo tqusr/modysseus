@@ -33,6 +33,6 @@ def test_wheel_odometry_then_fusion_include():
     (include,) = [e for e in entities if isinstance(e, IncludeLaunchDescription)]
     info = h.describe_include(include, context)
     assert info['file'].endswith('localization.launch.py')
-    assert info['args'] == {'use_sim_time': 'false', 'publish_tf': 'true'}
+    assert info['args'] == {}
     assert entities.index(include) > entities.index(
         h.nodes_of(entities)[0])  # odometry node first, as before

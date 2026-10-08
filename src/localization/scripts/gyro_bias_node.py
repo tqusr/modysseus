@@ -26,10 +26,6 @@ so the subscriptions are best-effort. The output is published RELIABLE: a
 reliable publisher can serve both reliable and best-effort subscribers, so
 the EKF receives it whatever QoS it asks for.
 
-Runs in simulation too, deliberately: Gazebo's gyro has no bias, so this is a
-near no-op there, but simulation then exercises the same topic chain as the
-robot.
-
 use_sim_time IS NOT DECLARED HERE - rclpy declares it itself; the launch file
 sets it. See `wheel_odometry_node.py` for the exception that would follow.
 """

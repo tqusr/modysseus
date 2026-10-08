@@ -26,9 +26,8 @@ MAX_TF_AGE_SEC = 2.0
 # _transform_is_recent's docstring), but still a real, finite ceiling: an
 # unbounded allowance here would wave through exactly the failure mode this
 # whole check exists to catch -- e.g. some upstream node in the TF chain
-# missing use_sim_time:true (this task's own mission_node hit that bug) and
-# stamping with real wall-clock time while everything else runs on sim time,
-# which would show up as an enormous, nonsensical negative age_sec.
+# running on a different clock than the rest (e.g. use_sim_time:=true with no
+# /clock), which would show up as an enormous, nonsensical negative age_sec.
 FUTURE_TF_TOLERANCE_SEC = 2.0
 
 # nav2_lifecycle_manager's own health-check service for the navigation stack
@@ -202,8 +201,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
          commands.
 
     Sizing hold_timeout_sec: `safe_stop` is a memory=True Sequence, so this
-    behaviour is ticked once per stop/report/pause cycle (~3 s of sim time,
-    up to ~6 s wall at the ~0.5x sim rate measured on this machine), NOT
+    behaviour is ticked once per stop/report/pause cycle (~3 s), NOT
     once per tick -- so the timeout has to be generous enough never to fire
     during a genuine ongoing stop. It is a backstop, not a rate limit.
 
@@ -348,15 +346,13 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame,
     is deliberate on slam_toolbox's part, not jitter or a bug, matching
     localization_params.yaml's own `transform_timeout: 1.0` (stamping
     slightly into the future is a standard tf2 technique to keep consumers
-    from hitting "extrapolation into the past" given this sim's known dual-
-    /clock-publisher jumps -- see this stack's shared lessons). So a small
+    from hitting "extrapolation into the past"). So a small
     future stamp is allowed and is NOT treated as staleness. But the future
     allowance is still a real, finite ceiling (`future_tolerance_sec`), not
     unbounded: an arbitrarily-far-future stamp is exactly what a desynced or
     wrongly-configured clock somewhere in the TF chain would produce (e.g. a
-    node missing use_sim_time:true, stamping with wall-clock time while
-    everything else runs on sim time -- this task's own mission_node hit
-    that exact bug on itself), and that failure mode is precisely what this
+    node on a different clock than the rest -- this task's own mission_node
+    hit that exact bug on itself), and that failure mode is precisely what this
     health check exists to catch, not wave through.
     """
     try:
@@ -410,7 +406,7 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
     exists to prevent), whereas a false positive requires the robot to be
     within DOCK_PROXIMITY_TOLERANCE_M (0.3 m) of a real dock pose while not
     actually docked -- and that is a dock approach corridor, kept clear of
-    props by the arena design (see arena.sdf's own prop-layout notes), with
+    props by the arena layout, with
     the undock manoeuvre bounded by docking.yaml's staging offset (0.624 m).
 
     docking_server is a separate long-running process (docking.launch.py)

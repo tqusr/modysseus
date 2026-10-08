@@ -1,7 +1,7 @@
 """Unit tests for perception.dock_capture -- the pure logic behind
 `ros2 run perception capture_dock_pose`.
 
-No rclpy, no tf2, no ROS graph, no camera, no Gazebo: every test here is plain
+No rclpy, no tf2, no ROS graph, no camera: every test here is plain
 Python against plain functions, which is the reason that module exists
 separately from the node at all.
 
@@ -386,7 +386,6 @@ FIXTURE_DOCKING_YAML = """\
 # theta here is DELIBERATELY ROTATED BY PI from docks.yaml's theta.
 docking_server:
     ros__parameters:
-        use_sim_time: true
         docks: ["A", "B"]
         A: {type: "arena_dock", frame: "map", pose: [2.866, -1.500, 0.0], id: "0"}
         B: {type: "arena_dock", frame: "map", pose: [2.866, 1.500, 0.0], id: "1"}
@@ -621,7 +620,7 @@ def test_capture_visible_tags_on_an_empty_message_does_nothing():
     (-0.51, AGE_STALE),
     (12.0, AGE_STALE),
     (1000.0, AGE_CLOCK_MISMATCH),
-    (1.7e9, AGE_CLOCK_MISMATCH),     # wall clock vs sim /clock from ~0
+    (1.7e9, AGE_CLOCK_MISMATCH),     # wall clock vs a clock from ~0
     (-1.7e9, AGE_CLOCK_MISMATCH),
 ])
 def test_classify_detection_age(age_sec, expected):

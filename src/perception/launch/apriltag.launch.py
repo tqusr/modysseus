@@ -26,34 +26,31 @@ republish a corrected `detected_dock_pose` for SimpleChargingDock. Keeping
 it running costs one node; removing it would delete that hook and the
 verification path with it. It was never wired up in this branch.
 
-ARGUMENTS. The defaults are the simulator's, so `mapping_mission.launch.py`
-includes this file with none and gets exactly the graph it always had.
+ARGUMENTS. Every node runs on wall-clock time: there is no /clock on the
+robot.
 
-  use_sim_time        true   applied to every node started here
   image_topic         /oak/rgb/image_raw
-  rectify             false  also start image_proc's rectify_node and detect
-                             on its output
+  rectify             true   start image_proc's rectify_node and detect on its
+                             output
   gated               false  put perception's image_gate in front of the
                              detector: it then processes frames only while
                              `/image_gate/enable` is true (tag_dock_server
                              opens it for each measurement). Idle otherwise
                              -- ungated, the detector took ~60% of a CPU core
                              all the time. Leave false where detections are
-                             wanted continuously (mapping_mission's capture).
+                             wanted continuously (the mapping mission's capture).
 
 There is deliberately no camera_info argument. Both nodes subscribe through
 image_transport::CameraSubscriber, which always reads the sibling topic
 `<image_topic's namespace>/camera_info` (`/oak/rgb/camera_info` by default);
 a `camera_info` remapping has no effect on it.
 
-RECTIFY, AND WHY ONLY ON HARDWARE. apriltag_ros takes its intrinsics from
+RECTIFY. apriltag_ros takes its intrinsics from
 the projection matrix P of camera_info (fx, fy, cx, cy = p[0], p[5], p[2],
 p[6]) and ignores the distortion coefficients, so on a lens with real
 distortion the tag pose is wrong by an uncorrected amount unless the image is
-rectified first. The simulated camera has none, so simulation feeds the raw
-image straight in (`rectify:=false`). The real OAK-D RGB camera is distorted,
-so `mapping_mission_hardware.launch.py` passes `rectify:=true`: rectify_node
-turns `image_topic` into `<same namespace>/image_rect`
+rectified first. The real OAK-D RGB camera is distorted, so by default
+rectify_node turns `image_topic` into `<same namespace>/image_rect`
 (`/oak/rgb/image_rect` by default) and the detector reads that. Because it
 reads P, rectify-then-detect is already consistent; no K/P relay is needed.
 On the robot, check that P in `/oak/rgb/camera_info` is non-zero and sane.
@@ -89,10 +86,9 @@ def _rectified_topic(image_topic):
 
 
 def _launch_nodes(context):
-    # A bool, not the argument's text: rclpy has already declared
-    # `use_sim_time` as a bool, so a 'false' string would stop the node
-    # starting (mapping_mission_hardware.launch.py documents the same trap).
-    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    # A bool, not text: rclpy has already declared `use_sim_time` as a bool,
+    # so a 'false' string would stop the node starting.
+    use_sim_time = False
     image_topic = LaunchConfiguration('image_topic').perform(context)
     rectify = _as_bool(LaunchConfiguration('rectify').perform(context))
     gated = _as_bool(LaunchConfiguration('gated').perform(context))
@@ -140,9 +136,8 @@ def _launch_nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('image_topic', default_value='/oak/rgb/image_raw'),
-        DeclareLaunchArgument('rectify', default_value='false'),
+        DeclareLaunchArgument('rectify', default_value='true'),
         DeclareLaunchArgument('gated', default_value='false'),
         OpaqueFunction(function=_launch_nodes),
     ])

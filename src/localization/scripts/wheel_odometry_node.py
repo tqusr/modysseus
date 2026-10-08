@@ -3,15 +3,12 @@
 
     ros2 run localization wheel_odometry_node.py
 
-This is the hardware robot's odometry source. Before it existed, nothing on
-hardware published a dynamic `odom -> base_footprint` transform at all:
-`mapper_params_online_async.yaml` sets `odom_frame: odom`, so slam_toolbox
-looks that transform up for every single scan, and `ekf.yaml` sets
-`publish_tf: false` because in simulation Gazebo's DiffDrive plugin already
-owns that edge. This node takes over the plugin's exact role on hardware - the
-same `/odom` topic, the same `odom`/`base_footprint` frames, the same TF edge -
-so both of those configs stay correct unchanged and nothing downstream has to
-know which mode it is running in.
+This is the robot's odometry source. Before it existed, nothing published a
+dynamic `odom -> base_footprint` transform at all: `mapper_params_hardware.yaml`
+sets `odom_frame: odom`, so slam_toolbox looks that transform up for every
+single scan. The EKF (`ekf.yaml`) fuses this node's `/odom` with the gyro and
+owns the TF edge, so `hardware_odometry.launch.py` runs this node with
+`publish_tf: false`.
 
 WHAT CONSUMES WHAT. slam_toolbox does NOT subscribe to `/odom`; it reads the
 TF. So the `TransformBroadcaster` below is the load-bearing half for mapping,
@@ -19,12 +16,9 @@ and the `nav_msgs/Odometry` message is for robot_localization (once the EKF
 phase reaches hardware) and for RViz. Both are published from the same pose
 and with the same stamp, so they can never disagree.
 
-DO NOT RUN THIS IN SIMULATION. Gazebo's DiffDrive plugin publishes `/odom` and
-broadcasts the same TF edge there, and two unsynchronised publishers of one TF
-edge is a failure this project has already paid for once - see `ekf.yaml`'s
-comment on the TF_OLD_DATA storm that caused. Simulation does publish
-`/wheel_encoders` with the same two joint names, so this node would happily
-run; the reason not to is the collision, not an incompatibility.
+Two unsynchronised publishers of one TF edge is a failure this project has
+already paid for once - see `ekf.yaml`'s comment on the TF_OLD_DATA storm
+that caused.
 
 ALL the arithmetic lives in `localization.wheel_odometry`, which imports no
 ROS and is unit-tested without a ROS graph. Read that module's docstring
@@ -37,7 +31,7 @@ TIMESTAMPS. Every pose is stamped with the encoder sample's own header stamp,
 which the vendor driver back-dates by the line's serial transmission time
 (~12 ms at 115200 baud). The TF therefore trails real time slightly, so a
 scan stamped later than the newest encoder sample needs tf2 to wait rather
-than extrapolate; `mapper_params_online_async.yaml`'s `transform_timeout: 1.0`
+than extrapolate; `mapper_params_hardware.yaml`'s `transform_timeout: 1.0`
 covers that comfortably. The alternative - stamping with `now()` - would date
 the pose differently from the data it was computed from, which is worse.
 
@@ -155,13 +149,11 @@ class WheelOdometryNode(Node):
         self.declare_parameter('left_joint', 'left_up_wheel_link_joint')
         self.declare_parameter('right_joint', 'right_up_wheel_link_joint')
 
-        # Match the simulated DiffDrive plugin's frame_id/child_frame_id, and
-        # mapper_params_online_async.yaml's odom_frame/base_frame.
+        # Match mapper_params_hardware.yaml's odom_frame/base_frame.
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
-        # Only reason to turn this off: something else already owns the edge -
-        # which in practice means simulation, where this node should not be
-        # running at all. The /odom topic is published either way.
+        # Turn this off when something else owns the edge (the EKF does, see
+        # hardware_odometry.launch.py). The /odom topic is published either way.
         self.declare_parameter('publish_tf', True)
 
         self.declare_parameter('max_sample_gap', MAX_SAMPLE_GAP_SEC)
@@ -212,7 +204,7 @@ class WheelOdometryNode(Node):
         """Locate the left and right entries of a `/wheel_encoders` message.
 
         By joint name when both configured names are present, which is the
-        case for both the vendor driver and simulation. Falls back to indices
+        case for the vendor driver. Falls back to indices
         0 and 1 - the documented wire order - with a warning, so an unexpected
         naming still produces odometry rather than silence, but never silently.
 
@@ -252,13 +244,12 @@ class WheelOdometryNode(Node):
 
         stamp = Time.from_msg(msg.header.stamp)
         if stamp.nanoseconds == 0:
-            # A zero stamp is what a publisher on sim time with no /clock
-            # produces, and it would make every dt zero. Say so, because the
+            # A zero stamp would make every dt zero. Say so, because the
             # symptom otherwise is just a pose that never moves.
             self.get_logger().warning(
                 '/wheel_encoders header stamp is zero; nothing can be '
-                'integrated. Is a publisher running with use_sim_time true '
-                'and no /clock?', throttle_duration_sec=WARN_THROTTLE_SEC)
+                'integrated. Is a publisher stamping with sim time and '
+                'no /clock?', throttle_duration_sec=WARN_THROTTLE_SEC)
             return
 
         update = self._odometry.update(

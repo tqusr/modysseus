@@ -78,7 +78,6 @@ def test_apriltag_include_passes_the_hardware_arguments():
     assert include['file'].endswith(
         os.path.join('perception', 'launch', 'apriltag.launch.py'))
     assert include['args'] == {
-        'use_sim_time': 'false',
         'image_topic': '/oak/rgb/image_raw',
         'rectify': 'true',
     }
@@ -176,3 +175,45 @@ def test_hardware_launch_still_runs_on_wall_clock_without_the_camera_nodes():
 
     assert [n['name'] for n in odometry_nodes] == ['wheel_odometry_node']
     assert odometry_nodes[0]['use_sim_time'] is False
+
+
+MAPPING_PATH = os.path.join(PKG, 'launch', 'mapping.launch.py')
+
+
+def _mapping_include(context, description):
+    (include,) = [
+        h.describe_include(e, context)
+        for e in h.expand(description.entities, context)
+        if isinstance(e, IncludeLaunchDescription)
+        and h.describe_include(e, context)['file'].endswith('mapping.launch.py')]
+    return include
+
+
+def _slam_parameter_files(**args):
+    description = h.load_launch_module(MAPPING_PATH).generate_launch_description()
+    context = h.make_context(description, **args)
+    (slam,) = [
+        info for info in (
+            h.describe_node(n, context)
+            for n in h.nodes_of(h.expand(description.entities, context)))
+        if info['name'] == 'slam_toolbox']
+    return slam['parameter_files']
+
+
+def test_mapping_includes_with_no_arguments_and_uses_the_hardware_params_file():
+    description, context = _description_and_context()
+    include = _mapping_include(context, description)
+
+    assert include['args'] == {}
+    (path,) = _slam_parameter_files()
+    assert path.endswith(
+        os.path.join('localization', 'config', 'mapper_params_hardware.yaml'))
+    assert os.path.isfile(path)
+
+
+def test_mapping_params_keep_the_narrow_search_window_and_transform_timeout():
+    import yaml
+    with open(os.path.join(PKG, 'config', 'mapper_params_hardware.yaml')) as f:
+        hw = yaml.safe_load(f)['slam_toolbox']['ros__parameters']
+    assert hw['correlation_search_space_dimension'] == 0.5
+    assert hw['transform_timeout'] == 1.0

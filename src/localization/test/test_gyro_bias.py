@@ -1,7 +1,7 @@
 """Unit tests for localization.gyro_bias -- the pure logic behind
 `ros2 run localization gyro_bias_node.py`.
 
-No rclpy, no ROS graph, no robot, no Gazebo. The streams below are synthetic:
+No rclpy, no ROS graph, no robot. The streams below are synthetic:
 gyro and encoders at 80 Hz with identical stamps, the way the vendor driver
 publishes them from one `T:1001` line.
 

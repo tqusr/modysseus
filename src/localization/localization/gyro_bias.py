@@ -2,7 +2,7 @@
 
 NOTHING HERE IMPORTS rclpy OR ANY ROS MESSAGE, on purpose - the same split as
 `wheel_odometry.py` versus `wheel_odometry_node.py`, and for the same reason:
-the logic is unit-testable without a ROS graph, a robot or Gazebo (see
+the logic is unit-testable without a ROS graph or a robot (see
 `localization/test/test_gyro_bias.py`).
 
 WHY THIS EXISTS. `ekf.yaml` takes the robot's turn rate from the chassis gyro
@@ -31,8 +31,7 @@ moved more than `still_angle_epsilon` from where it was at least `still_hold`
 seconds ago. Measured against an anchor, not sample to sample, so very slow
 motion still accumulates past the threshold. On hardware one encoder count is
 a whole centimetre (see `wheel_odometry.py`'s ENCODER UNIT CALIBRATION note),
-far above the threshold, so any count change is motion; in simulation the
-joint angles are continuous and the threshold only absorbs physics jitter.
+far above the threshold, so any count change is motion.
 
 GUARDS. A standing-still sample is still refused when:
 
@@ -50,7 +49,7 @@ from dataclasses import dataclass
 
 #: Largest encoder-angle change, in radians, still treated as not moving.
 #: On hardware one count is 0.01 m / 0.040 m = 0.25 rad, so this can never
-#: hide a real count; in simulation it is 40 um of travel at the wheel rim.
+#: hide a real count.
 STILL_ANGLE_EPSILON_RAD = 1e-3
 
 #: How long the encoders must have been still, in seconds, before gyro

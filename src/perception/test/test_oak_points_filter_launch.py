@@ -1,13 +1,11 @@
-"""oak_points_filter.launch.py's two sources wire one chain to the same output."""
+"""oak_points_filter.launch.py's depth chain publishes /oak/points_filtered."""
 import os
 
-import pytest
 from launch.utilities import (normalize_to_list_of_substitutions,
                               perform_substitutions)
 from launch_ros.actions import ComposableNodeContainer
 
-from launch_helpers import (describe_node, expand, load_launch_module,
-                            make_context, nodes_of)
+from launch_helpers import expand, load_launch_module, make_context
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -50,47 +48,34 @@ def _components(**args):
     return out
 
 
-def test_cloud_source_is_the_default_and_reads_oak_points():
-    entities, context = _entities()
-    nodes = {n['name']: n for n in
-             (describe_node(x, context) for x in nodes_of(entities))}
-    assert set(nodes) == {'filter_voxel_grid_node', 'filter_crop_box_node'}
-    assert nodes['filter_voxel_grid_node']['remappings']['input'] == '/oak/points'
-
-
-def test_depth_source_chains_depth_image_to_points_filtered():
-    stages = _components(source='depth')
+def test_chains_depth_image_to_points_filtered():
+    # No CropBox: the real camera does not see the robot, so nothing near it
+    # is cut.
+    stages = _components()
     assert [s['plugin'] for s in stages] == [
         'image_proc::ResizeNode', 'depth_image_proc::PointCloudXyzNode',
-        'pcl_ros::VoxelGrid', 'pcl_ros::CropBox']
-    resize, points, voxel, crop = (s['remappings'] for s in stages)
+        'pcl_ros::VoxelGrid']
+    resize, points, voxel = (s['remappings'] for s in stages)
     assert resize['image/image_raw'] == '/oak/stereo/image_raw'
     assert resize['image/camera_info'] == '/oak/stereo/camera_info'
     assert points['image_rect'] == resize['resize/image_raw']
     assert points['camera_info'] == resize['resize/camera_info']
     assert voxel['input'] == points['points']
-    assert crop['input'] == voxel['output']
-    assert crop['output'] == '/oak/points_filtered'
+    assert voxel['output'] == '/oak/points_filtered'
 
 
-def test_depth_source_keeps_the_filters_yaml_names():
+def test_keeps_the_filters_yaml_names():
     # The YAML is keyed by node name; a renamed component would silently run
     # on pcl_ros defaults (and VoxelGrid's default range cut is 1 m).
-    names = [s['name'] for s in _components(source='depth')]
+    names = [s['name'] for s in _components()]
     assert names == ['oak_depth_resize', 'oak_depth_points',
-                     'filter_voxel_grid_node', 'filter_crop_box_node']
-    for stage in _components(source='depth'):
+                     'filter_voxel_grid_node']
+    for stage in _components():
         assert [os.path.basename(f) for f in stage['files']] == [
             'oak_points_filter.yaml']
 
 
-@pytest.mark.parametrize('value,expected', [('true', True), ('false', False)])
-def test_depth_source_passes_use_sim_time_to_every_stage(value, expected):
-    for stage in _components(source='depth', use_sim_time=value):
-        assert stage['inline']['use_sim_time'] is expected, stage['name']
+def test_every_stage_runs_on_wall_clock_in_process():
+    for stage in _components():
+        assert stage['inline']['use_sim_time'] is False, stage['name']
         assert stage['extra'] == {'use_intra_process_comms': True}
-
-
-def test_unknown_source_is_refused():
-    with pytest.raises(ValueError, match='source'):
-        _entities(source='points')

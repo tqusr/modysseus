@@ -3,20 +3,16 @@
 NOTHING HERE IMPORTS rclpy, tf2_ros OR ANY ROS MESSAGE, on purpose. The whole
 conversion -- two accumulated per-side wheel angles -> a pose in `odom` and a
 body twist -- is plain Python, so it is unit-testable without a ROS graph, a
-robot or Gazebo (see `localization/test/test_wheel_odometry.py`).
+robot (see `localization/test/test_wheel_odometry.py`).
 `scripts/wheel_odometry_node.py` is then a thin ROS shell: subscribe, call in
 here, publish. Same split, and for the same reason, as
 `perception/perception/dock_capture.py` versus `capture_dock_pose.py`.
 
-WHY THIS EXISTS. On real hardware this project had NO odometry source at all:
-nothing published a dynamic `odom -> base_footprint` transform, which
-`mapper_params_online_async.yaml` (`odom_frame: odom`) makes slam_toolbox look
-up for every scan, and which `ekf.yaml` assumes somebody else owns (it sets
-`publish_tf: false` precisely because in simulation Gazebo's DiffDrive plugin
-owns that edge). In simulation that plugin provides both `/odom` and the TF.
-This module is the hardware half of that same contract, so the EKF's existing
-config stays correct unchanged and nothing downstream has to special-case
-hardware against simulation.
+WHY THIS EXISTS. The robot had NO odometry source at all: nothing published a
+dynamic `odom -> base_footprint` transform, which `mapper_params_hardware.yaml`
+(`odom_frame: odom`) makes slam_toolbox look up for every scan. This module
+provides `/odom`; the EKF (`ekf.yaml`) fuses it with the gyro and owns the TF
+edge, so the node's own `publish_tf` is off.
 
 THE INPUT, and what it actually guarantees.
 
@@ -33,10 +29,8 @@ per side, not per wheel:
                i.e. simply `metres / wheel_radius`.
   - `velocity` the same two sides in rad/s.
 
-Simulation publishes the same topic with the same two joint names (a second
-`JointStatePublisher` in `model.sdf` exposing only the instrumented wheels),
-which is why this module is written against joint NAMES and not against array
-positions alone.
+The module is written against joint NAMES and not against array positions
+alone, so a reordered message cannot swap the robot's sides.
 
 POSITION DELTAS, NOT THE PUBLISHED VELOCITY FIELD. `update()` integrates
 differences of `position`, and derives the twist from those same differences.
@@ -57,9 +51,8 @@ That is a deliberate choice over reading `velocity`:
 So dt is used only to turn an exact displacement into a reported velocity, and
 never to produce the displacement itself.
 
-THE KINEMATIC CONSTANTS. `WHEEL_RADIUS_M` comes from the simulated DiffDrive
-plugin's configuration in `einride_mini_truck_description`'s `model.sdf` (same
-physical wheel). `WHEEL_SEPARATION_M` is MEASURED ON THE REAL ROBOT and is the
+THE KINEMATIC CONSTANTS. `WHEEL_RADIUS_M` comes from the vendor's chassis
+description, `einride_mini_truck_description`'s `model.sdf`. `WHEEL_SEPARATION_M` is MEASURED ON THE REAL ROBOT and is the
 the node's code default (and what the tests use); on the robot the
 authoritative value is `wheel_separation` in `config/hardware.yaml`, which
 `mapping_mission_hardware.launch.py` loads over it. Keep the two in step.
@@ -83,9 +76,8 @@ turns gave dL = +16025 and dR = -16050 units, so |dR - dL| = 32075 units =
 factor 0.4084 / 0.17452 = 2.340. THIS IS A SINGLE CLOCKWISE RUN; a
 counter-clockwise run is still to come and should be averaged in.
 
-(The previous value, 1.2435 / 0.21701 m, was measured in SIMULATION and is
-vendor-documented in `docs/simulation.md`; it was far too small for the real
-tyres and floor, which under-rotates the map.)
+(An earlier value, 1.2435 / 0.21701 m, was far too small for the real tyres
+and floor, which under-rotates the map.)
 
 ONLY TWO OF THE FOUR DRIVEN WHEELS ARE SENSED. The chassis is 6-wheel, 4WD
 (front and rear pairs driven, middle pair free-rolling idlers), but only the
@@ -105,8 +97,8 @@ What is NOT verified offline: that the MCU's `odl`/`odr` actually INCREASE
 when the robot drives forward. `serial_link.py` documents them only as
 "accumulated distance travelled by the left/right side, metres" and the
 firmware is not in this workspace, so forward-positive is an assumption
-inherited from the driver's intent to mirror simulation's `/wheel_encoders`
-(where positive joint angle is forward rotation). If it is wrong, the symptom
+inherited from the driver's intent (positive joint angle is forward
+rotation). If it is wrong, the symptom
 is unmistakable and is listed in this feature's report. The index order (left
 then right) IS documented, in both the node and `hardware.yaml`.
 
@@ -128,8 +120,8 @@ import math
 from dataclasses import dataclass
 
 
-#: Wheel radius in metres, from model.sdf's DiffDrive plugin ("measured from
-#: the wheel mesh, circumradius 0.040") and from the vendor driver's own
+#: Wheel radius in metres, from model.sdf ("measured from the wheel mesh,
+#: circumradius 0.040") and from the vendor driver's own
 #: `wheel_radius` parameter, which must agree with it or `position` would not
 #: be radians of the same wheel.
 WHEEL_RADIUS_M = 0.040
@@ -288,8 +280,8 @@ def advance(pose, ds, dtheta):
 
     The closed form, not an Euler step. Euler integration (move `ds` along the
     OLD heading, then rotate) leaves a systematic error on every turn, and
-    this robot's mapping runs are mostly turns: the arena is 6x6 m and
-    `mapper_params_online_async.yaml` had to tighten `minimum_travel_heading`
+    this robot's mapping runs are mostly turns: the arena is small and
+    `mapper_params_hardware.yaml` had to tighten `minimum_travel_heading`
     specifically because the drive does several near-in-place rotations of 90
     degrees or more. Getting those right costs four trigonometric calls.
 

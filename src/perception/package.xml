@@ -37,7 +37,7 @@
        the workspace SOURCE tree from this package's own share directory, and
        deliberately never through mission's share directory or its Python
        package, because mission already exec_depends on perception
-       (full_stack.launch.py includes this package's launch files); declaring
+       (full_stack_hardware.launch.py includes this package's launch files); declaring
        the reverse edge would make that a circular dependency colcon refuses
        to order. -->
 

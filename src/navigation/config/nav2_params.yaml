@@ -19,9 +19,9 @@
 #     navigation.launch.py too, rather than carried as dead config.
 #
 # Frames: base_footprint everywhere (never base_link) - the binding TF
-# architecture decision from Task 1's report: the sim's own diff-drive
-# plugin owns odom->base_footprint, robot_state_publisher owns the static
-# base_footprint->base_link, and nothing else may publish either edge.
+# architecture decision: the EKF owns odom->base_footprint, a static
+# transform owns base_footprint->base_link, and nothing else may publish
+# either edge.
 #
 # Footprint: einride_mini_truck is a 6-wheel skid-steer, track 0.17452 m,
 # wheelbase 0.171 m (vendor docs / earlier task notes). Half-diagonal from
@@ -35,31 +35,19 @@
 # in place during recovery behaviors, so a direction-agnostic footprint is
 # the conservative choice over a tight rectangle.
 #
-# Sensors (from einride_mini_truck_bringup/launch/simulation.launch.py and
-# einride_mini_truck_description's model.sdf):
+# Sensors:
 #   - lidar: /scan_filtered (sensor_msgs/LaserScan, LD19 2D lidar)
-#   - camera: /oak/points_filtered (sensor_msgs/PointCloud2), NOT the raw
-#     /oak/points simulation.launch.py's point_cloud_xyzrgb_node builds from
-#     the OAK-D Lite's depth+colour streams. Verified during this task's own
-#     testing that the raw cloud carries self-detection/near-field noise
-#     within a few cm of the robot's own origin - marking phantom
-#     "obstacles" right around the robot corrupted the planner's path and
-#     stalled the controller entirely (see git history / task report for
-#     the full failure mode). The fix belongs in `perception`, not here: a
-#     pcl_ros CropBox filter
-#     (perception/launch/oak_points_filter.launch.py +
-#     perception/config/oak_points_filter.yaml) removes only points inside
-#     a region sized to the robot's own known body + camera mount geometry
-#     (verified empirically during this task's testing to need ~0.8 m
-#     across, not just the chassis footprint - see that file's own comment
-#     for why), republishing everything else untouched as
-#     /oak/points_filtered. obstacle_min_range below is back down to 0.0 -
-#     the crop filter, not a range floor here, is what excludes the robot's
-#     own body now.
+#   - camera: /oak/points_filtered (sensor_msgs/PointCloud2), NOT the vendor's
+#     raw /oak/points: perception's oak_points_filter builds a small cloud
+#     from the OAK-D depth image instead (perception/launch/
+#     oak_points_filter.launch.py), because the 29.5 MB raw cloud starved
+#     the collision monitor's camera source of fresh data. The real camera
+#     does not see the robot, so nothing near the body is cropped out and
+#     obstacle_min_range below is 0.0.
 #
 #     min_obstacle_height/min_height below is a modest 0.05 m, not the 0.1 m
 #     an earlier iteration of this file used globally, and NOT 0.0/0.02:
-#     with the crop filter handling self-detection, retesting at a
+#     retesting at a
 #     near-0 m floor (matching nav2_bringup's own stock LaserScan example)
 #     reproduced the same instability/never-progresses symptom again,
 #     traced to ordinary floor-plane depth-sensor noise elsewhere in the
@@ -72,7 +60,6 @@
 
 controller_server:
   ros__parameters:
-    use_sim_time: true
     # 10 Hz, not 20: on the Jetson MPPI (CPU only) managed a median ~11 Hz
     # (3-15 Hz seen) while asked for 20, so each command was held for a
     # variable 70-280 ms and the robot moved in jerky steps. A rate it can
@@ -234,7 +221,6 @@ controller_server:
 
 planner_server:
   ros__parameters:
-    use_sim_time: true
     expected_planner_frequency: 20.0
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
@@ -262,7 +248,6 @@ planner_server:
 
 behavior_server:
   ros__parameters:
-    use_sim_time: true
     local_costmap_topic: local_costmap/costmap_raw
     global_costmap_topic: global_costmap/costmap_raw
     local_footprint_topic: local_costmap/published_footprint
@@ -288,7 +273,6 @@ behavior_server:
 
 bt_navigator:
   ros__parameters:
-    use_sim_time: true
     global_frame: map
     robot_base_frame: base_footprint
     # Fused estimate (Task 1's EKF), per the standing rule that anything
@@ -319,7 +303,6 @@ bt_navigator:
 
 velocity_smoother:
   ros__parameters:
-    use_sim_time: true
     smoothing_frequency: 20.0
     stamp_smoothed_velocity_with_smoothing_time: false
     scale_velocities: false
@@ -333,16 +316,16 @@ velocity_smoother:
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
-# Last stage before /cmd_vel. Input is velocity_smoother's output
+# Last stage before the wheels. Input is velocity_smoother's output
 # (cmd_vel_smoothed, wired up in navigation.launch.py); output is the real
-# /cmd_vel the sim's diff-drive plugin consumes. Stop/slowdown zones are
+# /cmd_vel_ctrl that localization's wheel_drive_node consumes (navigation.launch.py
+# sets cmd_vel_out_topic). Stop/slowdown zones are
 # centred on base_footprint and sized relative to the footprint above
 # (robot_radius 0.18) rather than only covering the front, since a
 # skid-steer can need to stop while rotating in place or reversing during a
 # recovery behavior, not only while driving forward.
 collision_monitor:
   ros__parameters:
-    use_sim_time: true
     base_frame_id: "base_footprint"
     odom_frame_id: "odom"
     cmd_vel_in_topic: "cmd_vel_smoothed"
@@ -409,7 +392,7 @@ collision_monitor:
       #
       # Justified by measurement, not guessed, and only AFTER the real
       # latency cause was fixed upstream. The camera cloud's own inter-message
-      # gap, sampled in sim time at a subscriber over 100 s of continuous
+      # gap, sampled at a subscriber over 100 s of continuous
       # navigation (which is exactly what the monitor compares its clock
       # against):
       #
@@ -418,10 +401,9 @@ collision_monitor:
       #
       # The excursions come from /oak/points, i.e. from the ONE remaining
       # 29.5 MB/message hop in the chain: the 1280x720 organized cloud
-      # depth_image_proc builds in the vendor sim's own simulation.launch.py,
-      # upstream of anything this repo launches (perception's filter chain now
-      # voxel-downsamples immediately, see
-      # perception/config/oak_points_filter.yaml). 2.0 s clears the measured
+      # depth_image_proc builds in the vendor's camera container, upstream of
+      # anything this repo launches (perception's filter chain now builds a
+      # small cloud instead, see perception/config/oak_points_filter.yaml). 2.0 s clears the measured
       # 1.255 s worst case with ~0.75 s of margin; 1.5 s would have left only
       # 0.25 s and kept firing.
       #
@@ -440,7 +422,6 @@ collision_monitor:
 local_costmap:
   local_costmap:
     ros__parameters:
-      use_sim_time: true
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: odom
@@ -515,7 +496,6 @@ local_costmap:
 global_costmap:
   global_costmap:
     ros__parameters:
-      use_sim_time: true
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
@@ -524,7 +504,7 @@ global_costmap:
       # to an obstacle as forbidden for the robot's centre, so this is the hard
       # clearance (chassis circumradius ~0.15 m + localization error).
       robot_radius: 0.23
-      # Matches arena.yaml's own resolution (src/localization/maps/arena.yaml)
+      # Matches arena_real.yaml's own resolution (src/localization/maps/arena_real.yaml)
       # so the static layer never has to resample the saved map.
       resolution: 0.025
       track_unknown_space: true

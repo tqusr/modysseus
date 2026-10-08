@@ -1,7 +1,6 @@
-# Real arena dock poses (world == `map` frame; see Task 3's arena localization,
-# which makes `map` coincide with the Gazebo world frame the sim spawns the
-# docks in). `dock_pose.theta` here is the dock/tag's own outward-facing
-# normal direction, as placed in `arena.sdf` -- the direction a robot
+# Real arena dock poses (in the `map` frame of the saved pose graph).
+# `dock_pose.theta` here is the dock/tag's own outward-facing
+# normal direction -- the direction a robot
 # standing in front of the tag must face *back along* to look straight at
 # it. This is `mission`'s own schema (used only by `mission_tree.py`'s
 # NavigateToPose pre-positioning step, independent of opennav_docking's
@@ -26,9 +25,8 @@
 # toward the dock (theta + pi) so its front-facing camera has the tag in
 # view, matching the task spec's "robot facing the dock" wording exactly.
 #
-# Empirical verification (dock A, this task): launched the sim
-# (world:=arena) + perception's apriltag.launch.py, drove the real robot
-# (open-loop /cmd_vel + /odom, no closed-loop controller available yet) to
+# Empirical verification (dock A, done in simulation before the move to the
+# real robot): ran perception's apriltag.launch.py and drove the robot to
 # within ~0.2 m / ~4 deg of the computed staging A pose (2.392, -1.500,
 # 0.0 -- i.e. dock_pose.theta=3.14159 + pi, normalized), and confirmed on
 # /detections: tag id 0 (dock A's tag) visible, hamming: 0 (exact decode),

@@ -5,7 +5,7 @@ this feature writes into `mission/config/docks.yaml` and
 `perception/config/docking.yaml` is computed by a plain function in this
 module, so the whole conversion -- tag TF -> dock_pose -> staging_pose ->
 opennav_docking pose -> the exact text of one YAML line -- is unit-testable
-without a ROS graph, a TF broadcaster, a camera or Gazebo (see
+without a ROS graph, a TF broadcaster or a camera (see
 `perception/test/test_dock_capture.py`). `capture_dock_pose.py` is then a thin
 ROS shell: subscribe, look up TF, call in here, print.
 
@@ -58,7 +58,7 @@ which is what `tag_outward_theta()` computes. Cross-checked end-to-end against
 !!! STILL UNVERIFIED AGAINST A LIVE TAG !!! Everything above is derived from
 the installed binaries and libraries, offline. It has NOT been confirmed
 against a real `/detections` + TF stream. Capture dock A (tag id 0) first and
-compare against its known-good sim-derived entry before trusting the rest --
+compare against its known-good entry before trusting the rest --
 see this feature's report for the step-by-step procedure.
 """
 
@@ -117,8 +117,8 @@ AGE_STALE = 'stale'
 AGE_CLOCK_MISMATCH = 'clock_mismatch'
 
 #: An age this absurd is not staleness, it is two different clock domains
-#: (a node without `use_sim_time:=true` next to a sim publishing /clock from
-#: ~0, or vice versa) -- a mistake this stack has made on itself before, so it
+#: (a node with `use_sim_time:=true` next to a wall-clock publisher, or vice
+#: versa) -- a mistake this stack has made on itself before, so it
 #: gets its own diagnosis instead of being reported as a stale tag.
 CLOCK_MISMATCH_AGE_SEC = 1000.0
 
@@ -127,8 +127,8 @@ CLOCK_MISMATCH_AGE_SEC = 1000.0
 #: latency of the image pipeline, not just the camera frame period. On the
 #: Jetson (OAK-D 1280x720 -> rectify_node -> apriltag_node, decimate 1.0) the
 #: detection stamp -- the camera image's stamp -- was measured 0.86-2.4 s old
-#: (median 1.4 s) on arrival; the original 0.5 s, sized for the sim's camera
-#: rate, rejected every hardware detection as "no tag currently visible".
+#: (median 1.4 s) on arrival; the original 0.5 s, sized for a faster camera
+#: pipeline, rejected every hardware detection as "no tag currently visible".
 #: 3 s still stops a tag that has left the view from being captured after the
 #: robot has been driven on, and is far below CLOCK_MISMATCH_AGE_SEC, so a
 #: use_sim_time mix-up is still diagnosed as such.

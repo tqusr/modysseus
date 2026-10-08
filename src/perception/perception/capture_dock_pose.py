@@ -2,16 +2,13 @@
 
 `ros2 run perception capture_dock_pose` -- terminal 3 of the mapping-mission
 workflow described at length in
-`localization/launch/mapping_mission.launch.py`'s docstring (read that first;
-it is the primary documentation for this feature). It runs the same way on the
-real robot after `localization/launch/mapping_mission_hardware.launch.py`,
-except that no `use_sim_time` flag is passed there: there is no /clock on
-hardware and the default (false) is already right.
+`localization/launch/mapping_mission_hardware.launch.py`'s docstring (read that
+first; it is the primary documentation for this feature). No `use_sim_time`
+flag is passed: there is no /clock on the robot and the default (false) is
+right.
 
-WHAT THIS IS FOR. `mission/config/docks.yaml`'s 8 dock poses were computed from
-`arena.sdf`'s model origins -- i.e. from the SIMULATED world file. On real
-hardware there is no arena.sdf: the docks are wherever somebody put them. This
-node closes that gap without anybody doing trigonometry on a tape measure.
+WHAT THIS IS FOR. `mission/config/docks.yaml`'s 8 dock poses are wherever
+somebody physically put the docks. This node captures them without anybody doing trigonometry on a tape measure.
 Drive the robot (keyboard teleop, terminal 2) until a dock's tag is in the
 camera's view, type `i` + Enter here, and this node reads that tag's pose out
 of TF in the `map` frame, converts it into docks.yaml's dock_pose/staging_pose
@@ -186,10 +183,8 @@ class CaptureDockPoseNode(Node):
                 f'node\'s clock (>= {CLOCK_MISMATCH_AGE_SEC:.0f} s). That is '
                 f'not staleness, it is two clock domains: this node and '
                 f'apriltag_ros disagree about use_sim_time. Restart this node '
-                f'with "--ros-args -p use_sim_time:=true" when running '
-                f'against the simulator, and with no such flag on the real '
-                f'robot (mapping_mission_hardware.launch.py runs apriltag_ros '
-                f'on wall-clock time).')
+                f'with no such flag (mapping_mission_hardware.launch.py runs '
+                f'apriltag_ros on wall-clock time).')
             return
         if verdict == AGE_STALE:
             logger.warning(

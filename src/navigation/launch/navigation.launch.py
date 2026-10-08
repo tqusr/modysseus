@@ -89,14 +89,10 @@ LIFECYCLE_NODES = [
 ]
 
 
-def _as_bool(text):
-    """Launch arguments are text; node parameters must be typed."""
-    return text.strip().lower() in ('true', '1')
-
-
 def _launch_nodes(context):
-    # Default true (simulation); the real robot passes false.
-    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    # A bool, not text: rclpy declares `use_sim_time` as a bool. Wall clock:
+    # there is no /clock on the robot.
+    use_sim_time = False
     config = LaunchConfiguration('params_file').perform(context) or os.path.join(
         get_package_share_directory('navigation'), 'config', 'nav2_params.yaml')
 
@@ -216,7 +212,6 @@ def _launch_nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument(
             'params_file', default_value='',
             description='Nav2 parameter file; empty = this package\'s '

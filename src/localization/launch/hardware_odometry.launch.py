@@ -22,20 +22,10 @@ from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
-#: There is no /clock on a real robot.
-#:
-#: Spelled twice, because the two places it goes want different TYPES and
-#: getting that wrong does not degrade anything - it stops the node starting.
-#: A launch ARGUMENT is text, so the include below gets the string; a node
-#: PARAMETER is typed, and launch_ros passes a plain Python `str` straight
-#: through as a string parameter rather than applying YAML rules to it (only
-#: an unannotated *substitution* gets those). rclpy's own TimeSource has
-#: already declared `use_sim_time` as a bool by then, so a string override is
-#: rejected as a type mismatch and the node dies on construction. The vendor
-#: repo's hardware.launch.py makes the same distinction - a `'false'` string
-#: in its `launch_arguments`, a `False` bool in every `parameters`.
+#: There is no /clock on a real robot. A node parameter is typed: rclpy's own
+#: TimeSource has already declared `use_sim_time` as a bool, so a string
+#: override is rejected and the node dies on construction.
 USE_SIM_TIME = False
-USE_SIM_TIME_ARG = 'false'
 
 
 def generate_launch_description():
@@ -65,8 +55,6 @@ def generate_launch_description():
     # already in TF when slam_toolbox's first scan lookup happens.
     fusion = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(share, 'launch', 'localization.launch.py')),
-        launch_arguments={'use_sim_time': USE_SIM_TIME_ARG,
-                          'publish_tf': 'true'}.items())
+            os.path.join(share, 'launch', 'localization.launch.py')))
 
     return LaunchDescription([wheel_odometry, fusion])

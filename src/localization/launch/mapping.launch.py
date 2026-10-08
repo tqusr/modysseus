@@ -1,36 +1,22 @@
 """Run slam_toolbox in mapping mode against /scan_filtered (antennas removed).
 
 One-time data-collection launch: drive the robot around the arena while this
-runs, then save the resulting map with nav2_map_server's map_saver_cli. Task
-3's localization launch is the long-running counterpart that consumes the
-saved map instead of building one.
+runs, then save the resulting map with nav2_map_server's map_saver_cli.
+localize.launch.py is the long-running counterpart that consumes the saved
+map instead of building one.
 
-SIM OR HARDWARE, decided by the `use_sim_time` argument. It defaults to true,
-because the simulator is what this file was written against and what every
-existing caller means; `mapping_mission_hardware.launch.py` is the one that
-passes false. The argument exists at all because
-`mapper_params_online_async.yaml` hardcodes `use_sim_time: true`, and a node
-left at true with no /clock publisher sits at time zero forever and looks
-exactly like a hang (the same trap common.launch.py's own `use_sim_time`
-comment describes in the vendor repo). The dict passed after the config file
-below overrides that YAML key - launch applies parameter sources in order and
-the last one wins - so the YAML can stay as it is while this launch still
-decides the clock.
+Runs on wall-clock time (there is no /clock on the robot) with
+`mapper_params_hardware.yaml`.
 
-Nothing else in this file differs between the two modes: the lifecycle dance,
-the watchdog and the sync-vs-async choice are all about this node, not about
-where its scans come from.
+Uses `sync_slam_toolbox_node`, not the async variant: over a multi-minute
+mapping run, `async_slam_toolbox_node` proved unreliable in testing -
+observed failures included outright crashes (unhandled
+`tf2::NoDataForExtrapolationException`, SIGABRT) and severely distorted maps.
+`sync_slam_toolbox_node` processes scans synchronously with no async-queue
+pressure, which fits this one-time offline mapping pass fine, and proved
+stable where async did not.
 
-Uses `sync_slam_toolbox_node`, not the async variant: this sim has two
-ros_gz_bridge publishers on /clock, producing small time jumps. Over a
-multi-minute mapping run, `async_slam_toolbox_node` proved unreliable against
-that jitter in testing - observed failures included outright crashes
-(unhandled `tf2::NoDataForExtrapolationException`, SIGABRT) and severely
-distorted maps. `sync_slam_toolbox_node` processes scans synchronously with
-no async-queue pressure, which fits this one-time offline mapping pass fine,
-and proved stable where async did not.
-
-LIFECYCLE - read this before adapting this launch file for Task 3.
+LIFECYCLE - read this before adapting this launch file.
 
 `*_slam_toolbox_node` is a managed lifecycle node: it processes no scans at
 all until CONFIGUREd and then ACTIVATEd. Getting it there is genuinely
@@ -47,7 +33,7 @@ comes back empty. Two distinct ways it has actually failed in this repo:
 2. Replacing that with fixed wall-clock timers (CONFIGURE at 3s, ACTIVATE at
    10s) swaps one silent failure for another: the timers are independent, not
    chained off CONFIGURE's actual result, so under the sustained ~15/16-core
-   load this sim stack produces, a slow CONFIGURE (node allocation, Ceres
+   load this stack produces, a slow CONFIGURE (node allocation, Ceres
    solver init, parameter loading) means every ACTIVATE fires too early, gets
    rejected, and the node again sits inactive.
 
@@ -79,11 +65,10 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, EmitEvent, ExecuteProcess,
-                            LogInfo, RegisterEventHandler, TimerAction)
+from launch.actions import (EmitEvent, ExecuteProcess, LogInfo,
+                            RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -98,7 +83,7 @@ def generate_launch_description():
     config = os.path.join(
         get_package_share_directory('localization'),
         'config',
-        'mapper_params_online_async.yaml',
+        'mapper_params_hardware.yaml',
     )
 
     # Removes the robot's own antennas from /scan; slam_toolbox reads the
@@ -111,7 +96,7 @@ def generate_launch_description():
         parameters=[
             os.path.join(get_package_share_directory('localization'),
                          'config', 'scan_filter.yaml'),
-            {'use_sim_time': LaunchConfiguration('use_sim_time')},
+            {'use_sim_time': False},
         ],
         remappings=[('scan', '/scan'), ('scan_filtered', '/scan_filtered')],
     )
@@ -124,11 +109,7 @@ def generate_launch_description():
         output='screen',
         parameters=[config, {
             'use_lifecycle_manager': False,
-            # Overrides the YAML's hardcoded `use_sim_time: true` - parameter
-            # sources are applied in order and the last one wins. The bare
-            # LaunchConfiguration is enough: launch_ros parses an untyped
-            # substitution by YAML rules, so 'true'/'false' arrive as a bool.
-            'use_sim_time': LaunchConfiguration('use_sim_time'),
+            'use_sim_time': False,
         }],
     )
 
@@ -165,16 +146,6 @@ def generate_launch_description():
     ))
 
     return LaunchDescription([
-        # Defaulted, unlike the vendor repo's common.launch.py, which
-        # deliberately leaves this argument with no default so every entry
-        # point has to state its mode. Here the default is the backward
-        # compatibility: `ros2 launch localization mapping_mission.launch.py`
-        # and every other existing caller means simulation and must keep
-        # behaving exactly as before. mapping_mission_hardware.launch.py is
-        # the one caller that passes false, and it does so explicitly.
-        DeclareLaunchArgument('use_sim_time', default_value='true',
-                              description='Take time from /clock. True in '
-                                          'simulation, false on hardware.'),
         scan_filter,
         slam_node,
         activate_on_configured,

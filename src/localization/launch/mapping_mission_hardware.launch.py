@@ -2,16 +2,10 @@
 
     ros2 launch localization mapping_mission_hardware.launch.py
 
-The hardware counterpart to `mapping_mission.launch.py`, which is
-simulation's. Separate files rather than one file with a mode argument,
-following the split the vendor repo already uses
-(`einride_mini_truck_bringup`'s `simulation.launch.py` versus
-`hardware.launch.py`): the two modes genuinely start different things, and a
-single file would hide that behind conditions. `mapping.launch.py` is the
-shared half and is INCLUDED by both, so the lifecycle watchdog, the
+`mapping.launch.py` is INCLUDED, so the lifecycle watchdog, the
 sync-vs-async choice and the reasoning behind both stay in exactly one place.
 
-WHY THIS EXISTS. `mapper_params_online_async.yaml` sets `odom_frame: odom`,
+WHY THIS EXISTS. `mapper_params_hardware.yaml` sets `odom_frame: odom`,
 so slam_toolbox looks up an `odom -> base_footprint` transform for every
 scan - and until this launch, NOTHING published that transform on hardware.
 There was no wheel odometry node at all. Mapping on the real robot was
@@ -21,8 +15,7 @@ would fail, continuously, with no map to show for the drive.
 WHAT NOW PUBLISHES IT: REAL WHEEL ODOMETRY, NOT A STUB. `wheel_odometry_node`
 integrates the `/wheel_encoders` stream the vendor's `ugv02_serial_node`
 publishes - accumulated distance per side, straight off the chassis MCU - into
-a pose and publishes `/odom` - exactly the role Gazebo's DiffDrive plugin
-fills in simulation, down to the topic and the frame names.
+a pose and publishes `/odom`.
 
 WHO OWNS `odom -> base_footprint`: THE EKF, NOT THE WHEELS. Wheel odometry
 alone measures turning badly (the scrub described below). So
@@ -32,8 +25,7 @@ with turn rate from the gyro (`config/ekf.yaml` says what is fused and why).
 The EKF broadcasts the TF (`publish_tf:=true`) and `wheel_odometry_node`'s own
 broadcast is turned off, because two publishers of one TF edge fight - see
 `ekf.yaml`. slam_toolbox reads that TF, so it is seeded from the fused
-estimate. In simulation Gazebo still owns the edge and the EKF does not
-publish it; see `ekf.yaml`.
+estimate.
 
   THE TURN CALIBRATION IS MEASURED ON THE REAL ROBOT, AND LIVES IN
   `config/hardware.yaml`. The node's `wheel_separation` is 0.4084 m there,
@@ -73,13 +65,12 @@ publish it; see `ekf.yaml`.
   This confirmed centimetre-to-metre correction is applied via
   `encoder_scale` in `config/hardware.yaml`.
 
-APRILTAG DETECTION, FOR DOCK CAPTURE. `mapping_mission.launch.py` runs
-apriltag_ros alongside mapping so one drive both builds the map and captures
-the arena's real dock poses; so does this file, 5 s after SLAM starts (so it
-does not compete with slam_toolbox's CONFIGURE/ACTIVATE window). It includes
-`perception`'s `apriltag.launch.py` with `use_sim_time:=false`,
-`image_topic:=/oak/rgb/image_raw` and `rectify:=true`: the real OAK-D RGB image is distorted and apriltag_ros
-ignores distortion, so `image_proc`'s rectify_node runs first and the detector
+APRILTAG DETECTION, FOR DOCK CAPTURE. This file runs apriltag_ros alongside
+mapping so one drive both builds the map and captures the arena's real dock
+poses, 5 s after SLAM starts (so it does not compete with slam_toolbox's
+CONFIGURE/ACTIVATE window). It includes `perception`'s `apriltag.launch.py`
+with `image_topic:=/oak/rgb/image_raw` and `rectify:=true`: the real OAK-D RGB
+image is distorted and apriltag_ros ignores distortion, so `image_proc`'s rectify_node runs first and the detector
 reads `/oak/rgb/image_rect`. Pass `apriltag:=false` for the lidar-only run
 this launch used to be (e.g. if the Jetson cannot keep up). The camera driver
 itself is the vendor's, started by `hardware.launch.py`.
@@ -88,23 +79,23 @@ itself is the vendor's, started by `hardware.launch.py`.
   robot. The tag-orientation convention in `perception/perception/
   dock_capture.py` has never been checked against a live tag; the first
   capture on the robot is that check (see "STILL UNVERIFIED AGAINST A LIVE
-  TAG" there and the dock-A advice in `mapping_mission.launch.py`).
+  TAG" there, and capture dock A first).
 
-NO SIM BRING-UP, AND NO DEVICE DRIVERS. This launch starts odometry, fusion,
+NO DEVICE DRIVERS. This launch starts odometry, fusion,
 SLAM and (by default) AprilTag detection, nothing else. The robot's own
 drivers - the serial link that produces `/wheel_encoders`, the lidar that produces `/scan`, the OAK-D camera that produces
 `/oak/rgb/image_raw`, and RViz - come from the vendor's `hardware.launch.py`,
 which you are already running in its own terminal to drive the robot at all.
 Nothing here would work without it, and nothing here should restart it.
 
-THE PARAMS FILE WAS TUNED IN SIMULATION. `mapper_params_online_async.yaml` is
-used as-is, and several of its values were chosen against the simulator's
-specific problems: `transform_timeout: 1.0` for the sim's dual-/clock jitter,
-`minimum_travel_heading: 0.15` and `do_loop_closing: false` for a 6x6 m
-symmetric arena mapped in sim. Read that file's comments before changing
-anything; on hardware the generous transform timeout is now doing different
-but still useful work, absorbing the ~12 ms the encoder stamps are back-dated
-by.
+THE PARAMS FILE is `mapper_params_hardware.yaml`, which mapping.launch.py
+loads. `correlation_search_space_dimension` is 0.5: on the robot a +-1 m
+window in this symmetric room can lock onto the wrong wall and costs ~16x the
+matching work per scan. `transform_timeout: 1.0` stays (it absorbs the ~12 ms the encoder stamps are
+back-dated by, and capture_dock_pose.py and mission_tree.py rely on
+slam_toolbox stamping map->odom that far ahead), and `do_loop_closing: false`
+is an open trade-off on hardware, to revisit after the narrower window has
+been tried. Read the hardware file's comments before changing anything.
 
 THE TERMINALS, in the order they have to start.
 
@@ -128,8 +119,7 @@ THE TERMINALS, in the order they have to start.
 
          ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
-     This terminal must keep focus to steer. No `use_sim_time` here: there is
-     no /clock on hardware and the default is already false.
+     This terminal must keep focus to steer.
 
      DRIVE SLOWLY AND SMOOTHLY. Wheel odometry on a skid-steer is at its worst
      exactly where it is pushed hardest: fast turns and sharp direction
@@ -141,18 +131,14 @@ THE TERMINALS, in the order they have to start.
 
          ros2 run perception capture_dock_pose
 
-     No `--ros-args -p use_sim_time:=true` here (that flag is for the
-     simulator): there is no /clock on hardware, the tool's default is
-     already false, and apriltag_ros runs on wall-clock time too. Drive to a
-     dock, stop with its tag square on at about 0.6 m, type `i` + Enter.
-     Capture dock A (tag 0) first. `mapping_mission.launch.py`'s docstring
-     has the full workflow. The tool rewrites the dock lines in
+     Drive to a dock, stop with its tag square on at about 0.6 m, type `i` +
+     Enter. Capture dock A (tag 0) first. The tool rewrites the dock lines in
      `~/modysseus/src/mission/config/docks.yaml` and
      `~/modysseus/src/perception/config/docking.yaml` on the robot.
 
-  4. Save the map when the drive is done, exactly as for a sim mapping run:
+  4. Save the map when the drive is done:
 
-         ros2 run nav2_map_server map_saver_cli -f src/localization/maps/arena
+         ros2 run nav2_map_server map_saver_cli -f src/localization/maps/arena_real
 
   5. `git diff` in `~/modysseus` (a plausible pose on the arena wall, staging
      pose about 0.6 m out), then COMMIT the captures there, on the robot, so a
@@ -196,22 +182,12 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
-#: There is no /clock on a real robot. A launch ARGUMENT is text, so the
-#: includes below get the string (hardware_odometry.launch.py explains why the
-#: node parameters it sets are typed bools instead).
-USE_SIM_TIME_ARG = 'false'
-
-
 def generate_launch_description():
     share = get_package_share_directory('localization')
     mapping_path = os.path.join(share, 'launch', 'mapping.launch.py')
 
-    # mapping.launch.py defaults use_sim_time to true, for simulation's sake;
-    # this is the one caller that says otherwise. A node left at true with no
-    # /clock publisher sits at time zero forever and looks exactly like a hang.
     mapping = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(mapping_path),
-        launch_arguments={'use_sim_time': USE_SIM_TIME_ARG}.items())
+        PythonLaunchDescriptionSource(mapping_path))
 
     # Wheel odometry + gyro fusion (the EKF owns odom -> base_footprint), shared
     # with full_stack_hardware.launch.py. See hardware_odometry.launch.py and
@@ -225,7 +201,7 @@ def generate_launch_description():
     # perception's launch is found through its share directory at run time and
     # NOT declared as a package dependency: perception exec_depends on
     # localization, so the reverse edge would be a cycle colcon refuses to
-    # order (mapping_mission.launch.py, the sim twin, does the same).
+    # order.
     #
     # The camera is the vendor's: hardware.launch.py already runs it and
     # publishes /oak/rgb/image_raw (distorted, bgr8) and /oak/rgb/camera_info.
@@ -238,7 +214,6 @@ def generate_launch_description():
             PathJoinSubstitution([FindPackageShare('perception'),
                                   'launch', 'apriltag.launch.py'])),
         launch_arguments={
-            'use_sim_time': USE_SIM_TIME_ARG,
             'image_topic': '/oak/rgb/image_raw',
             'rectify': 'true',
         }.items())
@@ -265,15 +240,14 @@ def generate_launch_description():
             msg=(
                 'mapping_mission_hardware: AprilTag detection is on '
                 '(apriltag:=false to skip it). Capture dock poses with `ros2 '
-                'run perception capture_dock_pose` in another terminal (no '
-                'sim-time flag on the robot). Capture dock A (tag 0) first '
+                'run perception capture_dock_pose` in another terminal. Capture dock A (tag 0) first '
                 'and sanity-check it against its existing docks.yaml '
                 'entry.')),
 
         hardware_odometry,
         mapping,
 
-        # Staggered like the sim launch: slam_toolbox is busy with its
+        # Staggered: slam_toolbox is busy with its
         # CONFIGURE/ACTIVATE window in the first seconds and rectify + detect
         # would compete with it.
         TimerAction(

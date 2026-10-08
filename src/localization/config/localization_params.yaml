@@ -6,12 +6,12 @@ slam_toolbox:
   #
   # `map_file_name` is deliberately NOT set in this file. It is injected by
   # launch/localize.launch.py as an absolute path computed from
-  # get_package_share_directory('localization') + '/maps/arena', the same
+  # get_package_share_directory('localization') + '/maps/<map>', the same
   # way that launch file already overrides use_sim_time/use_lifecycle_manager
   # on top of this yaml - see that file. Two things to know about the target:
   #
-  # 1. It is NOT the nav2_map_server occupancy-grid pair Task 2 produced with
-  #    map_saver_cli (arena.yaml/arena.pgm). slam_toolbox's own
+  # 1. It is NOT the nav2_map_server occupancy-grid pair map_saver_cli
+  #    produces (<map>.yaml/<map>.pgm). slam_toolbox's own
   #    `mode: localization` loads a SERIALIZED POSE GRAPH via
   #    `serialization::read()`, which expects "<map_file_name>.posegraph" and
   #    "<map_file_name>.data" - a completely different, slam_toolbox-internal
@@ -21,11 +21,11 @@ slam_toolbox:
   #    lifecycle-activation race, so written down here for whoever hits it
   #    next.
   # 2. THE RULE, if you ever re-map this arena: regenerate
-  #    arena.yaml/arena.pgm (map_saver_cli) AND arena.posegraph/arena.data
+  #    <map>.yaml/<map>.pgm (map_saver_cli) AND <map>.posegraph/<map>.data
   #    (serialize_map) from the SAME live mapping run, before tearing
   #    anything down. Never update one pair without the other - they must
-  #    represent identical world geometry, because Task 7's Nav2 costmap
-  #    loads arena.yaml while this launch's localizer loads arena.posegraph,
+  #    represent identical world geometry, because the Nav2 costmap
+  #    loads <map>.yaml while this launch's localizer loads <map>.posegraph,
   #    and the two need to agree on where the walls and docks are. It is not
   #    enough for both pairs to start from the same pose (position AND
   #    heading) - with `do_loop_closing: false` below (no global consistency
@@ -46,17 +46,14 @@ slam_toolbox:
 
     # ROS Parameters
     #
-    # base_frame is base_footprint, not base_link - same established reason
-    # as mapping.launch.py / mapper_params_online_async.yaml: Gazebo's
-    # DiffDrive plugin owns odom->base_footprint dynamically, and
-    # robot_state_publisher owns a static base_footprint->base_link, so
-    # base_link already has one parent.
+    # base_frame is base_footprint, not base_link - same reason as
+    # mapper_params_hardware.yaml: the EKF owns odom->base_footprint, and a
+    # static base_footprint->base_link already gives base_link its parent.
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan_filtered
     mode: localization
-    use_sim_time: true
 
     # map_start_pose is NOT set here: launch/localize.launch.py injects it
     # from its `map_start_pose` launch argument (default [0.0, 0.0, 0.0]).
@@ -84,12 +81,9 @@ slam_toolbox:
     min_laser_range: 0.02
     max_laser_range: 12.0
     minimum_time_interval: 0.5
-    # Same established mitigation as mapping.launch.py's config: this sim's
-    # two ros_gz_bridge publishers on /clock produce small time jumps that a
-    # tight transform_timeout/tf_buffer_duration turned into real
-    # tf2::NoDataForExtrapolationException crashes during Task 2's
-    # investigation. The jitter is a property of the sim stack, not of
-    # mapping specifically, so the same tolerance applies here.
+    # Same as mapper_params_hardware.yaml: the encoder stamps are back-dated
+    # ~12 ms, and a tight transform_timeout turned that into
+    # tf2::NoDataForExtrapolationException.
     transform_timeout: 1.0
     tf_buffer_duration: 60.0
     stack_size_to_use: 40000000

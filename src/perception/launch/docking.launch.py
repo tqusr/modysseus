@@ -1,8 +1,7 @@
 """Bring up opennav_docking's real `DockRobot` action server.
 
-Replaces `mission`'s `stub_action_servers` DockRobot stub with the real
-`opennav_docking` package's `docking_server` node, configured against the
-real arena dock poses (`config/docking.yaml`, itself hand-transcribed from
+Runs the `opennav_docking` package's `docking_server` node, configured against
+the real arena dock poses (`config/docking.yaml`, itself hand-transcribed from
 `mission/config/docks.yaml` -- see that file's header comment for the
 staging-pose formula and why fixed-pose docking was chosen over a vision-
 corrected AprilTag approach for this iteration).
@@ -11,7 +10,7 @@ EVERY DOCKING MOTION GOES THROUGH THE COLLISION MONITOR.
 
 Everywhere in this stack a velocity command reaches the robot only through
 controller/behavior_server -> `cmd_vel_nav` -> velocity_smoother ->
-nav2_collision_monitor -> `/cmd_vel` (navigation/launch/navigation.launch.py),
+nav2_collision_monitor -> `/cmd_vel_ctrl` (navigation/launch/navigation.launch.py),
 so the lidar and camera stop/slowdown zones guard docking and undocking too:
 an obstacle can appear in a dock bay like anywhere else.
 
@@ -61,8 +60,7 @@ or a bare `LifecycleNode` with no activation path here without the watchdog --
 see the lesson in this repo's task briefs: it is exactly the race that cost
 real time in Tasks 2/3.
 
-The `use_sim_time` launch argument (default true) exists for the real robot,
-which runs on wall-clock time.
+Every node runs on wall-clock time: there is no /clock on the robot.
 """
 
 import os
@@ -70,11 +68,10 @@ import os
 from ament_index_python.packages import get_package_share_directory
 
 from launch import LaunchDescription
-from launch.actions import (DeclareLaunchArgument, ExecuteProcess, LogInfo,
+from launch.actions import (ExecuteProcess, LogInfo,
                             OpaqueFunction, RegisterEventHandler, TimerAction)
 from launch.event_handlers import OnProcessExit
 from launch.events import matches_action
-from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import LifecycleNode, Node
 from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
@@ -86,13 +83,9 @@ from lifecycle_msgs.msg import Transition
 ACTIVATION_TIMEOUT = 60.0
 
 
-def _as_bool(text):
-    """Launch arguments are text; node parameters must be typed."""
-    return text.strip().lower() in ('true', '1')
-
-
 def _launch_nodes(context):
-    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    # A bool, not text: rclpy declares `use_sim_time` as a bool.
+    use_sim_time = False
     config = os.path.join(
         get_package_share_directory('perception'), 'config', 'docking.yaml')
 
@@ -171,6 +164,5 @@ def _launch_nodes(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
         OpaqueFunction(function=_launch_nodes),
     ])

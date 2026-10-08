@@ -7,8 +7,8 @@ each watched topic must have delivered a message within its own max age.
 
 Only arrival matters, so subscriptions are raw (no deserialization) and
 best-effort (matches both reliable and best-effort publishers). Arrival is
-timed on the monotonic clock, not the node's, so it means the same thing in
-simulation and on the robot.
+timed on the monotonic clock, not the node's, so it does not depend on which
+clock the node runs on.
 """
 
 import time

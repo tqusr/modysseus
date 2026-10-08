@@ -1,4 +1,4 @@
-"""full_stack_hardware.launch.py: the sim stack minus Gazebo, on wall-clock time.
+"""full_stack_hardware.launch.py: every layer, on wall-clock time.
 
 The launch files are evaluated in-process, recursing through includes and
 timers (see perception/test/launch_helpers.py); nothing is started. Needs the
@@ -74,10 +74,9 @@ ALL = ['hardware_odometry.launch.py', 'localization.launch.py',
        'wheel_drive.launch.py']
 
 
-def test_all_layers_on_by_default_and_no_simulator():
+def test_all_layers_on_by_default():
     includes = _includes()
     assert sorted(includes) == sorted(ALL)
-    assert 'simulation.launch.py' not in includes
 
 
 def test_every_node_is_on_wall_clock():
@@ -86,7 +85,7 @@ def test_every_node_is_on_wall_clock():
         'apriltag_node', 'behavior_server', 'bt_navigator', 'collision_monitor',
         'controller_server', 'docking_server', 'ekf_filter_node',
         'gyro_bias_node', 'image_gate', 'lifecycle_manager_navigation', 'mission_node',
-        # the oak filter in source:=depth mode: its stages are components
+        # the oak filter: its stages are components
         # inside this container (perception's own tests cover them)
         'oak_cloud_container', 'planner_server',
         'rectify_node', 'scan_filter', 'slam_toolbox', 'tag_dock_server',

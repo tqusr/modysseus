@@ -24,7 +24,7 @@ class MissionNode(Node):
         # false = safe stop does not publish zero velocity; diagnostic only.
         self.declare_parameter('safe_stop_zero_hold', True)
         # '<topic> <pkg/msg/Type> <max_age_sec>' each; unset = no topic checks
-        # (simulation). config/health_hardware.yaml sets it on the robot.
+        # (config/health_hardware.yaml sets it on the robot).
         self.declare_parameter('health_topics', Parameter.Type.STRING_ARRAY)
         health_specs = self.get_parameter_or(
             'health_topics', Parameter('health_topics', value=None)).value or []

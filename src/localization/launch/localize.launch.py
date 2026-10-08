@@ -1,32 +1,30 @@
 """Run slam_toolbox in localization mode against the saved arena pose graph.
 
-This is Task 3's long-running counterpart to mapping.launch.py: instead of
-building a map, it loads the one Task 2 built (src/localization/maps/arena)
-and relocalizes the robot against it, publishing `map -> odom` (which,
-combined with the sim's own `odom -> base_footprint` and
-robot_state_publisher's static `base_footprint -> base_link`, makes
-`map -> base_link` resolve too).
+The long-running counterpart to mapping.launch.py: instead of building a map,
+it loads the one built earlier (src/localization/maps/<map>, default
+`arena_real`) and relocalizes the robot against it, publishing `map -> odom`
+(which, combined with the EKF's `odom -> base_footprint` and the static
+`base_footprint -> base_link`, makes `map -> base_link` resolve too).
 
 MAP FORMAT - read this before pointing this at a different saved map.
 
 `map_file_name` here is NOT the nav2_map_server occupancy-grid pair
-(arena.yaml/arena.pgm) that Task 2 produced with map_saver_cli. slam_toolbox's
+(<map>.yaml/<map>.pgm) that map_saver_cli produces. slam_toolbox's
 own `mode: localization` loads a SERIALIZED POSE GRAPH instead, which it reads
 as "<map_file_name>.posegraph" + "<map_file_name>.data" - a different,
-slam_toolbox-internal (karto) format. Without arena.posegraph/arena.data,
+slam_toolbox-internal (karto) format. Without <map>.posegraph/<map>.data,
 on_configure fails to load a map and this node will not do anything useful -
 easy to mistake for the lifecycle-activation race below if you don't check
 for it first.
 
-THE RULE, if you ever re-map this arena (not merely a note on how it was done
-this time): regenerate `arena.yaml`/`arena.pgm` (map_saver_cli) AND
-`arena.posegraph`/`arena.data` (serialize_map) from the SAME live mapping
+THE RULE, if you ever re-map the arena: regenerate `<map>.yaml`/`<map>.pgm`
+(map_saver_cli) AND `<map>.posegraph`/`<map>.data` (serialize_map) from the SAME live mapping
 run, before tearing anything down - call both save services back-to-back
 against the one running slam_toolbox instance that just finished driving the
 arena. Never update one pair without the other. They are two different
 projections of the same pose graph, so a four-way byte-identical-run
-guarantee is what makes a downstream consumer (Task 7's Nav2 costmap loads
-arena.yaml while this launch's localizer loads arena.posegraph) see the same
+guarantee is what makes a downstream consumer (the Nav2 costmap loads
+<map>.yaml while this launch's localizer loads <map>.posegraph) see the same
 world geometry from both. Regenerating one pair from a fresh, independent
 mapping run while leaving the other pair in place silently reintroduces two
 copies of the arena that only agree by coincidence of start pose - with
@@ -51,13 +49,10 @@ states by node name, so the exact same script works unmodified here.
 
 Also uses `sync_slam_toolbox_node`'s localization counterpart
 (`localization_slam_toolbox_node`) rather than the async variant, for the
-same reason mapping.launch.py gives: this sim's dual `/clock` publishers
-produce small time jumps that proved less reliable against the async node's
-threading model during Task 2's investigation.
+same reason as mapping.launch.py.
 
-The `use_sim_time` (default true) and `map` (default `arena`) launch arguments
-exist for the real robot: hardware runs on wall-clock time and its own saved
-pose graph (e.g. `map:=arena_real`).
+Everything runs on wall-clock time. The `map` launch argument (default
+`arena_real`) names the saved pose graph.
 
 START POSE. `map_start_pose` ("x, y, yaw" in the map frame, metres and
 radians; default "0.0, 0.0, 0.0", the pose graph's origin) is REQUIRED by
@@ -90,11 +85,6 @@ from lifecycle_msgs.msg import Transition
 ACTIVATION_TIMEOUT = 60.0
 
 
-def _as_bool(text):
-    """Launch arguments are text; node parameters must be typed."""
-    return text.strip().lower() in ('true', '1')
-
-
 def _require_pose_graph(map_file_name):
     """Fail at launch if the pose graph is missing.
 
@@ -125,7 +115,8 @@ def _parse_start_pose(text):
 
 
 def _launch_nodes(context):
-    use_sim_time = _as_bool(LaunchConfiguration('use_sim_time').perform(context))
+    # A bool, not text: rclpy declares `use_sim_time` as a bool.
+    use_sim_time = False
     share = get_package_share_directory('localization')
     config = os.path.join(share, 'config', 'localization_params.yaml')
     map_file_name = os.path.join(
@@ -205,10 +196,7 @@ def _launch_nodes(context):
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
-            'use_sim_time', default_value='true',
-            description='Use /clock (simulation); false on the real robot'),
-        DeclareLaunchArgument(
-            'map', default_value='arena',
+            'map', default_value='arena_real',
             description='Pose graph basename in localization/maps'),
         DeclareLaunchArgument(
             'map_start_pose', default_value='0.0, 0.0, 0.0',

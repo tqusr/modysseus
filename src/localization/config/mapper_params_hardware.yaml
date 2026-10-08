@@ -1,8 +1,5 @@
 slam_toolbox:
-  # Filename says "async" for historical reasons (this started as the async
-  # example config), but mapping.launch.py now points sync_slam_toolbox_node
-  # at this same file - see that launch file's docstring for why. The
-  # parameter schema is identical between the two node variants.
+  # Mapping parameters for the real robot, used by mapping.launch.py.
   ros__parameters:
 
     # Plugin params
@@ -15,18 +12,15 @@ slam_toolbox:
 
     # ROS Parameters
     #
-    # base_frame is base_footprint, not base_link: Gazebo's DiffDrive plugin
-    # owns odom->base_footprint dynamically, and robot_state_publisher owns a
-    # static base_footprint->base_link, so base_link already has one parent -
-    # see Task 1's review (2026-10-02-full-stack plan) for why this is the
-    # only valid choice, not base_link.
+    # base_frame is base_footprint, not base_link: the EKF owns
+    # odom->base_footprint, and a static base_footprint->base_link already
+    # gives base_link its parent, so this is the only valid choice.
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan_filtered
     use_map_saver: true
     mode: mapping #localization
-    use_sim_time: true
 
     # if you'd like to immediately start continuing a map at a given pose
     # or at the dock, but they are mutually exclusive, if pose is given
@@ -47,17 +41,11 @@ slam_toolbox:
     min_laser_range: 0.02 #for rastering images
     max_laser_range: 12.0 #for rastering images
     minimum_time_interval: 0.5
-    # Bumped from 0.2s: this sim has two ros_gz_bridge publishers on /clock,
-    # producing small millisecond-scale time jumps (confirmed in Task 1's
-    # review as "harmless" for the EKF, which only logged warnings, but for
-    # a node doing frequent TF lookups with a tight timeout over a multi-
-    # minute mapping run, those jumps caused real tf2::NoDataForExtrapolation
-    # crashes and - even when it didn't crash - plausibly caused occasional
-    # bad scan matches that produced severely distorted maps (13-15m instead
-    # of the real ~6m arena), since a dropped/late transform lookup can make
-    # slam_toolbox fall back to a worse pose guess for that scan. A more
-    # tolerant timeout lets it ride out the jitter instead of either crashing
-    # or silently degrading match quality.
+    # Raised from 0.2 s. It absorbs the ~12 ms the encoder stamps are
+    # back-dated by, and
+    # slam_toolbox stamps map->odom this far ahead, which
+    # perception/perception/capture_dock_pose.py and mission_tree.py rely on.
+    # Do not change it without checking both.
     transform_timeout: 1.0
     tf_buffer_duration: 60.0
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
@@ -85,9 +73,16 @@ slam_toolbox:
     link_match_minimum_response_fine: 0.1  
     link_scan_maximum_distance: 1.5
     loop_search_maximum_distance: 3.0
-    # Disabled: this arena is a small (6x6 m), highly symmetric square room
-    # with docks placed symmetrically on every wall. During actual mapping
-    # runs, loop closure repeatedly produced bad matches between
+    # OPEN TRADE-OFF. Without loop closure, any heading or position error
+    # made during the drive is never corrected, so one bad scan match stays in
+    # the map for good. With it, the symmetric room invites false loop
+    # closures (below). Revisit only after the narrower correlation window
+    # (0.5, below) has been tried on the robot: it should make bad matches
+    # rarer, which changes how much loop closure is needed.
+    #
+    # Why it is off: the arena is a small, highly symmetric room with docks
+    # placed symmetrically on every wall. During mapping runs, loop closure
+    # repeatedly produced bad matches between
     # perceptually-similar-but-different corners/walls, which the pose-graph
     # optimizer then "resolved" by teleporting a large chunk of the map tens
     # of meters away (confirmed via a quick occupied-cell bounding-box check
@@ -104,20 +99,15 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # Correlation Parameters - Correlation Parameters
-    # Widened from 0.5m: the scan matcher only searches within this window
-    # around the pose odometry predicts. A direct ground-truth check (gz's
-    # /world/demo/pose/info vs /odom, static after an in-place rotation)
-    # found odom's yaw matched true sim yaw to within 0.07deg - ruling out a
-    # systematic odometry angular-scale error as the cause of the repeated
-    # 13-15m map distortion seen in this investigation. But a narrow window
-    # is still fragile to any transient pose-seed error (e.g. from the known
-    # dual-/clock jitter affecting a scan's TF lookup mid-rotation even if
-    # odometry itself is fine once settled), and in a room this symmetric a
-    # narrow window that misses the true pose has nothing nearby-but-wrong
-    # to fall back on except another wall/dock that looks similar. Widening
-    # the search space gives the matcher room to find the true match even
-    # when the odometry-seeded center is off by more than 0.5m.
-    correlation_search_space_dimension: 2.0
+    # 0.5 m, the slam_toolbox default. The scan matcher only searches this
+    # window around the pose odometry predicts. A wider window does harm: a
+    # +-1 m search in a room where every wall and dock looks alike can lock
+    # onto the wrong wall, and it costs ~16x the correlation work per scan on
+    # a Jetson running sync_slam_toolbox_node, which processes every scan and
+    # falls behind when matching is slow.
+    # If the robot now loses track after fast turns, the window is too narrow
+    # for the odometry error: try 1.0 before going back to 2.0.
+    correlation_search_space_dimension: 0.5
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1 
 

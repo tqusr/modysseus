@@ -1,26 +1,23 @@
-"""The whole autonomy stack on the REAL robot: the sim stack minus Gazebo.
+"""The whole autonomy stack on the REAL robot.
 
     ros2 launch mission full_stack_hardware.launch.py saga_token:=<token>
 
-The hardware counterpart to `full_stack.launch.py`: the same layers in the same
-order with the same stagger, but the simulator and the sim odometry are
-replaced by the robot's real drivers and the real odometry chain. Every node
-runs on wall-clock time (`use_sim_time` false): there is no `/clock` on the
-robot. Design: docs/superpowers/specs/2026-10-03-hardware-full-stack-design.md.
+The layers start in a fixed order with a stagger, on top of the robot's real
+drivers and the real odometry chain. Every node runs on wall-clock time
+(`use_sim_time` false): there is no `/clock` on the robot. Design: docs/superpowers/specs/2026-10-03-hardware-full-stack-design.md.
 
 NEEDS THE ROBOT'S DRIVERS ALREADY RUNNING. The vendor's systemd service
 `einride-mini-truck` provides `/wheel_encoders`, `/imu`, `/scan` and the OAK-D
-topics, and provides the serial link. Nothing here starts or restarts it.
+topics. Nothing here starts or restarts it.
 
-THE STAGGER (seconds after launch; the offsets of the sim launch, except that
-odometry starts at once because there is no simulator to wait for):
+THE STAGGER (seconds after launch):
 
      0  hardware_odometry   wheel odometry + gyro bias + EKF owning
                             odom -> base_footprint                (always)
      0  wheel_drive         cmd_vel_ctrl -> T:1 wheel speeds      (always)
      5  apriltag            rectified, on /oak/rgb/image_raw      (apriltag)
      5  oak_points_filter   small cloud from /oak/stereo/image_raw,
-                            voxel + crop box                      (nav)
+                            voxel                                 (nav)
      7  localize            slam_toolbox localization on `map`    (always)
     10  docking             opennav_docking DockRobot server      (docking)
     18  navigation          Nav2                                  (nav)
@@ -55,8 +52,7 @@ THE ROBOT TERMINAL WORKFLOW
                 nav:=false docking:=false mission:=false apriltag:=false
             Keep the robot still until "gyro bias calibrated".
          b. drop `nav:=false`; check
-            `ros2 param get /local_costmap/local_costmap use_sim_time` is False
-            (if not, Nav2 needs a hardware copy of its parameter file).
+            `ros2 param get /local_costmap/local_costmap use_sim_time` is False.
          c. drop `docking:=false`
          d. drop `mission:=false` and add `saga_token:=<token>`
   4. Set the initial pose, once slam_toolbox is active. It starts at
@@ -72,8 +68,8 @@ y: 0.0}, orientation: {w: 1.0}}}}"
 
 CAUTIONS. Docking moves through Nav2's velocity smoother and collision
 monitor (see docking.launch.py), so dock with `nav` on, and keep a hand on the
-e-stop. Nav2 and docking tuning, and the dock poses, are the simulation's
-until retuned and captured on the chassis. This launch has not been run on the
+e-stop. Nav2 and docking tuning, and the dock poses, are still to be retuned
+and captured on the chassis. This launch has not been run on the
 robot; it is covered by in-process launch-description tests only.
 
 Includes are located with `FindPackageShare`, resolved when the include runs,
@@ -88,9 +84,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (LaunchConfiguration, PathJoinSubstitution,
                                   PythonExpression)
 from launch_ros.substitutions import FindPackageShare
-
-HARDWARE = {'use_sim_time': 'false'}  # launch arguments are text
-
 
 def _include(package, launch_file, arguments=None, switch=None):
     """Include `package`'s launch file, resolved when it runs, optionally gated."""
@@ -112,23 +105,23 @@ def _warn_when(message, *, on, off):
 def generate_launch_description():
     odometry = _include('localization', 'hardware_odometry.launch.py')
     apriltag = _include('perception', 'apriltag.launch.py', {
-        **HARDWARE, 'image_topic': '/oak/rgb/image_raw', 'rectify': 'true',
+        'image_topic': '/oak/rgb/image_raw', 'rectify': 'true',
         'gated': 'true'},
         switch='apriltag')
     oak_filter = _include('perception', 'oak_points_filter.launch.py',
-                          {**HARDWARE, 'source': 'depth'}, 'nav')
+                          switch='nav')
     localize = _include('localization', 'localize.launch.py',
-                        {**HARDWARE, 'map': LaunchConfiguration('map'),
+                        {'map': LaunchConfiguration('map'),
                          'map_start_pose': LaunchConfiguration('map_start_pose')})
-    docking = _include('perception', 'docking.launch.py', HARDWARE, 'docking')
+    docking = _include('perception', 'docking.launch.py', switch='docking')
     # Nav2 ends in cmd_vel_ctrl, which localization's wheel_drive_node turns
     # into T:1 wheel speeds. The commanded turn rate is the real one, so Nav2
     # is told the rate we actually want (see navigation.launch.py).
-    navigation = _include('navigation', 'navigation.launch.py', {
-        **HARDWARE, 'wz_max': '0.75'}, 'nav')
+    navigation = _include('navigation', 'navigation.launch.py',
+                          {'wz_max': '0.75'}, 'nav')
     wheel_drive = _include('localization', 'wheel_drive.launch.py')
     mission = _include('mission', 'mission.launch.py', {
-        **HARDWARE, 'saga_url': LaunchConfiguration('saga_url'),
+        'saga_url': LaunchConfiguration('saga_url'),
         'saga_token': LaunchConfiguration('saga_token'),
         'safe_stop_zero_hold': LaunchConfiguration('safe_stop_zero_hold'),
         'health_config': PathJoinSubstitution(

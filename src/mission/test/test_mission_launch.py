@@ -1,4 +1,4 @@
-"""mission.launch.py: sim time by default, saga arguments passed as strings."""
+"""mission.launch.py: wall clock, saga arguments passed as strings."""
 import importlib.util
 import os
 
@@ -26,17 +26,12 @@ def _nodes(**args):
             for n in h.nodes_of(h.expand(description.entities, context))]
 
 
-def test_defaults_are_sim_time_with_string_saga_arguments():
+def test_defaults_are_wall_clock_with_string_saga_arguments():
     (node,) = _nodes(saga_token='12345')
     p = node['inline_parameters']
-    assert p['use_sim_time'] is True
+    assert p['use_sim_time'] is False
     assert p['saga_token'] == '12345' and isinstance(p['saga_token'], str)
     assert p['saga_url'] == 'http://localhost:8000'
-
-
-def test_use_sim_time_false_is_a_bool():
-    (node,) = _nodes(use_sim_time='false')
-    assert node['inline_parameters']['use_sim_time'] is False
 
 
 def test_no_health_config_by_default():

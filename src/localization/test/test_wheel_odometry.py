@@ -1,7 +1,7 @@
 """Unit tests for localization.wheel_odometry -- the pure maths behind
 `ros2 run localization wheel_odometry_node.py`.
 
-No rclpy, no tf2, no ROS graph, no robot, no Gazebo: every test here is plain
+No rclpy, no tf2, no ROS graph, no robot: every test here is plain
 Python against plain functions, which is the reason that module exists
 separately from the node at all.
 

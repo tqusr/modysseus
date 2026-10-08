@@ -2,7 +2,7 @@
 dock pose, and that the config files agree about where the pre-dock pose is.
 
 No rclpy, no ROS graph, no robot. WHAT THESE CANNOT DO: say whether the lidar
-sees a real robot in a real dock bay (the bay's size comes from the simulated
+sees a real robot in a real dock bay (the bay's size comes from the
 dock model), or whether Nav2's docking controller completes the approach at the
 configured speed. Those are checks on the robot.
 """

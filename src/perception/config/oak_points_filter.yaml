@@ -1,51 +1,10 @@
-# pcl_ros CropBox filter: removes the OAK-D Lite sim camera's own
-# self-detection/near-field noise from /oak/points at the SOURCE, rather
-# than suppressing it with a blanket min-height/min-range cut in Nav2's own
-# costmap/collision_monitor config (see navigation/config/nav2_params.yaml's
-# header comment for why that first attempt was wrong: it made the camera
-# layer blind to any real low obstacle, or anything within range, anywhere
-# in its whole field of view -- exactly the "low obstacles and near-range
-# things a 2D lidar can't see" cases the camera layer exists for).
-#
-# The box below is scoped to the ROBOT'S OWN KNOWN GEOMETRY, not the scene:
-# it excludes only a region immediately around the robot's own body, in
-# base_footprint (ground-up, robot-centred) coordinates. A real obstacle
-# anywhere else in the camera's field of view -- including low ones, or
-# ones close to the robot but outside this box (e.g. right at a dock during
-# final approach) -- passes through untouched.
-#
-# Box sizing: started from the real chassis dimensions (track 0.17452 m,
-# wheelbase 0.171 m -- see navigation/config/nav2_params.yaml's footprint
-# comment for the robot_radius 0.18 m derivation) and the camera's own mount
-# position (oak_d_lite_link at x=0.06577, z=0.123953 relative to
-# base_footprint, per einride_mini_truck_description's model.sdf), but had
-# to be widened from that first geometric estimate after empirical testing
-# (re-running the camera_layer's own debug grid,
-# /local_costmap/camera_layer, repeatedly while the robot sat still) showed
-# the actual self-return envelope is bigger and NOT simply "in front of the
-# camera": marked cells appeared in a stable, symmetric pattern centred
-# around roughly (x=0, y=-0.3) -- i.e. to one SIDE of the robot and
-# straddling both positive and negative x, not a cone extending forward
-# from the camera lens. That symmetric, repeatable (not randomly scattered)
-# shape is consistent with the camera seeing part of its own housing/mount
-# bracket at a wide-FOV grazing angle, not a real external object (a real
-# object wouldn't appear bilaterally symmetric about the robot's own centre
-# line while the robot itself never rotated during the test). The box below
-# is sized with margin past the worst point actually observed (~0.35 m):
-#   x: [-0.40, 0.40]  -- symmetric; the observed noise straddled x=0
-#   y: [-0.40, 0.40]  -- symmetric; covers the observed cluster at y~-0.3
-#                        with margin, plus the mirror case
-#   z: [0.0, 0.20]    -- ground up through just above the camera's own
-#                        mount height (0.124 m)
-# This is still a small, robot-centred box (0.8 m x 0.8 m) relative to the
-# ~6x6 m arena and the >=1 m typical travel distances in it -- it excludes
-# only the robot's own immediate vicinity, not a scene-wide cut. A real
-# obstacle anywhere else in the camera's field of view -- including low
-# ones, or ones close to the robot but outside this box (e.g. at a dock
-# during final approach) -- passes through untouched.
-# DEPTH SOURCE ONLY (oak_points_filter.launch.py source:=depth, the real
-# robot): two stages ahead of the voxel filter that replace /oak/points with a
-# cloud built from the depth image at quarter resolution per side.
+# The OAK-D depth pipeline for Nav2's camera obstacle layers, built in one
+# container by launch/oak_points_filter.launch.py: a quarter-resolution XYZ
+# cloud from the depth image, then a voxel filter, published as
+# /oak/points_filtered. There is no crop box: the real OAK-D does not see the
+# robot (checked in its frames, and measured 2026-10-05: zero voxel points
+# inside a +-0.40 m box over 80 clouds), so every obstacle point is kept,
+# however close.
 #
 # 1280x720 -> 320x180 = 57,600 points, 16 bytes each (XYZ, no colour) = 0.9 MB,
 # against /oak/points' 921,600 points at 32 bytes = 29.5 MB. What it costs:
@@ -57,7 +16,6 @@
 # full image held less detail than its pixel count suggests anyway.
 oak_depth_resize:
   ros__parameters:
-    use_sim_time: true
     use_scale: true
     scale_width: 0.25
     scale_height: 0.25
@@ -71,58 +29,27 @@ oak_depth_resize:
 
 oak_depth_points:
   ros__parameters:
-    use_sim_time: true
-    # Drop a frame rather than queue it: same reason as the filters' own
+    # Drop a frame rather than queue it: same reason as the filter's own
     # max_queue_size below.
     queue_size: 1
 
-# STAGE 1 of 2: voxel downsample, ahead of the CropBox below.
-#
-# Why this stage exists (it is a LATENCY fix, not a filtering one): the sim's
-# OAK-D Lite depth and colour streams are both declared at 1280x720 (see
-# einride_mini_truck_description's model.sdf and the bridge config's note on
-# why depth carries the colour camera's resolution), so the /oak/points
-# depth_image_proc builds from them is a 1280x720 ORGANIZED cloud: 921,600
-# points at point_step 32 = 29.5 MB per message, nominal 30 Hz. Measured, not
-# estimated -- `width/height/point_step/len(data)` straight off the topic.
-#
-# Nothing downstream could move that. Before this stage, /oak/points_filtered
-# came out at ~506,000 points / 16.2 MB per message with THREE subscribers on
-# it (local_costmap, global_costmap, collision_monitor -- `ros2 topic info -v`),
-# and the CropBox below had to TF-transform all 921,600 points into
-# base_footprint before it could crop any of them. The chain's delivered rate
-# at collision_monitor's `oak_cloud` source collapsed to well under 1 Hz in
-# sim time, so for most of each inter-message gap the newest sample was older
-# than nav2_params.yaml's `source_timeout: 1.0` and the monitor discarded the
-# source outright -- logging "[oak_cloud]: Latest source and current collision
-# monitor node timestamps differ on 1.x seconds. Ignoring the source." several
-# times a second, and, with no valid source left, also "Robot to stop due to
-# invalid source". I.e. the camera obstacle data was not merely late, it was
-# being thrown away, leaving safety stopping/slowing on the lidar alone.
-#
-# This was NOT global CPU starvation: measured under full navigating load the
-# machine sat at ~62% idle across 16 cores, with apriltag_node (the obvious
-# suspect, since it runs full-res and unconsumed) taking only ~26% of ONE
-# core. The limit was single-node throughput and DDS bulk transport of
-# tens-of-MB samples, which idle cores do not help.
+# Voxel downsample. A LATENCY fix, not a filtering one: nav2_collision_monitor
+# discards a camera source older than its `source_timeout` (nav2_params.yaml),
+# and the full 921,600-point cloud (29.5 MB per message) crossing DDS starved
+# it of fresh data, so safety stopping fell back to the lidar alone.
 #
 # leaf_size 0.03 m is deliberately FINER than anything downstream can
 # represent, so this discards no information any consumer could have used:
 # both costmaps run `resolution: 0.05` (nav2_params.yaml), and
 # collision_monitor's PolygonStop/PolygonSlow are 0.5 m / 0.8 m squares
-# needing `min_points: 4` -- a 3 cm grid still returns many points for any
-# obstacle big enough to matter there, with margin over the 5 cm the costmap
-# would have quantized to anyway. It is purely a density cut, not a
-# field-of-view or height cut: no point is removed for WHERE it is, only
-# merged with its 3 cm neighbours.
+# needing `min_points: 4`. It is purely a density cut, not a field-of-view or
+# height cut: no point is removed for WHERE it is, only merged with its 3 cm
+# neighbours.
 #
-# Runs in the cloud's own frame (oak_rgb_camera_optical_frame) on purpose --
-# this node type declares no input_frame/output_frame, and that is what we
-# want: voxelising first means the CropBox below does its base_footprint
-# transform on a few thousand points instead of 921,600.
+# Runs in the cloud's own frame (the camera's optical frame) on purpose: this
+# node type declares no input_frame/output_frame.
 filter_voxel_grid_node:
   ros__parameters:
-    use_sim_time: true
     leaf_size: 0.03
     # pcl_ros's VoxelGrid ALSO range-filters, by default on z in [0, 1.0] -
     # and this stage runs in the optical frame, where z is distance from the
@@ -135,35 +62,6 @@ filter_voxel_grid_node:
     filter_limit_max: 3.5
     # Keep only the newest pending cloud. The default 3 lets a slow consumer
     # build a backlog and then serve collision_monitor a sample that is
-    # already several frames old -- the exact staleness this stage exists to
-    # kill. Depth 1 drops old frames instead of queueing them, so worst-case
-    # staleness is bounded by one processing period rather than by the queue.
+    # already several frames old. Depth 1 drops old frames instead of queueing
+    # them, so worst-case staleness is bounded by one processing period.
     max_queue_size: 1
-
-# STAGE 2 of 2: the self-filter crop box. Unchanged in behaviour -- it now
-# just operates on the downsampled cloud from stage 1 rather than the raw
-# 921,600-point one, and still publishes /oak/points_filtered, so no
-# downstream config changes.
-filter_crop_box_node:
-  ros__parameters:
-    use_sim_time: true
-    # Same rationale as stage 1's: never hand collision_monitor a queued,
-    # already-stale cloud.
-    max_queue_size: 1
-    min_x: -0.40
-    max_x: 0.40
-    min_y: -0.40
-    max_y: 0.40
-    min_z: 0.0
-    max_z: 0.20
-    # true: REMOVE points inside the box above (the robot's own body),
-    # keep everything outside it -- not the other way around.
-    negative: true
-    # Crop in the robot's own frame (self-geometry is defined there), and
-    # publish back out in it too -- downstream consumers (costmap layers,
-    # collision_monitor) already transform from whatever frame a cloud
-    # carries into their own global frame via TF, so this is just a
-    # convenient, stable frame to inspect/debug the filtered cloud in.
-    input_frame: "base_footprint"
-    output_frame: "base_footprint"
-    keep_organized: false

@@ -71,7 +71,7 @@
 # in as nose-first: the first thing to touch the wall is a wheel, not the body
 # (front wheel tangent 0.08596 + 0.04 = 0.12596 m, rear 0.08504 + 0.04 =
 # 0.12504 m, against body ends of 0.1231 m and 0.1221 m, from model.sdf and
-# base_link.stl). Simulation geometry; UNVERIFIED on the real robot.
+# base_link.stl). CAD geometry; UNVERIFIED on the real robot.
 # NOTE: upstream checks only the POSITION against dock_prestaging_tolerance when
 # deciding whether to navigate to the staging pose itself, so a robot already
 # at the staging position, facing the dock, would not be turned. tag_dock_server
@@ -85,8 +85,6 @@
 # fix is the convention above: theta into the wall, staging_yaw_offset pi.
 docking_server:
     ros__parameters:
-        use_sim_time: true
-
         controller_frequency: 50.0
         initial_perception_timeout: 5.0
         wait_charge_timeout: 5.0
@@ -107,7 +105,7 @@ docking_server:
         dock_plugins: ["arena_dock"]
         arena_dock:
             plugin: "opennav_docking::SimpleChargingDock"
-            use_battery_status: false       # sim has no battery topic
+            use_battery_status: false       # no battery topic
             use_external_detection_pose: false   # pose is measured by tag_dock_server beforehand -- see header comment
             docking_threshold: 0.05
             # staging = dock_pose + staging_x_offset * (cos th, sin th);
@@ -152,15 +150,10 @@ docking_server:
         # height band), and the first contact is a wheel, so base_footprint
         # physically cannot get closer than ~0.123 m to that wall.
         #
-        # Measured live, docked at dock A, both readings taken within
-        # seconds of "Robot is charging!":
-        #     Gazebo ground truth (gz model -p): x = 2.86604
-        #     TF map->base_footprint (SLAM):     x = 2.958
-        #     dock A's old configured pose:      x = 2.992
-        # Ground truth standoff = 2.992 - 2.86604 = 0.1260 m, and the nose
-        # tip lands at 2.8660 + 0.1231 = 2.9891, i.e. 3 mm short of the
-        # wall. So there is NO Gazebo wall penetration: the chassis stops
-        # against the wall exactly where the geometry says it must.
+        # Measured live at dock A, docked: the chassis stands 0.1260 m off the
+        # wall (dock A's old configured pose 2.992 minus the true 2.86604), and
+        # the nose tip lands 3 mm short of it. So the chassis stops against
+        # the wall exactly where the geometry says it must.
         #
         # What actually satisfied `docking_threshold: 0.05` before this
         # change was a 0.092 m LOCALIZATION ERROR: the estimate (2.958) sat
@@ -209,14 +202,12 @@ docking_server:
         # `docking_threshold` (0.07). Both are deliberately NOT applied here,
         # because the current values are the ones actually measured live.
         #
-        # !!! UNVERIFIED ON REAL HARDWARE !!! This offset and the standoff
-        # behind it were measured in simulation only. If docking fails to
-        # reach `docking_threshold` on the physical robot, CHECK FOR
-        # CHASSIS-TO-WALL CONTACT BEFORE THE THRESHOLD IS REACHED first:
-        # this sim's exact contact/slip behaviour against a thin static wall
-        # (and the ~0.09 m odometry drift it produced) may not reproduce,
-        # and a real dock's physical geometry may differ from arena.sdf's by
-        # more than the 0.05 m threshold.
+        # !!! UNVERIFIED ON REAL HARDWARE !!! If docking fails to reach
+        # `docking_threshold` on the physical robot, CHECK FOR CHASSIS-TO-WALL
+        # CONTACT BEFORE THE THRESHOLD IS REACHED first: wheel slip against
+        # the wall drifts odometry (~0.09 m was seen), and a real dock's
+        # physical geometry may differ from the dock model by more than the
+        # 0.05 m threshold.
 
         # Approach controller. Mostly opennav_docking's own defaults; the
         # collision block is spelled out explicitly because it is the only
@@ -229,14 +220,10 @@ docking_server:
         # approach trajectory against Nav2's local costmap.
         #
         # This matters more here than anywhere else in the stack:
-        # docking_server publishes /cmd_vel DIRECTLY during docking and
-        # undocking, bypassing the velocity smoother and the standalone
-        # nav2_collision_monitor that every other velocity command in this
-        # stack goes through (a deliberate, documented exception -- see the
-        # docstrings in perception/launch/docking.launch.py and
-        # navigation/launch/navigation.launch.py). So this parameter is not
-        # a redundant second layer; without it a docking leg has no
-        # obstacle protection at all.
+        # Its velocity goes through the velocity smoother and
+        # nav2_collision_monitor like every other command (see
+        # perception/launch/docking.launch.py), so this is a second,
+        # trajectory-ahead layer on top of the monitor's stop zones.
         #
         # The topics are the defaults, repeated for visibility: both are
         # published by navigation.launch.py's local_costmap in the global
@@ -342,8 +329,7 @@ docking_server:
         # risk (a moving robot behind us, a prop placed during the dwell),
         # the fix is NOT this threshold -- lowering it re-breaks docking.
         # The fix is to give the undock leg protection that does not share
-        # this knob: route docking_server's /cmd_vel through
-        # nav2_collision_monitor with a dock-aware polygon, or add a
+        # this knob: a dock-aware polygon in nav2_collision_monitor, or a
         # rear-facing stop polygon active only during undocking.
         controller:
             use_collision_detection: true
@@ -433,7 +419,7 @@ tag_dock_server:
         # The bay edges keep the dock's own wall (bay_min_out_m; the wall is
         # marked as an obstacle, and its returns sit within ~0.1 m of it) and its
         # flared wings (bay_half_width_m; the wall is 0.4 m wide) out of the
-        # count. Sized from the simulated dock model: UNVERIFIED on the real
+        # count. Sized from the dock model: UNVERIFIED on the real
         # docks; check the empty bay reads free from a pre-dock pose, and that a
         # robot and a low object in it read occupied, before relying on this.
         # The camera cannot see the nearest ~0.2-0.3 m in front of it (stereo

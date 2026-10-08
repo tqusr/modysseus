@@ -1,4 +1,4 @@
-"""localize.launch.py: sim defaults unchanged, hardware arguments reach nodes."""
+"""localize.launch.py: wall clock, the arena_real map, start pose reaches slam_toolbox."""
 import importlib.util
 import os
 
@@ -44,24 +44,18 @@ def _nodes(**args):
         for x in h.nodes_of(h.expand(description.entities, context)))}
 
 
-def test_defaults_are_simulation_on_the_arena_map():
+def test_defaults_are_wall_clock_on_the_arena_real_map(robot_pose_graph_exists):
     nodes = _nodes()
     assert sorted(nodes) == ['scan_filter', 'slam_toolbox']
-    assert nodes['scan_filter']['inline_parameters']['use_sim_time'] is True
+    assert nodes['scan_filter']['inline_parameters']['use_sim_time'] is False
     slam = nodes['slam_toolbox']['inline_parameters']
-    assert slam['use_sim_time'] is True
-    assert slam['map_file_name'].endswith(os.path.join('maps', 'arena'))
+    assert slam['use_sim_time'] is False
+    assert slam['map_file_name'].endswith(os.path.join('maps', 'arena_real'))
 
 
 def test_map_argument_selects_the_posegraph_basename(robot_pose_graph_exists):
     slam = _nodes(map='arena_real')['slam_toolbox']['inline_parameters']
     assert slam['map_file_name'].endswith(os.path.join('maps', 'arena_real'))
-
-
-@pytest.mark.parametrize('spelling', ['false', 'False', '0'])
-def test_use_sim_time_false_reaches_both_nodes_as_bool(spelling):
-    for node in _nodes(use_sim_time=spelling).values():
-        assert node['inline_parameters']['use_sim_time'] is False
 
 
 def test_missing_pose_graph_fails_the_launch_naming_the_paths():
@@ -73,23 +67,23 @@ def test_missing_pose_graph_fails_the_launch_naming_the_paths():
     assert 'serialize_map' in message
 
 
-def test_existing_pose_graph_does_not_raise():
-    _expand(map='arena')
+def test_existing_pose_graph_does_not_raise(robot_pose_graph_exists):
+    _expand()
 
 
-def test_start_pose_defaults_to_the_origin_so_the_graph_loads():
+def test_start_pose_defaults_to_the_origin_so_the_graph_loads(robot_pose_graph_exists):
     """Without map_start_pose slam_toolbox skips loading the pose graph."""
     slam = _nodes()['slam_toolbox']['inline_parameters']
     assert slam['map_start_pose'] == (0.0, 0.0, 0.0)
 
 
 @pytest.mark.parametrize('spelling', ['1.5, -2, 3.14', '[1.5, -2, 3.14]', '1.5 -2 3.14'])
-def test_start_pose_argument_reaches_slam_toolbox_as_floats(spelling):
+def test_start_pose_argument_reaches_slam_toolbox_as_floats(spelling, robot_pose_graph_exists):
     slam = _nodes(map_start_pose=spelling)['slam_toolbox']['inline_parameters']
     assert slam['map_start_pose'] == (1.5, -2.0, 3.14)
 
 
 @pytest.mark.parametrize('spelling', ['1, 2', '1, 2, 3, 4', 'a, b, c', ''])
-def test_malformed_start_pose_fails_the_launch(spelling):
+def test_malformed_start_pose_fails_the_launch(spelling, robot_pose_graph_exists):
     with pytest.raises(RuntimeError, match='map_start_pose'):
         _expand(map_start_pose=spelling)

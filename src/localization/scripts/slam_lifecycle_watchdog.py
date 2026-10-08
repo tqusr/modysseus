@@ -3,7 +3,7 @@
 
 Why this exists: slam_toolbox's `*_slam_toolbox_node` is a managed lifecycle
 node that processes no scans at all until it is CONFIGUREd and ACTIVATEd. In
-this sim environment its `change_state` service response is regularly lost -
+this environment its `change_state` service response is regularly lost -
 the node logs "failed to send response to /slam_toolbox/change_state
 (timeout)" - so anything that waits on that response, or on the state-change
 event that launch derives from it, can hang forever while the node sits in
@@ -121,9 +121,9 @@ def main():
     timeout = float(sys.argv[2]) if len(sys.argv) > 2 else 60.0
 
     rclpy.init()
-    # Deliberately the steady system clock, not sim time: this watches a node's
-    # lifecycle, which happens in wall-clock time and must still time out if
-    # /clock stalls or never starts.
+    # Deliberately the steady system clock: this watches a node's lifecycle,
+    # which happens in wall-clock time and must still time out if /clock stalls
+    # or never starts.
     node = LifecycleWatchdog(target, 0)
     node._deadline = node.get_clock().now().nanoseconds + int(timeout * 1e9)
     try:

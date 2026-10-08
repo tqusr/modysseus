@@ -23,7 +23,7 @@ install(PROGRAMS
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  # Pure Python against pure Python: no ROS graph, no robot, no Gazebo.
+  # Pure Python against pure Python: no ROS graph, no robot.
   ament_add_pytest_test(test_wheel_odometry test/test_wheel_odometry.py)
   ament_add_pytest_test(test_gyro_bias test/test_gyro_bias.py)
   ament_add_pytest_test(test_wheel_drive test/test_wheel_drive.py)
