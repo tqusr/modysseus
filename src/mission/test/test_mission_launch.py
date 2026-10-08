@@ -34,11 +34,6 @@ def test_defaults_are_wall_clock_with_string_saga_arguments():
     assert p['saga_url'] == 'http://localhost:8000'
 
 
-def test_no_health_config_by_default():
+def test_no_parameter_files():
     (node,) = _nodes()
     assert node['parameter_files'] == []
-
-
-def test_health_config_is_loaded_before_the_inline_parameters():
-    (node,) = _nodes(health_config='/some/health.yaml')
-    assert node['parameter_files'] == ['/some/health.yaml']

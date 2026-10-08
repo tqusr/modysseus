@@ -158,12 +158,6 @@ def test_no_warnings_when_dependents_are_off_too():
     assert _warnings(nav='false', docking='false', mission='false') == []
 
 
-def test_mission_node_loads_the_hardware_health_topics():
-    nodes = {n['name']: n for n in _nodes()}
-    (path,) = nodes['mission_node']['parameter_files']
-    assert path.endswith(os.path.join('mission', 'config', 'health_hardware.yaml'))
-
-
 def _nav_include_args(**args):
     return next(i for kind, i in _include_infos(**args)
                 if kind == 'include_info' and i['file'].endswith('navigation.launch.py'))['args']

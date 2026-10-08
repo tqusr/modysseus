@@ -5,9 +5,6 @@ from launch_ros.actions import Node
 
 
 def _launch_nodes(context):
-    # Optional parameter file, e.g. config/health_hardware.yaml: the topics
-    # VehicleStatusOK requires to keep arriving. Empty = no topic checks.
-    health_config = LaunchConfiguration('health_config').perform(context)
     return [
         # stub_action_servers is NOT launched here: it registers action servers
         # under the SAME names (`navigate_to_pose`, `dock_robot`) that the real
@@ -19,7 +16,7 @@ def _launch_nodes(context):
             executable='mission_node',
             name='mission_node',
             output='screen',
-            parameters=([health_config] if health_config else []) + [{
+            parameters=[{
                 # Performed to text so a numeric-looking token stays a string.
                 'saga_url': LaunchConfiguration('saga_url').perform(context),
                 'saga_token': LaunchConfiguration('saga_token').perform(context),
@@ -37,6 +34,5 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('saga_url', default_value='http://localhost:8000'),
         DeclareLaunchArgument('saga_token', default_value=''),
-        DeclareLaunchArgument('health_config', default_value=''),
         OpaqueFunction(function=_launch_nodes),
     ])

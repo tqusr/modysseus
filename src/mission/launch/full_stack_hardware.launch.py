@@ -21,8 +21,7 @@ THE STAGGER (seconds after launch):
      7  localize            slam_toolbox localization on `map`    (always)
     10  docking             opennav_docking DockRobot server      (docking)
     18  navigation          Nav2                                  (nav)
-    25  mission             mission_node (saga_url, saga_token,
-                            config/health_hardware.yaml)          (mission)
+    25  mission             mission_node (saga_url, saga_token)   (mission)
 
 ARGUMENTS
     map         pose graph basename in localization/maps (default arena_real);
@@ -122,9 +121,7 @@ def generate_launch_description():
     wheel_drive = _include('localization', 'wheel_drive.launch.py')
     mission = _include('mission', 'mission.launch.py', {
         'saga_url': LaunchConfiguration('saga_url'),
-        'saga_token': LaunchConfiguration('saga_token'),
-        'health_config': PathJoinSubstitution(
-            [FindPackageShare('mission'), 'config', 'health_hardware.yaml'])},
+        'saga_token': LaunchConfiguration('saga_token')},
         'mission')
 
     switches = {
