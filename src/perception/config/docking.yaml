@@ -1,88 +1,72 @@
 ### opennav_docking's `docking_server` (nav2_util::LifecycleNode) parameters.
 #
-# Dock x/y positions are DERIVED from `src/mission/config/docks.yaml` (THAT
-# FILE IS THE SOURCE OF TRUTH for where the arena's docks physically are).
-# They are not a straight copy: each pose here is that dock's pose moved
-# 0.126 m outward along its own approach heading, because docks.yaml's
-# dock_pose is the dock's back WALL and this file's pose is where the ROBOT
-# must end up -- see the measured chassis-standoff note on the `docks:`
-# block below. If you change a dock's x/y in docks.yaml, re-derive the
-# matching `pose:` entry below with that same offset. The
-# `docks:` list and each dock's `type`/`frame`/`pose`/`id` block here are
-# opennav_docking's own dock-database format (parsed by its own
-# `parseDockParams`), NOT the same YAML schema as mission's docks.yaml.
+# Dock x/y are derived from `src/mission/config/docks.yaml`, the source of truth
+# for where the docks are. Each pose here is that dock's pose moved 0.126 m
+# outward along its approach heading, because docks.yaml's dock_pose is the
+# dock's back wall and this file's pose is where the robot must end up (see the
+# chassis standoff note on the `docks:` block). If you change a dock's x/y in
+# docks.yaml, re-derive the matching `pose:` here with the same offset. The
+# `docks:` list and each dock's `type`/`frame`/`pose`/`id` are opennav_docking's
+# own dock-database format (`parseDockParams`), not docks.yaml's schema.
 #
-# IMPORTANT -- theta here is DELIBERATELY ROTATED BY PI FROM docks.yaml'S
-# theta FOR THE SAME DOCK. This isn't a bug; it's two different physical
-# quantities that happen to be measured from the same tag:
-#   - mission/config/docks.yaml's dock_pose.theta = the tag's own outward
-#     (room-facing) normal -- confirmed empirically (Task 4 + this task) by
-#     standing a robot at dock_pose.theta+pi and seeing the tag centered in
-#     its camera.
-#   - opennav_docking's dock pose.theta (below) = the robot's own final
-#     NOSE-FORWARD heading once docked, per its source
-#     (opennav_docking/src/docking_server.cpp's approachDock(): with
-#     dock_backwards=false the controller drives the robot's base_frame
-#     straight toward this pose, ending with this exact heading -- there is
-#     no internal flip in that code path, unlike the dock_backwards=true
-#     path which flips the *target* by pi internally for its own reverse-
-#     motion trick). For a robot that noses straight into a wall-mounted
-#     dock (this arena: all 8 docks sit flush against a wall, tag facing
-#     into the room), "final nose-forward heading" is necessarily INTO the
-#     wall -- i.e. the opposite of the tag's own outward normal. Hence
-#     pose.theta here = docks.yaml's dock_pose.theta + pi (normalized).
+# theta here is deliberately rotated by pi from docks.yaml's theta for the same
+# dock. They are two different quantities measured from the same tag:
+#   - docks.yaml's dock_pose.theta is the tag's outward (room-facing) normal,
+#     confirmed by standing a robot at dock_pose.theta + pi and seeing the tag
+#     centred in its camera.
+#   - opennav_docking's pose.theta is the robot's final nose-forward heading
+#     once docked (docking_server.cpp approachDock(): with dock_backwards=false
+#     the controller drives base_frame straight at this pose and ends with this
+#     heading; dock_backwards=true flips the target by pi internally). For a
+#     robot nosing into a wall-mounted dock that is into the wall, the opposite
+#     of the tag's normal, so pose.theta = docks.yaml's dock_pose.theta + pi
+#     (normalized).
 #
-# Plugin choice: `opennav_docking::SimpleChargingDock` with
-# `use_external_detection_pose: false`. The docking_server itself docks against
-# a FIXED pose; the AprilTag work happens before it is called.
+# Plugin: `opennav_docking::SimpleChargingDock` with
+# `use_external_detection_pose: false`. docking_server docks against a fixed
+# pose; the AprilTag work happens before it is called.
 #
-# `/dock_robot` is answered by perception/tag_dock_server.py, not by this
-# server: docking.launch.py remaps this server's own docking action to
-# `/docking_server/dock_robot`. tag_dock_server drives (Nav2) to the requested
-# dock's pre-dock pose, in the middle of the acceptable pre-dock box (0.75 m
-# from the dock's wall); checks the dock bay is free there (in the local
-# costmap, so by both lidar and camera), waiting and
-# checking again for as long as it is not; measures that dock's tag with the
-# AprilTag detector (switched on by perception's image_gate only for that),
-# writes the measured dock pose back into docks.yaml and docking.yaml, and then
-# calls THIS server with that MEASURED pose (use_dock_id: false,
-# navigate_to_staging_pose: false). This server, i.e. Nav2's docking
-# controller, drives the whole approach, at the speed limits in the
-# `controller:` block below. There is no separate alignment manoeuvre.
-# `perception/tag_docking.py` documents the process, and the
-# `tag_dock_server:` block at the end of this file holds its parameters.
+# `/dock_robot` is answered by perception/tag_dock_server.py: docking.launch.py
+# remaps this server's own action to `/docking_server/dock_robot`.
+# tag_dock_server drives Nav2 to the requested dock's pre-dock pose (0.75 m from
+# the wall, the middle of the acceptable box), checks the bay is free in the
+# local costmap (lidar and camera), waiting for as long as it is not, measures
+# the tag (the detector is switched on by image_gate only for that), writes the
+# measured pose back into docks.yaml and docking.yaml, and calls this server
+# with it (use_dock_id: false, navigate_to_staging_pose: false). Nav2's docking
+# controller drives the whole approach at the limits in `controller:` below.
+# perception/tag_docking.py documents the process and the `tag_dock_server:`
+# block at the end holds its parameters.
 #
-# dock_backwards: true. The robot BACKS IN: it reverses into the dock, so that
-# when it undocks it drives out nose-first and its camera, which sees what the
-# lidar's plane passes over, faces the room (a robot queueing for the dock is
-# low enough to be seen only by the camera). Nav2 does all of it; there is no
-# hand-written manoeuvre:
-#   - tag_dock_server measures the tag with the robot facing the dock, in the
-#     pre-dock box, then has Nav2 (NavigateToPose) turn the robot onto the
-#     STAGING pose below: the pre-dock position, facing away from the dock.
-#   - docking_server then reverses it in (dock_backwards: true). Its controller
-#     flips the target pose by pi itself (upstream docking_server.cpp: "if
-#     (dock_backwards_) target orientation = yaw + M_PI"), so `pose.theta` below
-#     keeps the SAME meaning as for nose-first docking: the direction of travel
-#     into the dock, i.e. into the wall. The robot ends facing the room.
-#   - undocking passes `!dock_backwards_` upstream: it drives FORWARD out.
-# The pose is where base_footprint ends up either way, and the wall is
-# `chassis standoff` further on. That standoff is the same 0.126 m reversing
-# in as nose-first: the first thing to touch the wall is a wheel, not the body
-# (front wheel tangent 0.08596 + 0.04 = 0.12596 m, rear 0.08504 + 0.04 =
-# 0.12504 m, against body ends of 0.1231 m and 0.1221 m, from model.sdf and
-# base_link.stl). CAD geometry; UNVERIFIED on the real robot.
-# NOTE: upstream checks only the POSITION against dock_prestaging_tolerance when
-# deciding whether to navigate to the staging pose itself, so a robot already
-# at the staging position, facing the dock, would not be turned. tag_dock_server
-# therefore turns it itself and sends navigate_to_staging_pose: false.
+# dock_backwards: true. The robot reverses in so that it leaves nose-first and
+# its camera, which sees what the lidar plane passes over, faces the room (a
+# robot queueing for the dock is low enough to be seen only by the camera). Nav2
+# does all of it:
+#   - tag_dock_server measures the tag facing the dock in the pre-dock box, then
+#     has Nav2 (NavigateToPose) turn the robot onto the staging pose below: the
+#     pre-dock position, facing away.
+#   - docking_server reverses it in. Its controller flips the target by pi
+#     itself (docking_server.cpp: "if (dock_backwards_) target orientation =
+#     yaw + M_PI"), so `pose.theta` keeps its nose-first meaning: the direction
+#     of travel into the dock, into the wall. The robot ends facing the room.
+#   - undocking passes `!dock_backwards_` upstream, so it drives forward out.
+# The pose is where base_footprint ends up either way, and the wall is the
+# chassis standoff further on. The standoff is 0.126 m reversing in as for
+# nose-first: a wheel touches the wall first (front wheel tangent 0.08596 + 0.04
+# = 0.12596 m, rear 0.08504 + 0.04 = 0.12504 m, against body ends of 0.1231 m
+# and 0.1221 m, from model.sdf and base_link.stl). CAD geometry, unverified on
+# the real robot.
+# Upstream checks only POSITION against dock_prestaging_tolerance when deciding
+# whether to navigate to staging itself, so a robot already at the staging
+# position facing the dock would not be turned. tag_dock_server therefore turns
+# it and sends navigate_to_staging_pose: false.
 #
-# History: an earlier config used `dock_backwards: true` with `pose.theta`
-# copied UNFLIPPED from docks.yaml (the tag's outward normal, i.e. pointing
-# AWAY from the wall) and a `staging_yaw_offset` chosen to patch the mismatch.
-# The controller's target was then inconsistent with the staging pose and the
-# robot spun in place at `v_angular_max` until `dock_approach_timeout`. The
-# fix is the convention above: theta into the wall, staging_yaw_offset pi.
+# History: an earlier config used `dock_backwards: true` with `pose.theta` copied
+# unflipped from docks.yaml (pointing away from the wall) and a
+# `staging_yaw_offset` patching the mismatch. The target disagreed with the
+# staging pose and the robot spun at `v_angular_max` until
+# `dock_approach_timeout`. The fix is the convention above: theta into the wall,
+# staging_yaw_offset pi.
 docking_server:
     ros__parameters:
         controller_frequency: 50.0
@@ -92,252 +76,191 @@ docking_server:
         undock_linear_tolerance: 0.05
         undock_angular_tolerance: 0.05
         max_retries: 3
-        base_frame: "base_footprint"   # NOT base_link -- see repo-wide lesson
+        base_frame: "base_footprint"   # Not base_link (repo-wide convention).
         fixed_frame: "odom"
-        dock_backwards: true           # reverses in; drives out nose-first (see header comment)
+        dock_backwards: true           # Reverses in, drives out nose-first (see header).
         # Only reached through tag_dock_server, which turns the robot onto the
-        # staging pose itself and sends navigate_to_staging_pose: false. The
-        # check compares POSITION only, so kept small: at 0.5 a direct call from
-        # a neighbouring dock's pre-dock pose (0.3 m away) skipped staging and
-        # drove in diagonally.
+        # staging pose itself. The check compares position only, so it is small:
+        # at 0.5 a direct call from a neighbouring dock's pre-dock pose (0.3 m
+        # away) skipped staging and drove in diagonally.
         dock_prestaging_tolerance: 0.05
 
         dock_plugins: ["arena_dock"]
         arena_dock:
             plugin: "opennav_docking::SimpleChargingDock"
-            use_battery_status: false       # no battery topic
-            use_external_detection_pose: false   # pose is measured by tag_dock_server beforehand -- see header comment
+            use_battery_status: false       # No battery topic.
+            use_external_detection_pose: false   # tag_dock_server measures the pose beforehand.
+            # Stall detection is off. stall_joint_names has no default, and an
+            # unset declared parameter makes bulk reads (foxglove_bridge,
+            # `ros2 param dump`) log "parameter 'arena_dock.stall_joint_names' is
+            # not initialized". It is read only when stall detection is on.
+            use_stall_detection: false
+            stall_joint_names: ["unused"]
             docking_threshold: 0.05
-            # staging = dock_pose + staging_x_offset * (cos th, sin th);
-            # staging.theta = dock_pose.theta + staging_yaw_offset. Negative
-            # offset places staging BEHIND dock_pose along its own heading
-            # (th), matching opennav_docking's own documented convention
-            # ("staging pose offset forward (negative) of dock pose"). The yaw
-            # offset is pi because the robot reverses in: at staging it faces
-            # AWAY from the dock, rear to it. (Nose-first docking uses 0.)
-            # = tag_dock_server's predock_standoff_m: 0.75 m from the wall
-            # less the 0.126 m chassis standoff.
+            # staging = dock_pose + staging_x_offset * (cos th, sin th), and
+            # staging.theta = dock_pose.theta + staging_yaw_offset. A negative
+            # offset puts staging behind dock_pose along its heading, as
+            # opennav_docking documents. The yaw offset is pi because the robot
+            # reverses in, facing away from the dock (nose-first uses 0).
+            # -0.624 is tag_dock_server's predock_standoff_m: 0.75 m from the
+            # wall less the 0.126 m chassis standoff.
             staging_x_offset: -0.624
             staging_yaw_offset: 3.141592653589793
 
-        # The 8 arena docks. `pose` is [x, y, theta] in `frame`. theta is
-        # mission/config/docks.yaml's dock_pose.theta + pi, normalized to
-        # (-pi, pi] -- see header comment for why. `id` carries the AprilTag
-        # id (unused by SimpleChargingDock in fixed-pose mode; kept for
-        # documentation / future vision mode).
+        # The 8 arena docks. `pose` is [x, y, theta] in `frame`, with theta =
+        # docks.yaml's dock_pose.theta + pi, normalized to (-pi, pi] (see the
+        # header). `id` is the AprilTag id, unused by SimpleChargingDock in
+        # fixed-pose mode and kept for documentation.
         #
-        # ===== CHASSIS STANDOFF (0.126 m), MEASURED 2026-10-02 =====
-        #
-        # x/y are NOT a verbatim copy of docks.yaml's dock_pose any more.
-        # Each is that dock's pose moved 0.126 m OUTWARD, i.e. back along
-        # its own approach heading:
+        # Chassis standoff (0.126 m), measured 2026-10-02. x/y are not a verbatim
+        # copy of docks.yaml's dock_pose: each is moved 0.126 m outward, back
+        # along the approach heading:
         #
         #     pose.x = docks.yaml dock_pose.x - 0.126 * cos(theta)
         #     pose.y = docks.yaml dock_pose.y - 0.126 * sin(theta)
         #
-        # (theta being this file's theta, the robot's nose-forward heading
-        # INTO the wall -- so subtracting along it walks back out into the
-        # room). Uniform across all 8; docks.yaml stays the source of truth
-        # for where the docks physically ARE.
+        # (theta being this file's, into the wall, so subtracting walks back out
+        # into the room). It is uniform across all 8 docks, and docks.yaml stays
+        # the source of truth for where they are.
         #
-        # Why. docks.yaml's dock_pose is the arena.sdf dock model's own
-        # origin, which sits ON THE INNER FACE OF THE DOCK'S BACK WALL
-        # (arena.sdf: "Frame: origin at floor level on the centre of the
-        # back wall's inner face"). It is a wall, not a robot pose. The
-        # robot's chassis nose is 0.1231 m ahead of base_footprint
-        # (base_link.stl bbox x-max 0.12260 + base_link's own +0.00046 x
-        # offset, at z ~0.05 m, i.e. squarely inside the wall's 0-0.30 m
-        # height band), and the first contact is a wheel, so base_footprint
-        # physically cannot get closer than ~0.123 m to that wall.
+        # docks.yaml's dock_pose is the arena.sdf dock model's origin, on the
+        # inner face of the back wall ("origin at floor level on the centre of
+        # the back wall's inner face"). The chassis nose is 0.1231 m ahead of
+        # base_footprint (base_link.stl bbox x-max 0.12260 + base_link's +0.00046
+        # x offset, at z ~0.05 m, inside the wall's 0-0.30 m height band) and a
+        # wheel touches first, so base_footprint cannot get within ~0.123 m of
+        # the wall. Measured live at dock A, docked: the chassis stands 0.1260 m
+        # off the wall (dock A's old pose 2.992 minus the true 2.86604) and the
+        # nose lands 3 mm short of it.
         #
-        # Measured live at dock A, docked: the chassis stands 0.1260 m off the
-        # wall (dock A's old configured pose 2.992 minus the true 2.86604), and
-        # the nose tip lands 3 mm short of it. So the chassis stops against
-        # the wall exactly where the geometry says it must.
-        #
-        # What actually satisfied `docking_threshold: 0.05` before this
-        # change was a 0.092 m LOCALIZATION ERROR: the estimate (2.958) sat
-        # 9.2 cm ahead of the truth (2.866), leaving an apparent residual of
-        # 2.992 - 2.958 = 0.034 m < 0.05. That error is wheel odometry
-        # accumulated while the robot pushed its stalled, slipping drivetrain
-        # into the wall (it keeps commanding v_linear_min until it believes
-        # it has arrived). Docking "worked" on the strength of its own
-        # odometry drift -- stalling the motors against a wall for several
-        # seconds every single dock, with the estimate left ~9 cm wrong
-        # afterwards. Hence the offset: the target is now a pose the robot
-        # can actually reach, so it stops just short of contact instead of
-        # pushing.
+        # What satisfied `docking_threshold: 0.05` before was a 0.092 m
+        # localization error: the estimate (2.958) sat 9.2 cm ahead of the truth
+        # (2.866), leaving an apparent residual of 0.034 m. That error was wheel
+        # odometry accumulated while the robot pushed its stalled, slipping
+        # drivetrain into the wall (it keeps commanding v_linear_min until it
+        # believes it has arrived). Docking worked on its own drift, stalling the
+        # motors against the wall every time and leaving the estimate ~9 cm
+        # wrong. The target is now a pose the robot can reach, so it stops just
+        # short of contact.
         docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
-        A: {type: "arena_dock", frame: "map", pose: [1.162, 0.601, -0.02847], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [1.130, -0.148, -0.05873], id: "1"}
-        C: {type: "arena_dock", frame: "map", pose: [1.333, -0.873, -0.11803], id: "2"}
-        D: {type: "arena_dock", frame: "map", pose: [0.697, -1.239, -0.79288], id: "3"}
-        E: {type: "arena_dock", frame: "map", pose: [-0.496, -0.027, -2.96158], id: "4"}
-        F: {type: "arena_dock", frame: "map", pose: [-0.518, 0.334, 3.06621], id: "5"}
-        G: {type: "arena_dock", frame: "map", pose: [0.001, 1.385, 1.64351], id: "6"}
-        H: {type: "arena_dock", frame: "map", pose: [0.761, 0.838, 0.92379], id: "7"}
-        # Hand spot-check of the formula on a second, differently-oriented
-        # dock (G, on the -Y wall, theta -pi/2, approach heading -y):
-        #   pose.y = -2.992 - 0.126 * sin(-pi/2) = -2.992 + 0.126 = -2.866,
-        # and the nose then lands at -2.866 - 0.1231 = -2.9891, the same
-        # 3 mm short of dock G's own wall. Consistent.
+        A: {type: "arena_dock", frame: "map", pose: [3.035, 0.891, -0.0404], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [3.087, -0.492, 0.06415], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [2.030, -0.642, -1.52166], id: "2"}
+        D: {type: "arena_dock", frame: "map", pose: [0.126, -0.992, -1.53562], id: "3"}
+        E: {type: "arena_dock", frame: "map", pose: [-1.165, -0.874, -3.10042], id: "4"}
+        F: {type: "arena_dock", frame: "map", pose: [1.902, 0.429, 0.15974], id: "5"}
+        G: {type: "arena_dock", frame: "map", pose: [1.059, -0.743, -1.56092], id: "6"}
+        H: {type: "arena_dock", frame: "map", pose: [-1.153, -0.124, -3.11265], id: "7"}
+        # Checked on a second dock (G, -Y wall, theta -pi/2): pose.y = -2.992 -
+        # 0.126 * sin(-pi/2) = -2.866, so the nose lands at -2.9891, again 3 mm
+        # short of the wall.
         #
-        # MARGIN WARNING, for whoever tunes this next: the 0.126 m offset was
-        # derived from the measured CONTACT position (2.992 - 2.86604), so
-        # the new target IS the wall-contact pose, not a standoff from it --
-        # the nose lands 3 mm short of the wall if the robot reaches the
-        # target exactly. There is therefore effectively ZERO designed
-        # clearance margin, and the live residuals after the change show it:
-        # 0.026 m at dock G, but 0.0478 m at dock C against a
-        # `docking_threshold` of 0.05 -- 96% of the budget on one of two
-        # samples. `max_retries: 3` absorbed it and 3/3 docks succeeded, so
-        # this is tuned, not broken.
+        # Margin warning: the 0.126 m offset comes from the measured contact
+        # position, so the target is the wall-contact pose, not a standoff from
+        # it, and the designed clearance is effectively zero. Live residuals were
+        # 0.026 m at dock G but 0.0478 m at dock C against a `docking_threshold`
+        # of 0.05. `max_retries: 3` absorbed it and 3/3 docks succeeded. If
+        # docking sometimes fails to declare success while parking fine, the
+        # offset removed the wall-pushing stall but not the contact, and the
+        # margin is thin by construction. The cheap levers are a larger offset
+        # (0.15-0.17) or a larger `docking_threshold` (0.07); neither is applied
+        # because the current values are the ones measured live.
         #
-        # So if docking starts occasionally failing to declare success while
-        # physically parking fine, do NOT go looking for a broken mechanism
-        # first: the honest reading is that this offset removed the
-        # wall-pushing stall, not the contact, and the margin is thin by
-        # construction. The two cheap levers are a slightly larger offset
-        # (0.15-0.17, still inside the threshold) or a slightly larger
-        # `docking_threshold` (0.07). Both are deliberately NOT applied here,
-        # because the current values are the ones actually measured live.
-        #
-        # !!! UNVERIFIED ON REAL HARDWARE !!! If docking fails to reach
-        # `docking_threshold` on the physical robot, CHECK FOR CHASSIS-TO-WALL
-        # CONTACT BEFORE THE THRESHOLD IS REACHED first: wheel slip against
-        # the wall drifts odometry (~0.09 m was seen), and a real dock's
-        # physical geometry may differ from the dock model by more than the
-        # 0.05 m threshold.
+        # Unverified on real hardware: if docking fails to reach
+        # `docking_threshold`, first check for chassis-to-wall contact before the
+        # threshold is reached. Wall slip drifts odometry (~0.09 m was seen) and
+        # a real dock's geometry may differ from the model by more than 0.05 m.
 
-        # Approach controller. Mostly opennav_docking's own defaults; the
-        # collision block is spelled out explicitly because it is the only
-        # obstacle protection the robot has during a docking/undocking leg.
+        # Approach controller: mostly opennav_docking's defaults. The collision
+        # block is spelled out because it is the only obstacle protection during
+        # a docking or undocking leg.
         #
-        # COLLISION DETECTION (enabled in the final-review fix wave). This
-        # was `use_collision_detection: false` with a "no Nav2 costmaps in
-        # this stack yet, revisit once they land" note -- they landed in
-        # Task 6 and nobody revisited. It is on now, checking the projected
-        # approach trajectory against Nav2's local costmap.
-        #
-        # This matters more here than anywhere else in the stack:
-        # Its velocity goes through the velocity smoother and
-        # nav2_collision_monitor like every other command (see
+        # Collision detection is on, checking the projected approach trajectory
+        # against Nav2's local costmap. (It was off pending Nav2 costmaps, which
+        # landed in Task 6 and were never revisited.) Velocity goes through the
+        # smoother and nav2_collision_monitor like any command (see
         # perception/launch/docking.launch.py), so this is a second,
-        # trajectory-ahead layer on top of the monitor's stop zones.
+        # trajectory-ahead layer on top of the monitor's stop zones. The topics
+        # are the defaults, repeated for visibility; navigation.launch.py's
+        # local_costmap publishes both in the global namespace.
         #
-        # The topics are the defaults, repeated for visibility: both are
-        # published by navigation.launch.py's local_costmap in the global
-        # namespace (`local_costmap:` in navigation/config/nav2_params.yaml),
-        # which is where docking_server resolves these relative names too.
+        # dock_collision_threshold keeps the dock itself from aborting its own
+        # approach: trajectory points within this distance of the target are not
+        # checked, because the dock's back wall and wings are lethal cells in the
+        # local costmap by construction.
         #
-        # dock_collision_threshold is the knob that keeps the dock itself
-        # from aborting its own approach: trajectory points within this
-        # distance of the dock pose are not collision-checked, which is
-        # necessary because the dock's back wall and wings ARE lethal cells
-        # in the local costmap by construction.
+        # Measured live at dock A, 2026-10-02. The stock 0.3 aborted every
+        # attempt through all 3 max_retries ("Collision detected at pose: (2.66,
+        # -1.55, 0.00) in frame odom", 0.30 m from dock A's pose in that frame,
+        # (2.962, -1.546)): the 0.18 m footprint radius plus the local costmap's
+        # 0.3 m inflation around the back wall reach that far, so the approach
+        # flagged the dock as the obstacle.
         #
-        # MEASURED, not guessed (2026-10-02, live at dock A). The stock Nav2
-        # default (0.3) aborted every docking attempt, through all 3
-        # max_retries: "Collision detected at pose: (2.66, -1.55, 0.00) in
-        # frame odom", i.e. 0.30 m from dock A's pose expressed in the same
-        # frame (2.962, -1.546; map->odom was (0.030, 0.046) at the time).
-        # The robot's 0.18 m footprint radius plus the local costmap's 0.3 m
-        # inflation around the dock's own back wall reach that far out, so
-        # the approach was flagging the dock itself as the obstacle.
+        # The distance is measured from the control target, not the dock pose.
+        # docking_server projects the target 0.25 m past the dock pose
+        # (`backward_projection = 0.25` in approachDock, to keep the control law's
+        # atan2 from exploding near the goal), and
+        # Controller::isTrajectoryCollisionFree skips a point only when it is
+        # within the threshold of that target. So the usable clearance in front
+        # of the dock pose is (threshold - 0.25); 0.5 also aborted at the same
+        # pose because 0.30 + 0.25 = 0.55 > 0.5. 0.65 means "stop checking within
+        # 0.40 m of the dock pose": 0.10 m of margin over the measured worst
+        # case, for localization jitter and the wings (nearest corner ~0.37 m
+        # from the dock pose, at a different bearing).
         #
-        # Careful with what this distance is measured FROM. It is NOT the
-        # dock pose: opennav_docking's docking_server deliberately projects
-        # its control target 0.25 m PAST the dock pose before handing it to
-        # the controller (`const double backward_projection = 0.25;` in
-        # approachDock, to keep the control law's atan2 from exploding near
-        # the goal), and Controller::isTrajectoryCollisionFree skips a
-        # trajectory point only when its distance to THAT projected target
-        # is below this threshold. So the usable clearance in front of the
-        # dock pose is (dock_collision_threshold - 0.25). That is why 0.5
-        # also aborted at the exact same pose: 0.30 + 0.25 = 0.55 > 0.5.
+        # Limit for the approach: with staging 0.6 m out, the checked part is
+        # the outer ~0.40-0.60 m band of the bay. An obstacle inside the last
+        # 0.40 m is indistinguishable from the dock, which is the limit of
+        # fixed-pose docking with this standoff. A larger standoff or
+        # vision-corrected docking would shrink it.
         #
-        # 0.65 therefore means "stop checking within 0.40 m of the dock
-        # pose" -- 0.10 m of margin over the measured 0.30 m worst case, to
-        # absorb localization jitter and the dock wings (nearest wing corner
-        # is ~0.37 m from the dock pose, at a different bearing).
-        #
-        # What this buys and what it does not, for the DOCK APPROACH: with
-        # staging 0.6 m out (staging_x_offset), the checked part of an
-        # approach is the outer ~0.40-0.60 m band of the bay. An obstacle
-        # INSIDE the last 0.40 m of a dock bay is not detectable this way --
-        # geometrically, it is indistinguishable from the dock. That is the
-        # honest limit of fixed-pose docking with a 0.6 m standoff; a larger
-        # standoff or vision-corrected docking is what would shrink it.
-        #
-        # KNOWN, DELIBERATE SAFETY EXCEPTION: AT 0.65 THE UNDOCK REVERSE IS
-        # NOT COLLISION-CHECKED AT ALL. Not "less checked" -- the check never
-        # fires once during an undock. An earlier version of this comment
-        # claimed the opposite ("plus the undock reverse once the robot is
-        # more than 0.40 m clear"); that was wrong in both its numbers and
-        # its conclusion, and this is the correction.
-        #
-        # Verified against opennav_docking 1.3.13's own source (the version
-        # installed here; only headers ship in /opt/ros/jazzy, so
-        # Controller::isTrajectoryCollisionFree and DockingServer::undockRobot
-        # were read from upstream at that exact tag). The carve-out distance
-        # is measured by a DIFFERENT rule depending on direction:
+        # Known, deliberate safety exception: at 0.65 the undock reverse is not
+        # collision-checked at all. An earlier version of this comment claimed
+        # the reverse was checked once the robot was 0.40 m clear; that was wrong.
+        # Verified against opennav_docking 1.3.13 source (only headers ship in
+        # /opt/ros/jazzy, so Controller::isTrajectoryCollisionFree and
+        # DockingServer::undockRobot were read at that tag). The carve-out
+        # distance uses a different rule per direction:
         #
         #   is_docking == true :  euclidean_distance(target_pose, next_pose)
-        #                         -> distance to the dock target (itself
-        #                            projected 0.25 m past the dock pose)
+        #                         -> distance to the target (0.25 m past the dock)
         #   is_docking == false:  std::hypot(next_pose.x, next_pose.y)
-        #                         -> each projected point's distance from the
-        #                            robot's CURRENT pose (next_pose is
-        #                            integrated in base_frame from the
-        #                            origin), recomputed every control cycle
+        #                         -> each point's distance from the robot's
+        #                            current pose (integrated from the origin
+        #                            in base_frame), every control cycle
         #
-        # and the 0.25 m `backward_projection` does NOT apply to undocking --
-        # it is applied only inside approachDock. So during an undock the
-        # rolled-out trajectory converges on the staging pose 0.6 m away,
-        # meaning no projected point is ever more than ~0.6 m from the robot,
-        # meaning `dock_collision_distance > dock_collision_threshold` (0.65)
-        # is never true, meaning isCollisionFree is never called. At the
-        # stock 0.3 the outer part of the reverse WAS checked, so this is a
-        # real protection regression introduced by the tuning above, not a
-        # pre-existing gap.
+        # and `backward_projection` applies only inside approachDock. During an
+        # undock the rollout converges on the staging pose 0.6 m away, so no
+        # point is ever more than ~0.6 m from the robot, the distance never
+        # exceeds 0.65 and the collision check never runs. At the stock 0.3 the
+        # outer part of the reverse was checked, so this is a regression from the
+        # tuning above.
         #
-        # Why it is not split instead: there is no undock-specific
-        # parameter to split. opennav_docking's Controller holds a single
-        # `dock_collision_threshold_` (controller.hpp:134) and passes it
-        # through the same comparison for both directions -- the only
-        # difference is the `is_docking` flag selecting the distance rule
-        # above.
+        # It cannot be split: opennav_docking's Controller holds one
+        # `dock_collision_threshold_` (controller.hpp:134) used for both
+        # directions. The approach needs >= 0.55 (0.30 worst case + 0.25
+        # projection), and 0.65 adds 0.10 m margin; 0.5 aborted every attempt. The
+        # undock needs < 0.6 to check anything and much less to check a useful
+        # part of a 0.6 m move. 0.55-0.59 would leave the approach 0.00-0.04 m
+        # over its worst case (aborting through all retries) while checking only
+        # the last few cm of the undock. So it is a genuine either/or and the
+        # approach, which failed live repeatedly and is the longer leg, wins.
         #
-        # Why no single value protects both: the dock approach needs
-        # >= 0.55 (the measured 0.30 m worst-case flagged distance plus the
-        # 0.25 m backward_projection), and 0.65 is that plus 0.10 m of
-        # margin -- 0.5 demonstrably aborted every attempt. The undock needs
-        # < 0.6 to check anything at all, and materially less than that to
-        # check a useful portion of a 0.6 m manoeuvre. The two windows do not
-        # overlap with any margin: 0.55-0.59 would leave the approach with
-        # 0.00-0.04 m over its measured worst case (i.e. back to aborting
-        # through all max_retries) while still only checking the last few
-        # centimetres of the undock rollout. So this is a genuine either/or,
-        # and the approach -- which is the leg that failed live, repeatedly,
-        # and the longer of the two -- wins.
-        #
-        # Why that is acceptable here, explicitly: the undock reverse is
-        # 0.6 m straight back along the corridor the robot itself drove in
-        # through seconds earlier, and the arena design keeps dock approach
-        # corridors clear of props. It is NOT acceptable as a general
-        # property of the stack. If undock-time obstacles ever become a real
-        # risk (a moving robot behind us, a prop placed during the dwell),
-        # the fix is NOT this threshold -- lowering it re-breaks docking.
-        # The fix is to give the undock leg protection that does not share
+        # Acceptable here because the undock reverse is 0.6 m straight back along
+        # the corridor the robot drove in through seconds earlier, and the arena
+        # keeps dock corridors clear of props. It is not acceptable as a general
+        # property. If undock-time obstacles become a real risk (a moving robot
+        # behind us, a prop placed during the dwell), do not lower this threshold,
+        # which re-breaks docking. Give the undock protection that does not share
         # this knob: a dock-aware polygon in nav2_collision_monitor, or a
-        # rear-facing stop polygon active only during undocking.
+        # rear-facing stop polygon active only while undocking.
         controller:
             use_collision_detection: true
             costmap_topic: "local_costmap/costmap_raw"
             footprint_topic: "local_costmap/published_footprint"
-            # How long a TF lookup may wait for odom->base_footprint. The EKF's
-            # TF runs ~20 Hz and measured up to 0.29 s late on the Jetson; at
-            # 0.1 one late transform aborted an undock ("Failed to get control").
+            # How long a TF lookup may wait for odom->base_footprint. The EKF's TF
+            # runs ~20 Hz and was up to 0.29 s late on the Jetson; at 0.1 one late
+            # transform aborted an undock ("Failed to get control").
             transform_tolerance: 0.5
             projection_time: 5.0
             simulation_step: 0.1
@@ -346,84 +269,80 @@ docking_server:
             k_delta: 2.0
             beta: 0.4
             lambda: 2.0
-            # The approach is slow on purpose and the limits are set HERE, in
-            # Nav2's own docking controller, so it plans the whole approach
-            # (including the slowdown over the last slowdown_radius) with them
-            # instead of being slowed from outside. Was 0.1 / 0.15 m/s. The
-            # floor is the slowest the skid-steer reliably keeps moving at;
-            # lowering it much further risks stalling on a coarse floor.
+            # The approach is slow on purpose, with the limits set here in Nav2's
+            # docking controller so it plans the whole approach (including the
+            # slowdown over the last slowdown_radius) with them instead of being
+            # slowed from outside. Was 0.1 / 0.15 m/s. The floor is the slowest
+            # the skid-steer reliably keeps moving; lower risks stalling on a
+            # coarse floor.
             v_linear_min: 0.05
             v_linear_max: 0.08
             v_angular_max: 0.75
             slowdown_radius: 0.25
 
-# tag_dock_server (answers /dock_robot). See perception/tag_docking.py
-# for the process these tune.
+# tag_dock_server (answers /dock_robot); see perception/tag_docking.py for the
+# process these tune.
 tag_dock_server:
     ros__parameters:
-        # Pre-dock pose: this far straight back from the dock pose, so that it
-        # is 0.75 m from the dock's wall: the middle of the box below
-        # ((0.5 + 1.0) / 2). 0.75 - the 0.126 m chassis standoff. Matches
-        # arena_dock.staging_x_offset above and docks.yaml's staging poses.
+        # Pre-dock pose: this far straight back from the dock pose, putting it
+        # 0.75 m from the wall, the middle of the box below ((0.5 + 1.0) / 2):
+        # 0.75 less the 0.126 m chassis standoff. Matches
+        # arena_dock.staging_x_offset and docks.yaml's staging poses.
         predock_standoff_m: 0.624
-        # Measuring a tag: only within this range (a 0.10 m tag is ~45 px wide
-        # at 2 m), from detections and TF younger than max_detection_age_sec,
-        # trusted once samples_required consecutive measurements within
-        # sample_window_sec agree to sample_spread_m / sample_spread_rad.
+        # Measure a tag only within this range (a 0.10 m tag is ~45 px wide at
+        # 2 m), from detections and TF younger than max_detection_age_sec, and
+        # trust it once samples_required measurements within sample_window_sec
+        # agree to sample_spread_m / sample_spread_rad.
         max_tag_range_m: 2.0
-        # Measured on the robot: a detection is already 0.6-1.2 s old when it is
-        # published (camera ~3 Hz, rectify and the detector on a busy CPU), so
-        # 0.5 rejected every one of them silently ("tag not seen"). Fine: the
-        # robot stands still while measuring.
+        # Measured on the robot: a detection is already 0.6-1.2 s old when
+        # published (camera ~3 Hz, rectify and detector on a busy CPU), so 0.5
+        # silently rejected every one ("tag not seen"). Fine, as the robot is
+        # still while measuring.
         max_detection_age_sec: 2.5
         samples_required: 3
         sample_spread_m: 0.04
         sample_spread_rad: 0.06
         sample_window_sec: 2.0
-        # At the pre-dock pose, how long to wait for a fresh measurement before
-        # using the one from the drive in (or the stored pose).
-        # Includes the detector's start-up: opening the image gate takes 1-3 s
-        # to deliver a first frame (rectify_node subscribes lazily) and the
-        # camera delivers only ~3 Hz, so 3 agreeing samples need ~1-2 s more.
-        # At 3.0 the tag was never "seen" from 1.3 m away.
+        # How long to wait at the pre-dock pose for a fresh measurement before
+        # falling back to the earlier one (or the stored pose). It includes the
+        # detector's start-up: opening the gate takes 1-3 s to deliver a first
+        # frame (rectify_node subscribes lazily) and the camera gives ~3 Hz, so 3
+        # agreeing samples need ~1-2 s more. At 3.0 the tag was never seen from
+        # 1.3 m.
         perception_timeout_sec: 8.0
-        # The acceptable pre-dock BOX. Nav2 takes the robot to the pre-dock pose
-        # (in the middle of it); its own goal tolerance (0.15 m / 0.2 rad) is
-        # tighter than the box, so a goal that succeeds is inside it. The box,
-        # in the approach line's own axes: anywhere between these distances
-        # from the tag's wall (orthogonal), within predock_lateral_tolerance_m
-        # either side of the line through the tag (parallel), and within
-        # predock_heading_tolerance_rad (20 deg) of the approach heading. The
-        # tag is measured, and the dock pose saved, only when the robot is in
-        # it. Outside it after a navigation goal, Nav2 is sent there again.
+        # The acceptable pre-dock box. Nav2 takes the robot to the pre-dock pose
+        # in the middle of it, and its goal tolerance (0.15 m / 0.2 rad) is
+        # tighter than the box, so a successful goal is inside. In the approach
+        # line's axes the box is: between these distances from the tag's wall,
+        # within predock_lateral_tolerance_m either side of the line through the
+        # tag, and within predock_heading_tolerance_rad (20 deg) of the approach
+        # heading. The tag is measured and the pose saved only inside it; if a
+        # navigation goal ends outside, Nav2 is sent again.
         predock_min_tag_distance_m: 0.5
         predock_max_tag_distance_m: 1.0
-        predock_lateral_tolerance_m: 0.3
+        predock_lateral_tolerance_m: 0.15
         predock_heading_tolerance_rad: 0.349
-        # How many times to send Nav2 to the pre-dock pose before giving up
-        # when it ends outside the box.
+        # Navigation attempts to reach the box before giving up.
         max_predock_attempts: 4
 
-        # Another robot or an obstacle in the dock. At the pre-dock pose the
-        # LOCAL COSTMAP is read, which the lidar and the camera both mark (so a
-        # low obstacle under the lidar's plane counts too): the cells it marks
-        # as obstacles (value >= bay_occupied_value; 100 is Nav2's lethal cell,
-        # 99 and below is inflation around one) inside the bay -- bay_min_out_m to
-        # bay_max_out_m out from the dock's wall, bay_half_width_m either side of
-        # the approach line -- are counted in each costmap update received during
-        # bay_window_sec (the costmap publishes at 2 Hz). The bay is occupied
-        # when at least half of the updates have bay_min_cells or more such
-        # cells (0.05 m each). Occupied: wait dock_occupied_wait_sec and check
-        # again, WITHOUT LIMIT (cancel the goal to stop). No costmap at all is
-        # treated as occupied (not known to be free).
-        # The bay edges keep the dock's own wall (bay_min_out_m; the wall is
-        # marked as an obstacle, and its returns sit within ~0.1 m of it) and its
-        # flared wings (bay_half_width_m; the wall is 0.4 m wide) out of the
-        # count. Sized from the dock model: UNVERIFIED on the real
-        # docks; check the empty bay reads free from a pre-dock pose, and that a
-        # robot and a low object in it read occupied, before relying on this.
-        # The camera cannot see the nearest ~0.2-0.3 m in front of it (stereo
-        # minimum range); the lidar covers that part for objects in its plane.
+        # Another robot or an obstacle in the dock. At the pre-dock pose the local
+        # costmap is read, which lidar and camera both mark (so a low obstacle
+        # under the lidar plane counts). Cells with value >= bay_occupied_value
+        # (100 is Nav2's lethal cell, 99 and below is inflation) inside the bay
+        # (bay_min_out_m to bay_max_out_m out from the wall, bay_half_width_m
+        # either side of the approach line) are counted in each costmap update
+        # received during bay_window_sec (the costmap publishes at 2 Hz). The bay
+        # is occupied when at least half the updates have bay_min_cells or more
+        # such cells (0.05 m each). Occupied means wait dock_occupied_wait_sec and
+        # check again without limit (cancel the goal to stop). No costmap counts
+        # as occupied.
+        # bay_min_out_m keeps the dock's own wall (marked as an obstacle, with
+        # returns within ~0.1 m of it) out of the count, and bay_half_width_m its
+        # flared wings (the wall is 0.4 m wide). Sized from the dock model and
+        # unverified on the real docks: check that an empty bay reads free from a
+        # pre-dock pose and that a robot and a low object read occupied before
+        # relying on it. The camera cannot see the nearest ~0.2-0.3 m (stereo
+        # minimum range); the lidar covers that for objects in its plane.
         bay_costmap_topic: "local_costmap/costmap"
         bay_occupied_value: 100
         dock_occupied_wait_sec: 10.0
@@ -433,16 +352,15 @@ tag_dock_server:
         bay_min_cells: 2
         bay_window_sec: 2.5
 
-        # Write the measured dock pose back into docks.yaml and docking.yaml (the
-        # workspace SOURCE copies, as capture_dock_pose does; it takes effect at
-        # the next colcon build). Off: measure and dock only.
+        # Write the measured pose back into docks.yaml and docking.yaml (the
+        # workspace source copies, as capture_dock_pose does; applies at the next
+        # colcon build). Off means measure and dock only.
         save_measured_pose: true
-        # FALLBACK when something stands on the pre-dock pose (more than
-        # bay_min_cells occupied local-costmap cells within
-        # predock_clear_radius_m of it, checked while the robot is outside the
-        # box, and again if Nav2 fails to reach it). The bay is checked as
-        # usual, then Nav2 alone drives straight to the dock pose (facing it,
-        # within Nav2's own goal tolerance). No docking_server, no tag
-        # measurement, no saved pose.
+        # Fallback when something stands on the pre-dock pose (more than
+        # bay_min_cells occupied local-costmap cells within predock_clear_radius_m
+        # of it, checked while outside the box and again if Nav2 fails to reach
+        # it). The bay is checked as usual, then Nav2 alone drives straight to the
+        # dock pose, facing it, within its goal tolerance. There is no
+        # docking_server, tag measurement or saved pose.
         predock_fallback: true
         predock_clear_radius_m: 0.30

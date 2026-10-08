@@ -1,8 +1,13 @@
 - Improve camera refresh rate/detection
-- predock/undock more in the middle of box
+- tighter box (c-space)
+- Make sure align when in predock and when docked
+- predock/undock more in the middle of box X
 - fallback when predock is occupied -- nav directly to dock
 - Ask einride about case when apriltag is removed/destroyed
 - Control safety when driving/distance to obstacle
 - Dynamically detect when a static obstacle have moved
 - Clean up code
 - Presentation
+
+
+- undock after nav2 docking, ok with aborted?

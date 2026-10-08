@@ -1,69 +1,47 @@
-# Nav2 parameters for Modysseus, adapted from nav2_bringup's own shipped
-# example (/opt/ros/jazzy/share/nav2_bringup/params/nav2_params.yaml) and the
-# collision_monitor package's own shipped example
-# (/opt/ros/jazzy/share/nav2_collision_monitor/params/collision_monitor_params.yaml).
+# Nav2 parameters for Modysseus, adapted from nav2_bringup's and
+# nav2_collision_monitor's shipped examples (/opt/ros/jazzy/share/...).
 #
-# Deliberately NOT included (trimmed from the stock example):
-#   - amcl: slam_toolbox (Task 3, localize.launch.py) already publishes
-#     map->odom from a saved pose graph. A second localizer would fight it
-#     for the same TF edge, exactly the two-publisher TF problem Task 1 hit
-#     and documented for odom->base_footprint.
-#   - map_server: slam_toolbox's localization node already publishes /map
-#     (transient-local), which the static_layer below subscribes to
-#     directly. A second map_server publishing the same topic would race it.
-#   - smoother_server, waypoint_follower, route_server, docking_server: not
-#     needed for a bare NavigateToPose (the default
-#     navigate_to_pose_w_replanning_and_recovery.xml BT references none of
-#     their actions/services) and out of this task's scope (docking already
-#     has its own server from Task 5). Left out of the lifecycle node set in
-#     navigation.launch.py too, rather than carried as dead config.
+# Trimmed from the stock example:
+#   - amcl: slam_toolbox (localize.launch.py) already publishes map->odom. A
+#     second localizer would fight it for the same TF edge.
+#   - map_server: slam_toolbox's localization node publishes /map
+#     (transient-local) and the static_layer subscribes to it. A second
+#     publisher would race it.
+#   - smoother_server, waypoint_follower, route_server, docking_server: a bare
+#     NavigateToPose does not use them, and docking has its own server. Also
+#     left out of the lifecycle node set in navigation.launch.py.
 #
-# Frames: base_footprint everywhere (never base_link) - the binding TF
-# architecture decision: the EKF owns odom->base_footprint, a static
-# transform owns base_footprint->base_link, and nothing else may publish
-# either edge.
+# Frames: base_footprint everywhere, never base_link. The EKF owns
+# odom->base_footprint, a static transform owns base_footprint->base_link, and
+# nothing else may publish either edge.
 #
 # Footprint: einride_mini_truck is a 6-wheel skid-steer, track 0.17452 m,
-# wheelbase 0.171 m (vendor docs / earlier task notes). Half-diagonal from
-# the base_footprint origin to a wheel-contact corner is
-# sqrt((0.171/2)^2 + (0.17452/2)^2) =~ 0.122 m; robot_radius (now 0.23, see costmaps) below
-# adds a conservative ~0.06 m margin for the chassis body/bumper overhang
-# the wheel-only geometry doesn't capture, without tuning tightly (out of
-# scope per the brief - this only needs to work reliably, not quickly).
-# A circular footprint (radius, not a polygon) is used throughout: a
-# skid-steer turns by sliding wheels sideways and is expected to rotate
-# in place during recovery behaviors, so a direction-agnostic footprint is
-# the conservative choice over a tight rectangle.
+# wheelbase 0.171 m. The half-diagonal to a wheel-contact corner is
+# sqrt((0.171/2)^2 + (0.17452/2)^2) =~ 0.122 m. The robot_radius below (0.23,
+# see the costmaps) adds margin for chassis overhang. A circle is used
+# throughout because a skid-steer rotates in place during recoveries, so a
+# direction-agnostic footprint is the conservative choice.
 #
 # Sensors:
-#   - lidar: /scan_filtered (sensor_msgs/LaserScan, LD19 2D lidar)
-#   - camera: /oak/points_filtered (sensor_msgs/PointCloud2), NOT the vendor's
-#     raw /oak/points: perception's oak_points_filter builds a small cloud
-#     from the OAK-D depth image instead (perception/launch/
-#     oak_points_filter.launch.py), because the 29.5 MB raw cloud starved
-#     the collision monitor's camera source of fresh data. The real camera
-#     does not see the robot, so nothing near the body is cropped out and
-#     obstacle_min_range below is 0.0.
+#   - lidar: /scan_filtered (LaserScan, LD19).
+#   - camera: /oak/points_filtered (PointCloud2), not the vendor's raw
+#     /oak/points. perception's oak_points_filter builds a small cloud from the
+#     OAK-D depth image (perception/launch/oak_points_filter.launch.py)
+#     because the 29.5 MB raw cloud starved the collision monitor's camera
+#     source. The camera does not see the robot, so nothing near the body is
+#     cropped and obstacle_min_range is 0.0.
 #
-#     min_obstacle_height/min_height below is a modest 0.05 m, not the 0.1 m
-#     an earlier iteration of this file used globally, and NOT 0.0/0.02:
-#     retesting at a
-#     near-0 m floor (matching nav2_bringup's own stock LaserScan example)
-#     reproduced the same instability/never-progresses symptom again,
-#     traced to ordinary floor-plane depth-sensor noise elsewhere in the
-#     camera's field of view (not just around the robot) still getting
-#     marked and perturbing the planner's path on every 1 Hz replan. 0.05 m
-#     is a standard, modest floor against that near-universal depth-camera
-#     characteristic - well below any real low obstacle worth avoiding
-#     (a cable, a curb, a pallet lip), so it does not reintroduce the
-#     original blind-to-real-obstacles problem a 0.1 m global cut did.
+#     min_obstacle_height / min_height is 0.05 m: not 0.1 m, which made the
+#     robot blind to real low obstacles, and not 0.0 / 0.02, which reproduced
+#     the planner instability. Floor-plane depth noise across the camera's
+#     field of view got marked and perturbed the path on every 1 Hz replan.
+#     0.05 m is well below any obstacle worth avoiding (cable, curb, pallet lip).
 
 controller_server:
   ros__parameters:
-    # 10 Hz, not 20: on the Jetson MPPI (CPU only) managed a median ~11 Hz
-    # (3-15 Hz seen) while asked for 20, so each command was held for a
-    # variable 70-280 ms and the robot moved in jerky steps. A rate it can
-    # keep gives steady commands; velocity_smoother (20 Hz) fills in between.
+    # 10 Hz, not 20: CPU-only MPPI managed a median ~11 Hz (3-15 Hz) when asked
+    # for 20, holding each command 70-280 ms and moving the robot in jerky
+    # steps. velocity_smoother (20 Hz) fills in between.
     controller_frequency: 10.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
@@ -80,24 +58,18 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.15
-      yaw_goal_tolerance: 0.2
+      xy_goal_tolerance: 0.1
+      yaw_goal_tolerance: 0.2 # was 0.2
 
-    # Rotation shim wraps MPPI: on a new path it rotates in place to face the
-    # path's initial heading first, then hands off to MPPI for the rest of
-    # the follow - avoids MPPI's sampled trajectories fighting a large
-    # initial heading error on a skid-steer base. Per Nav2's own pattern,
-    # the wrapped controller's parameters live in this SAME "FollowPath"
-    # namespace alongside the shim's own - RotationShimController
-    # instantiates primary_controller under this same plugin name.
-    # Engage above ~34 deg, release below ~17 deg. rotate_to_heading_once is
-    # false: the robot should pivot at every sharp corner, not try to arc
-    # through it with MPPI (a skid-steer barely turns on small wz). It used to
-    # be true to stop ~1 s replans re-triggering pivots; replanning now only
-    # happens when the path becomes invalid (see bt_navigator below).
-    # rotate_to_heading_angular_vel 1.5 and wz_max 1.5: at 1.0 the pivots and
-    # arcs on the real robot barely moved it (wheel scrub needs a large
-    # differential before the chassis turns at all).
+    # The rotation shim wraps MPPI: on a new path it first pivots to the path's
+    # heading, then hands over, so MPPI's samples do not fight a large heading
+    # error on a skid-steer. The wrapped controller's parameters share this
+    # "FollowPath" namespace. Engages above ~34 deg, releases below ~17 deg.
+    # rotate_to_heading_once is false so the robot pivots at every sharp
+    # corner instead of arcing (a skid-steer barely turns on small wz); replans
+    # now only happen when the path becomes invalid. The wz values were 1.5
+    # tuned for the MCU's own kinematics; at 1.0 pivots barely moved the real
+    # robot because wheel scrub needs a large differential first.
     FollowPath:
       plugin: "nav2_rotation_shim_controller::RotationShimController"
       primary_controller: "nav2_mppi_controller::MPPIController"
@@ -105,27 +77,23 @@ controller_server:
       angular_disengage_threshold: 0.3
       rotate_to_heading_once: false
       forward_sampling_distance: 0.3
-      rotate_to_heading_angular_vel: 1.5
-      max_angular_accel: 3.0
+      rotate_to_heading_angular_vel: 1
+      max_angular_accel: 0.5 # was 3.0
       simulate_ahead_time: 1.0
-      # closed_loop false: the shim otherwise ramps each command from the
-      # MEASURED turn rate (odometry) plus max_angular_accel * dt. A
-      # skid-steer that has not broken loose yet measures ~0, so the command
-      # stuck at ~0.15 rad/s and the robot barely turned. Open loop ramps from
-      # the last command instead and reaches rotate_to_heading_angular_vel.
-      closed_loop: false
-      # rotate_to_goal_heading true: once inside xy_goal_tolerance, pivot in
-      # place to the goal heading. MPPI cannot fix heading there without
-      # driving (no sideways motion), so it shuffled back and forth for a long
-      # time at every staging (pre-dock) pose.
+      # closed_loop false: closed loop ramps from the measured turn rate, which
+      # is ~0 until a skid-steer breaks loose, so the command stuck at
+      # ~0.15 rad/s. Open loop ramps from the last command instead.
+      closed_loop: false  # TODO: test
+      # rotate_to_goal_heading true: inside xy_goal_tolerance, pivot to the goal
+      # heading. MPPI cannot fix heading without driving, so it shuffled back
+      # and forth at every pre-dock pose.
       rotate_to_goal_heading: true
 
       # --- nav2_mppi_controller::MPPIController params (wrapped above) ---
-      # Cost per cycle is batch_size x time_steps. 28 x 0.1 s keeps the same
-      # 2.8 s horizon as the old 56 x 0.05 s with half the steps, and
-      # model_dt matches the 10 Hz controller_frequency as MPPI recommends.
-      # With 500 samples instead of 1000 that is a quarter of the work per
-      # cycle, and half as many cycles per second.
+      # Cost per cycle is batch_size x time_steps. 28 x 0.1 s keeps the 2.8 s
+      # horizon of the old 56 x 0.05 s, and model_dt matches the 10 Hz
+      # controller_frequency as MPPI recommends. With 500 samples instead of
+      # 1000 that is a quarter of the work per cycle.
       time_steps: 28
       model_dt: 0.1
       batch_size: 500
@@ -133,7 +101,7 @@ controller_server:
       vx_min: -0.15
       vy_max: 0.0
       vy_min: 0.0
-      wz_max: 1.5
+      wz_max: 1
       vx_std: 0.2
       vy_std: 0.0
       wz_std: 0.4
@@ -143,10 +111,8 @@ controller_server:
       temperature: 0.3
       gamma: 0.015
       motion_model: "DiffDrive"
-      # Debug-only: publishes the candidate-trajectory MarkerArray at the
-      # 20 Hz controller rate, which is real compute on the target Jetson
-      # Orin Nano (no GPU) for something only a human watching RViz ever
-      # reads. Set true temporarily when tuning critics.
+      # Debug only: the trajectory MarkerArray costs real compute on the
+      # GPU-less Jetson. Set true temporarily when tuning critics.
       visualize: false
       regenerate_noises: true
       TrajectoryVisualizer:
@@ -225,11 +191,10 @@ planner_server:
     planner_plugins: ["GridBased"]
     costmap_update_timeout: 1.0
     GridBased:
-      # Smac 2D (A* on the costmap grid, then smoothed) instead of NavFn:
-      # NavFn weighs inflation cost only lightly and hugged obstacles.
-      # cost_travel_multiplier scales how much a cell's cost adds to the
-      # travel cost (default 2.0, 4.0 here; higher = keeps further from obstacles,
-      # at the price of refusing narrow gaps).
+      # Smac 2D (A* then smoothed) instead of NavFn, which weighs inflation
+      # lightly and hugged obstacles. cost_travel_multiplier scales how much a
+      # cell's cost adds to travel cost (default 2.0): higher keeps further from
+      # obstacles but refuses narrow gaps.
       plugin: "nav2_smac_planner::SmacPlanner2D"
       tolerance: 0.3
       # false: only plan through cells known to be free.
@@ -275,10 +240,8 @@ bt_navigator:
   ros__parameters:
     global_frame: map
     robot_base_frame: base_footprint
-    # Fused estimate (Task 1's EKF), per the standing rule that anything
-    # wanting the corrected estimate must consume this topic - the EKF
-    # deliberately does not publish any TF (publish_tf: false), so there is
-    # no odom->base_footprint edge to prefer instead.
+    # The EKF's fused estimate; consumers of the corrected estimate must use
+    # this topic.
     odom_topic: /odometry/filtered
     bt_loop_duration: 10
     default_server_timeout: 20
@@ -289,14 +252,12 @@ bt_navigator:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
     navigate_through_poses:
       plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
-    # NavigateToPose BT: set by navigation.launch.py to Nav2's shipped
-    # navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml.
-    # The default BT replans every second, and NavFn flips between two
-    # near-equal routes around an obstacle, so the robot hesitated and
-    # switched routes mid-drive. This one keeps the path until it is blocked
-    # or the goal changes; same spin/wait/backup recoveries.
-    # NavigateThroughPoses keeps the default
-    # navigate_through_poses_w_replanning_and_recovery.xml.
+    # NavigateToPose BT: navigation.launch.py sets Nav2's
+    # navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml. The
+    # default replans every second and flips between near-equal routes around
+    # an obstacle, so the robot hesitated. This one keeps the path until it is
+    # blocked or the goal changes, with the same recoveries.
+    # NavigateThroughPoses keeps its default BT.
     error_code_names:
       - compute_path_error_code
       - follow_path_error_code
@@ -316,14 +277,10 @@ velocity_smoother:
     deadband_velocity: [0.0, 0.0, 0.0]
     velocity_timeout: 1.0
 
-# Last stage before the wheels. Input is velocity_smoother's output
-# (cmd_vel_smoothed, wired up in navigation.launch.py); output is the real
-# /cmd_vel_ctrl that localization's wheel_drive_node consumes (navigation.launch.py
-# sets cmd_vel_out_topic). Stop/slowdown zones are
-# centred on base_footprint and sized relative to the footprint above
-# (robot_radius 0.18) rather than only covering the front, since a
-# skid-steer can need to stop while rotating in place or reversing during a
-# recovery behavior, not only while driving forward.
+# Last stage before the wheels: reads velocity_smoother's cmd_vel_smoothed and
+# writes cmd_vel_ctrl for wheel_drive_node (both set in navigation.launch.py).
+# Zones are centred on base_footprint and sized to the footprint, not just the
+# front, since a skid-steer may need to stop while rotating or reversing.
 collision_monitor:
   ros__parameters:
     base_frame_id: "base_footprint"
@@ -347,8 +304,8 @@ collision_monitor:
       polygon_pub_topic: "polygon_stop"
       enabled: true
     # Circle r=0.3, not a +-0.4 square (0.57 m at the corners): the square
-    # halved every command near walls, often below what the skid-steer needs
-    # to move at all. MPPI's CostCritic already slows near obstacles.
+    # halved every command near walls, below what the skid-steer needs to
+    # move. MPPI's CostCritic already slows near obstacles.
     PolygonSlow:
       type: "circle"
       radius: 0.3
@@ -369,57 +326,37 @@ collision_monitor:
       enabled: true
     oak_cloud:
       type: "pointcloud"
-      # Filtered, not raw /oak/points - see this file's header comment and
-      # perception/launch/oak_points_filter.launch.py. min_height 0.05 is a
-      # modest floor-plane-noise margin, not the self-detection fix (the
-      # CropBox filter handles that upstream) - see the header comment for
-      # why a near-zero value here reproduced the same instability.
+      # Filtered, not raw /oak/points (see the header and
+      # perception/launch/oak_points_filter.launch.py). min_height 0.05 is a
+      # floor-noise margin; a near-zero value reproduced the instability.
       topic: "/oak/points_filtered"
       min_height: 0.05
       # 0.35 m cutoff (base_footprint) = midway between robot top (0.30 m with
       # antenna) and lowest overhead to pass under (0.40 m): table tops ignored,
       # legs still seen. Keep equal in all three oak_cloud height limits.
       max_height: 0.35
-      # On again: the camera is the only sensor that sees obstacles shorter
-      # than the lidar's plane (12 cm above the floor), so without it a low
-      # obstacle is invisible to the stop and slowdown zones. It had been off
-      # while the cloud was stalling (a source with no fresh data makes the
-      # monitor stop the robot, "invalid source"); source_timeout below allows
-      # for the measured gaps. If the stops come back, look at the cloud's rate
-      # (`ros2 topic hz /oak/points_filtered`) before turning this off again.
+      # The camera is the only sensor that sees obstacles below the lidar plane
+      # (12 cm), so keep it on. A source with no fresh data makes the monitor
+      # stop the robot ("invalid source"); source_timeout below allows for the
+      # measured gaps. If stops return, check `ros2 topic hz
+      # /oak/points_filtered` before turning it off.
       enabled: true
-      # Per-source override of the node-level `source_timeout: 1.0` above.
-      # The lidar `scan` source deliberately KEEPS 1.0 - this loosening
-      # applies only to the camera, which is the supplementary source (low
-      # obstacles the 2D lidar cannot see), never the primary one.
-      #
-      # Justified by measurement, not guessed, and only AFTER the real
-      # latency cause was fixed upstream. The camera cloud's own inter-message
-      # gap, sampled at a subscriber over 100 s of continuous
-      # navigation (which is exactly what the monitor compares its clock
-      # against):
+      # Per-source override of the node-level 1.0 s; the lidar keeps 1.0. The
+      # camera is the supplementary source, and its gaps were measured over
+      # 100 s of navigation:
       #
       #   /oak/points_filtered   median 0.099 s   p95 0.396 s   max 0.990 s
       #   /oak/points (upstream)  median 0.099 s   p95 0.429 s   max 1.255 s
       #
-      # The excursions come from /oak/points, i.e. from the ONE remaining
-      # 29.5 MB/message hop in the chain: the 1280x720 organized cloud
-      # depth_image_proc builds in the vendor's camera container, upstream of
-      # anything this repo launches (perception's filter chain now builds a
-      # small cloud instead, see perception/config/oak_points_filter.yaml). 2.0 s clears the measured
-      # 1.255 s worst case with ~0.75 s of margin; 1.5 s would have left only
-      # 0.25 s and kept firing.
-      #
-      # Why tolerating a briefly-stale camera cloud is safe HERE specifically:
-      # `base_shift_correction: true` above means the monitor re-projects an
-      # old cloud into the current base frame through TF at the message stamp
-      # rather than reusing it naively, so robot motion since the stamp is
-      # compensated and the residual error is only from MOVING obstacles -
-      # and the arena's obstacles are static. Set against that, the behaviour
-      # this replaces was strictly worse than a slightly stale cloud: the
-      # monitor discarded the source entirely (no camera input at all) and,
-      # with no valid source left, additionally commanded "Robot to stop due
-      # to invalid source" - a spurious stop, several times a minute.
+      # The excursions come from /oak/points, the one remaining 29.5 MB hop,
+      # built by depth_image_proc in the vendor's camera container (upstream of
+      # perception's small-cloud chain, see perception/config/oak_points_filter.yaml).
+      # 2.0 s clears the 1.255 s worst case with ~0.75 s margin; 1.5 s kept
+      # firing. A briefly stale cloud is safe here: `base_shift_correction:
+      # true` re-projects it through TF at its stamp, so only moving obstacles
+      # add error, and the arena's are static. Dropping the source instead
+      # caused a spurious "Robot to stop due to invalid source" several times
+      # a minute.
       source_timeout: 2.0
 
 local_costmap:
@@ -433,10 +370,8 @@ local_costmap:
       width: 3
       height: 3
       resolution: 0.05
-      # 0.23, was 0.18: the planner and MPPI treat everything closer than this
-      # to an obstacle as forbidden for the robot's centre, so this is the hard
-      # clearance (chassis circumradius ~0.15 m + localization error).
-      robot_radius: 0.23
+      # (chassis circumradius ~0.15 m + localization error).
+      robot_radius: 0.18
       plugins: ["lidar_layer", "camera_layer", "inflation_layer"]
       lidar_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"

@@ -17,9 +17,8 @@
   <depend>python3-requests</depend>
   <depend>python3-yaml</depend>
 
-  <!-- full_stack_hardware.launch.py includes each package's own launch file
-       by name via get_package_share_directory, so this package needs them
-       available at runtime even though no code imports them directly. -->
+  <!-- The launch files include other packages' launch files through their share
+       directories, so these are needed at runtime though no code imports them. -->
   <exec_depend>einride_mini_truck_bringup</exec_depend>
   <exec_depend>localization</exec_depend>
   <exec_depend>perception</exec_depend>

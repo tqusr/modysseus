@@ -1,20 +1,18 @@
-"""full_stack_hardware.launch.py: every layer, on wall-clock time.
+"""hardware.launch.py: the robot-side layers (no docking, no mission), on wall-clock time.
 
-The launch files are evaluated in-process, recursing through includes and
-timers (see perception/test/launch_helpers.py); nothing is started. Needs the
-four packages built and their install sourced, as the includes are located
-through the share directories.
+The launch files are evaluated in-process through includes and timers (see
+perception/test/launch_helpers.py); nothing is started. Needs the four packages
+built and sourced.
 """
 import importlib.util
 import os
 
 import pytest
-from launch.actions import IncludeLaunchDescription, LogInfo, TimerAction
-from launch.utilities import perform_substitutions
+from launch.actions import IncludeLaunchDescription, TimerAction
 from launch_ros.actions import Node
 
 PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LAUNCH_PATH = os.path.join(PKG, 'launch', 'full_stack_hardware.launch.py')
+LAUNCH_PATH = os.path.join(PKG, 'launch', 'hardware.launch.py')
 HELPERS_PATH = os.path.join(
     PKG, '..', 'perception', 'test', 'launch_helpers.py')
 
@@ -65,13 +63,12 @@ def _includes(**args):
 
 
 def _nodes(**args):
-    return [x for kind, x in _run(**{'saga_token': 't', **args}) if kind == 'node']
+    return [x for kind, x in _run(**args) if kind == 'node']
 
 
 ALL = ['hardware_odometry.launch.py', 'localization.launch.py',
        'apriltag.launch.py', 'oak_points_filter.launch.py', 'localize.launch.py',
-       'docking.launch.py', 'navigation.launch.py', 'mission.launch.py',
-       'wheel_drive.launch.py']
+       'navigation.launch.py', 'wheel_drive.launch.py']
 
 
 def test_all_layers_on_by_default():
@@ -83,12 +80,12 @@ def test_every_node_is_on_wall_clock():
     nodes = _nodes()
     assert sorted(n['name'] for n in nodes) == [
         'apriltag_node', 'behavior_server', 'bt_navigator', 'collision_monitor',
-        'controller_server', 'docking_server', 'ekf_filter_node',
-        'gyro_bias_node', 'image_gate', 'lifecycle_manager_navigation', 'mission_node',
+        'controller_server', 'ekf_filter_node',
+        'gyro_bias_node', 'image_gate', 'lifecycle_manager_navigation',
         # the oak filter: its stages are components
         # inside this container (perception's own tests cover them)
         'oak_cloud_container', 'planner_server',
-        'rectify_node', 'scan_filter', 'slam_toolbox', 'tag_dock_server',
+        'rectify_node', 'scan_filter', 'slam_toolbox',
         'velocity_smoother',
         'wheel_drive_node', 'wheel_odometry_node']
     for node in nodes:
@@ -99,19 +96,24 @@ def test_every_node_is_on_wall_clock():
 
 @pytest.mark.parametrize('switch,dropped', [
     ('apriltag', ['apriltag.launch.py']),
-    ('nav', ['navigation.launch.py', 'oak_points_filter.launch.py']),
-    ('docking', ['docking.launch.py']),
-    ('mission', ['mission.launch.py'])])
+    ('nav', ['navigation.launch.py', 'oak_points_filter.launch.py'])])
 def test_switch_false_drops_only_its_includes(switch, dropped):
     assert sorted(_includes(**{switch: 'false'})) == sorted(
         x for x in ALL if x not in dropped)
 
 
-def test_map_and_saga_token_are_forwarded():
-    nodes = {n['name']: n for n in _nodes(map='arena_real_alt', saga_token='12345')}
+def test_docking_and_mission_are_not_here():
+    # They run from mission.launch.py in a second terminal.
+    names = {n['name'] for n in _nodes()}
+    assert not names & {'docking_server', 'tag_dock_server', 'mission_node'}
+    assert 'docking.launch.py' not in _includes()
+    assert 'mission.launch.py' not in _includes()
+
+
+def test_map_is_forwarded():
+    nodes = {n['name']: n for n in _nodes(map='arena_real_alt')}
     assert nodes['slam_toolbox']['inline_parameters']['map_file_name'].endswith(
         os.path.join('maps', 'arena_real_alt'))
-    assert nodes['mission_node']['inline_parameters']['saga_token'] == '12345'
 
 
 def test_map_start_pose_is_forwarded():
@@ -128,34 +130,6 @@ def test_default_map_is_arena_real():
 def test_apriltag_is_rectified_on_the_oak_raw_image():
     nodes = {n['name']: n for n in _nodes()}
     assert nodes['rectify_node']['remappings']['image'] == '/oak/rgb/image_raw'
-
-
-def _warnings(**args):
-    description = h.load_launch_module(LAUNCH_PATH).generate_launch_description()
-    context = h.make_context(description, **args)
-    return [perform_substitutions(context, e.msg)
-            for e in h.expand(description.entities, context)
-            if isinstance(e, LogInfo)
-            and (e.condition is None or e.condition.evaluate(context))]
-
-
-def test_no_warnings_by_default():
-    assert _warnings() == []
-
-
-def test_docking_without_nav_warns():
-    warnings = _warnings(docking='true', nav='false')
-    assert len(warnings) == 2  # mission is on by default as well
-    assert any('docking needs nav' in w for w in warnings)
-
-
-def test_mission_without_nav_warns():
-    warnings = _warnings(docking='false', nav='false')
-    assert len(warnings) == 1 and 'mission:=true' in warnings[0]
-
-
-def test_no_warnings_when_dependents_are_off_too():
-    assert _warnings(nav='false', docking='false', mission='false') == []
 
 
 def _nav_include_args(**args):

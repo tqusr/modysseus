@@ -1,3 +1,4 @@
+"""Builds the mission behaviour tree: health guards, then load and deliver."""
 import logging
 import math
 
@@ -12,45 +13,31 @@ from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot
 
 _logger = logging.getLogger('mission.mission_tree')
 
-# How stale a TF lookup can be before it's treated as "not actually live" --
-# e.g. slam_toolbox or the odom->base_footprint broadcaster has died but the
-# last transform is still sitting in the tf2 buffer.
+# Oldest a TF stamp may be before it counts as not live, e.g. a dead
+# broadcaster whose last transform is still in the tf2 buffer.
 MAX_TF_AGE_SEC = 2.0
 
-# How far into the FUTURE a transform's own stamp is allowed to be, relative
-# to this node's clock, before it's treated as suspect rather than live.
-# Generous above slam_toolbox's observed ~0.9s deliberate look-ahead (see
-# _transform_is_recent's docstring), but still a real, finite ceiling: an
-# unbounded allowance here would wave through exactly the failure mode this
-# whole check exists to catch -- e.g. some upstream node in the TF chain
-# running on a different clock than the rest (e.g. use_sim_time:=true with no
-# /clock), which would show up as an enormous, nonsensical negative age_sec.
+# Furthest into the future a TF stamp may be. slam_toolbox deliberately stamps
+# about 0.9 s ahead. The ceiling stays finite so a node on the wrong clock
+# (e.g. use_sim_time without /clock) is still caught.
 FUTURE_TF_TOLERANCE_SEC = 2.0
 
-# nav2_lifecycle_manager's own health-check service for the navigation stack
-# (navigation.launch.py's `lifecycle_manager_navigation`) -- a std_srvs/Trigger
-# that returns success=True only while all of its managed nodes are active.
+# nav2_lifecycle_manager's health service (std_srvs/Trigger): success only
+# while all managed nodes are active.
 LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE = '/lifecycle_manager_navigation/is_active'
 
-# How long a single outstanding is_active poll may stay unanswered before
-# VehicleStatusOK abandons it and sends a fresh one. Generous next to the
-# service's normal sub-millisecond answer (it has been observed taking >15s
-# on a heavily loaded machine mid-route, so this must not be tight), but
-# finite: see _lifecycle_manager_reports_active for the permanent-FAILURE
-# wedge an unbounded wait causes when a response is dropped.
+# Seconds before an unanswered is_active poll is abandoned and resent. Generous
+# because the service has taken over 15 s under load, but finite so a dropped
+# response cannot wedge the check.
 LIFECYCLE_POLL_TIMEOUT_SEC = 30.0
 
-# Ground-truth radius (meters) for "is the robot currently sitting at a dock
-# pose" per the TF-based fallback in _not_docked_anywhere, below -- generous
-# above the ~0.03-0.04m docking precision Tasks 5/7/8 have all independently
-# measured, tight enough that merely driving past/near a dock (staging
-# poses are 0.6m out, per mission/config/docks.yaml's own header comment)
-# doesn't false-positive.
+# Radius in meters within which the robot counts as sitting at a dock pose.
+# Above the measured ~0.03-0.04 m docking precision, below the 0.6 m staging
+# offset in docks.yaml.
 DOCK_PROXIMITY_TOLERANCE_M = 0.3
 
-# The single dock plugin configured in perception/config/docking.yaml
-# (`dock_plugins: ["arena_dock"]`). Sent as UndockRobot.Goal.dock_type -- see
-# build_ensure_undocked's undock_goal() for why that matters.
+# Dock plugin from perception/config/docking.yaml (`dock_plugins`); sent as
+# UndockRobot.Goal.dock_type.
 DOCK_PLUGIN_TYPE = "arena_dock"
 
 BB_ROUTE_ID = "route_id"
@@ -58,16 +45,20 @@ BB_SOURCE = "source_dock"
 BB_DESTINATION = "destination_dock"
 BB_HOLDS_PACKAGE = "holds_package"
 BB_PACKAGE_DELIVERED = "package_delivered"
-# Mission's own stand-in for real localization until that owner replaces it:
-# "dock:<letter>" | "predock:<letter>" | unset.
+# Stand-in for real localization: "dock:<letter>", "predock:<letter>" or unset.
 BB_CURRENT_POSITION = "current_position"
 
 
 def _saga_status_is(saga_client, status):
-    """WaitUntil condition factory: SUCCESS once saga_client.get_status()'s
-    "status" field matches. Swallows exceptions (e.g. requests.RequestException
-    on a transient network blip) the same way GetRouteFromSaga does -- a
-    failed poll should just keep waiting, not crash tree.tick()."""
+    """Returns a `WaitUntil` condition that is true once Saga reports `status`.
+
+    Request errors are logged and treated as false so a network blip does not
+    crash `tree.tick()`.
+
+    Args:
+        saga_client: Client exposing `get_status()`.
+        status: Value of the "status" field to wait for.
+    """
 
     def check():
         try:
@@ -80,16 +71,15 @@ def _saga_status_is(saga_client, status):
 
 
 def _saga_route_is_unloaded(saga_client):
-    """WaitUntil condition for "SagaUnloaded?": unlike loading_complete, the
-    real Saga AI server atomically reassigns the truck to its next route
-    (status back to "loading_pending") in the same action that applies
-    unloading_complete -- so that status is never observable through the
-    live get_status() endpoint. Reading the specific route by its own
-    route_id via get_route_by_id() instead returns that route's terminal
-    status even after the server has moved the truck on to a new route.
-    The route_id isn't known until GetRouteFromSaga runs, so it's read from
-    the blackboard at check time rather than captured at tree-build time."""
+    """Returns a `WaitUntil` condition that is true once the route is unloaded.
 
+    Saga reassigns the truck to its next route in the same action that sets
+    unloading_complete, so the live status never shows it. This reads the
+    route by id instead, taking the id from the blackboard at check time.
+
+    Args:
+        saga_client: Client exposing `get_route_by_id()`.
+    """
     blackboard = py_trees.blackboard.Client(name="saga-unloaded-check")
     blackboard.register_key(key=BB_ROUTE_ID, access=py_trees.common.Access.READ)
 
@@ -105,6 +95,8 @@ def _saga_route_is_unloaded(saga_client):
 
 
 class HasRoute(py_trees.behaviour.Behaviour):
+    """Succeeds if a route id is on the blackboard."""
+
     def __init__(self, name):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
@@ -116,6 +108,11 @@ class HasRoute(py_trees.behaviour.Behaviour):
 
 
 class GetRouteFromSaga(py_trees.behaviour.Behaviour):
+    """Fetches the current route from Saga into the blackboard.
+
+    Fails if there is no route, Saga is unreachable or the route is malformed.
+    """
+
     def __init__(self, name, saga_client):
         super().__init__(name)
         self.saga_client = saga_client
@@ -131,9 +128,10 @@ class GetRouteFromSaga(py_trees.behaviour.Behaviour):
             route_id = route["route_id"]
             source = route["source"]["letter"]
             destination = route["destination"]["letter"]
-        except Exception as error:  # requests.RequestException in production, or malformed route
+        except Exception as error:  # RequestException in production, or a malformed route.
             self.logger.warning(f"Saga AI unreachable or malformed route: {error}")
             return py_trees.common.Status.FAILURE
+        self.logger.info(f"[route] {route_id}: pick up at {source}, deliver to {destination}")
         self.blackboard.set(BB_ROUTE_ID, route_id)
         self.blackboard.set(BB_SOURCE, source)
         self.blackboard.set(BB_DESTINATION, destination)
@@ -141,6 +139,8 @@ class GetRouteFromSaga(py_trees.behaviour.Behaviour):
 
 
 class ClearRoute(py_trees.behaviour.Behaviour):
+    """Clears the route and package state from the blackboard."""
+
     def __init__(self, name):
         super().__init__(name)
         self.blackboard = self.attach_blackboard_client(name=name)
@@ -157,7 +157,7 @@ class ClearRoute(py_trees.behaviour.Behaviour):
 
 
 class ReportRouteDone(py_trees.behaviour.Behaviour):
-    """Saga AI has no report endpoint (truck is read-only) — this just logs."""
+    """Logs route completion. Saga has no report endpoint, so nothing is sent."""
 
     def __init__(self, name):
         super().__init__(name)
@@ -166,35 +166,29 @@ class ReportRouteDone(py_trees.behaviour.Behaviour):
 
     def update(self):
         route_id = self.blackboard.get(BB_ROUTE_ID) if self.blackboard.exists(BB_ROUTE_ID) else None
-        self.logger.info(f"Route {route_id} complete")
+        self.logger.info(f"[route] {route_id} complete")
         return py_trees.common.Status.SUCCESS
 
 
 def _transform_is_recent(tf_buffer, node, target_frame, source_frame,
                           max_age_sec=MAX_TF_AGE_SEC, future_tolerance_sec=FUTURE_TF_TOLERANCE_SEC):
-    """True iff target_frame<-source_frame resolves in tf_buffer right now,
-    and the resolved transform's own stamp is within max_age_sec of the
-    node's current clock -- i.e. some live broadcaster is actually still
-    publishing it, not just a stale entry left over in the tf2 cache.
+    """Checks that a live broadcaster is publishing a transform.
 
-    `rclpy.time.Time()` (zero) is tf2's own convention for "the latest
-    transform available", not a literal timestamp to match.
+    Looks up the latest `target_frame <- source_frame` transform and checks
+    that its stamp is at most `max_age_sec` behind the node clock and at most
+    `future_tolerance_sec` ahead of it. The future allowance exists because
+    slam_toolbox stamps map->odom about 0.9 s ahead on purpose.
 
-    Both directions are bounded, asymmetrically. Confirmed against the real
-    stack (not assumed): slam_toolbox's localization node here consistently
-    publishes map->odom stamped ~0.9s AHEAD of the node's own clock sample
-    (i.e. age_sec came out around -0.9, not ~0), every single tick -- this
-    is deliberate on slam_toolbox's part, not jitter or a bug, matching
-    localization_params.yaml's own `transform_timeout: 1.0` (stamping
-    slightly into the future is a standard tf2 technique to keep consumers
-    from hitting "extrapolation into the past"). So a small
-    future stamp is allowed and is NOT treated as staleness. But the future
-    allowance is still a real, finite ceiling (`future_tolerance_sec`), not
-    unbounded: an arbitrarily-far-future stamp is exactly what a desynced or
-    wrongly-configured clock somewhere in the TF chain would produce (e.g. a
-    node on a different clock than the rest -- this task's own mission_node
-    hit that exact bug on itself), and that failure mode is precisely what this
-    health check exists to catch, not wave through.
+    Args:
+        tf_buffer: tf2 buffer to query.
+        node: Node whose clock defines "now".
+        target_frame: Target frame id.
+        source_frame: Source frame id.
+        max_age_sec: Oldest acceptable stamp age in seconds.
+        future_tolerance_sec: Furthest acceptable future stamp in seconds.
+
+    Returns:
+        True if the transform resolves and its stamp is within bounds.
     """
     try:
         transform = tf_buffer.lookup_transform(target_frame, source_frame, Time())
@@ -207,56 +201,28 @@ def _transform_is_recent(tf_buffer, node, target_frame, source_frame,
 
 
 def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M):
-    """Ground-truth fallback for "is the robot currently docked somewhere",
-    independent of mission_node's own in-memory blackboard (Task 8 review
-    finding #1): reads the LATEST available map->base_footprint transform
-    and checks it against every known dock's own dock_pose (not staging_pose)
-    within tolerance_m.
+    """Checks from TF whether the robot sits at any dock pose.
 
-    Deliberately does NOT itself re-check TF recency/staleness the way
-    _transform_is_recent does: by the time build_goto_dock_subtree's
-    `ensure_undocked` gate (the only caller of this) is ever ticked,
-    Mission's own root Sequence has already required `VehicleStatusOK` and
-    `Localize` to both SUCCEED that same tick (see build_mission_tree) --
-    i.e. a live, recent map->base_footprint is already guaranteed upstream,
-    so re-deriving that guarantee here would be redundant, not safer.
+    This survives a mission_node restart, which resets the blackboard
+    while the robot is still docked. Without it the tree would skip
+    UndockRobot and deadlock the planner, because the robot's own cell is
+    inflated. TF recency is not checked here: the Mission sequence has
+    already required `VehicleStatusOK` and `Localize` this tick.
 
-    Why this exists at all: BB_CURRENT_POSITION is pure in-process
-    behaviour-tree state. If mission_node itself crashes or is manually
-    relaunched while the robot is physically still sitting docked, that
-    blackboard resets to unset -- read alone, _not_docked_anywhere would
-    wrongly conclude "not docked", skip UndockRobot, and silently
-    reintroduce the exact planner deadlock Task 8's own fix exists to
-    prevent, with nothing in the logs pointing at the real cause (the
-    planner failure looks identical either way). This TF check is a second,
-    independent signal from the one piece of state that DOES survive a
-    mission_node restart: the robot's real physical pose.
+    A false positive costs one short reverse undock. That is acceptable
+    because it needs the robot within `tolerance_m` of a dock pose without
+    being docked, and the arena keeps that approach corridor clear.
 
-    What a false positive now costs (CHANGED by the final-review fix wave,
-    read this before reusing the old reasoning): this used to be free,
-    because UndockRobot.Goal was sent with an empty `dock_type`, so a
-    docking_server with nothing stashed threw DockNotValid internally
-    (zero velocity published, result.success=False) and nothing moved.
-    build_ensure_undocked now sets `dock_type: "arena_dock"` explicitly
-    (see undock_goal() there, and the Task 8 limitation it closes), so the
-    plugin always resolves and a false positive costs one real, short
-    reverse undock manoeuvre instead of a free failed call. That trade is
-    deliberate and still the right one: the alternative failure mode is the
-    robot being unable to undock at all after a docking_server restart,
-    which deadlocks the whole mission (the exact deadlock this mechanism
-    exists to prevent), whereas a false positive requires the robot to be
-    within DOCK_PROXIMITY_TOLERANCE_M (0.3 m) of a real dock pose while not
-    actually docked -- and that is a dock approach corridor, kept clear of
-    props by the arena layout, with
-    the undock manoeuvre bounded by docking.yaml's staging offset (0.624 m).
+    Not recoverable: if docking_server also restarted while the robot was
+    docked, it has lost its dock state and rejects undocking.
 
-    docking_server is a separate long-running process (docking.launch.py)
-    whose own docked-state stash survives a mission_node-only restart intact
-    and correct, which is the realistic restart scenario this guards. The
-    fuller "docking_server ALSO lost its stash" restart (e.g. a full-stack
-    restart while physically docked) is still not recoverable -- confirmed
-    live, see undock_goal() in build_ensure_undocked for the measurement and
-    why sending dock_type doesn't close it.
+    Args:
+        tf_buffer: tf2 buffer to query.
+        docks: Dock letter to `mission.docks.Dock`.
+        tolerance_m: Radius around each dock pose in meters.
+
+    Returns:
+        True if map->base_footprint is within `tolerance_m` of a dock pose.
     """
     try:
         transform = tf_buffer.lookup_transform('map', 'base_footprint', Time())
@@ -273,53 +239,59 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
 
 
 class VehicleStatusOK(py_trees.behaviour.Behaviour):
-    """General vehicle health gate at the head of Mission.
+    """Health gate at the head of Mission.
 
-    SUCCESS only while, at minimum:
-      - nav2_lifecycle_manager reports its managed navigation nodes active
-        (polled via its own is_active std_srvs/Trigger service), and
-      - slam_toolbox is actively publishing map->odom (TF lookup, rejecting
-        anything older than max_tf_age_sec).
-    FAILURE otherwise -- including while the lifecycle-manager service
-    simply isn't up yet, which is the correct read for "status not OK".
-    Each new failure reason is logged once, when it starts.
+    Succeeds only while the Nav2 lifecycle manager reports its nodes active
+    and map->odom is being published within `max_tf_age_sec`. Fails otherwise,
+    including while the lifecycle service is not up yet. Each new fault is
+    logged once, when it starts.
     """
 
     def __init__(self, name, node, tf_buffer, tf_listener,
                  lifecycle_manager_service=LIFECYCLE_MANAGER_IS_ACTIVE_SERVICE,
                  max_tf_age_sec=MAX_TF_AGE_SEC,
                  poll_timeout_sec=LIFECYCLE_POLL_TIMEOUT_SEC):
+        """Initializes the gate.
+
+        Args:
+            name: Behaviour name.
+            node: Node used for the service client and clock.
+            tf_buffer: Shared tf2 buffer.
+            tf_listener: Listener feeding `tf_buffer`; held so it is not
+                garbage-collected.
+            lifecycle_manager_service: Name of the is_active Trigger service.
+            max_tf_age_sec: Oldest acceptable map->odom stamp in seconds.
+            poll_timeout_sec: Seconds before an unanswered poll is abandoned.
+        """
         super().__init__(name)
         self.node = node
         self._last_fault = None
         self.tf_buffer = tf_buffer
-        # Not otherwise referenced -- held here purely so the listener (and
-        # its tf/tf_static subscriptions) outlives this call and isn't
-        # garbage-collected once build_mission_tree() returns.
         self._tf_listener = tf_listener
         self.max_tf_age_sec = max_tf_age_sec
         self.poll_timeout_sec = poll_timeout_sec
         self._client = node.create_client(Trigger, lifecycle_manager_service)
         self._future = None
         self._future_deadline = None
-        # Latched, not reset to False while a fresh poll is merely in flight --
-        # see _lifecycle_manager_reports_active's docstring for why.
+        # Latched so a poll merely in flight does not read as unhealthy.
         self._last_known_active = False
 
     def update(self):
         fault = self._fault()
         if fault != self._last_fault:
             if fault is None:
-                self.logger.info("Vehicle status OK")
+                self.logger.info("[mission] ready: Nav2 active, map->odom live")
             else:
-                self.logger.warning(f"Vehicle status NOT OK: {fault}")
+                self.logger.warning(f"[mission] waiting: {fault}")
             self._last_fault = fault
         return py_trees.common.Status.FAILURE if fault else py_trees.common.Status.SUCCESS
 
     def _fault(self):
-        """What is wrong right now, or None. The lifecycle poll runs every
-        tick regardless, so its latched result never goes stale behind an
-        earlier failing check."""
+        """Returns a description of the current fault, or None if healthy.
+
+        The lifecycle poll runs every tick so its latched result never goes
+        stale behind an earlier failing check.
+        """
         nav_active = self._lifecycle_manager_reports_active()
         if not nav_active:
             return "Nav2 lifecycle manager does not report active"
@@ -328,34 +300,19 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
         return None
 
     def _lifecycle_manager_reports_active(self):
-        """Non-blocking, like CallAction: tree.tick() must never block on a
-        service response, so this polls via a cached async future instead of
-        rclpy.spin_until_future_complete -- but unlike CallAction (a one-shot
-        goal with no notion of "still fine from last time"), this repolls
-        forever, so the cached *last confirmed* result is returned while a
-        fresh poll is in flight, rather than provisionally reporting False
-        for the tick(s) it takes that poll to resolve. Without that latch,
-        a request fired on tick N (which can't possibly resolve until tick
-        N+1's spin_once has run) would make VehicleStatusOK flicker FAILURE
-        on every tick a new poll happens to be outstanding, failing the
-        Mission guard and invalidating -- and resetting the progress of
-        -- whatever in the `route` subtree was RUNNING, even though nothing
-        actually became unhealthy.
+        """Polls the lifecycle manager without blocking the tick.
 
-        The outstanding poll is bounded by poll_timeout_sec, and that bound
-        is load-bearing, not defensive decoration: a dropped service
-        RESPONSE leaves the future pending forever, and with no timeout this
-        behaviour would then return its latched value (False, in the common
-        case where the drop happens on the first poll after a restart)
-        FOREVER -- mission wedged failing, never recovering, with a
-        perfectly healthy Nav2 sitting right there. That is not theoretical:
-        this environment drops service responses under load often enough
-        that Nav2's own lifecycle manager logs it ("failed to send response
-        to /planner_server/change_state (timeout): client will not receive
-        response"), and it was observed wedging mission exactly this way
-        during the final-review fix wave's live testing. On timeout the
-        request is abandoned (and removed from the client's pending map, so
-        it doesn't leak) and a fresh poll goes out on the next tick."""
+        Uses a cached async future and returns the last confirmed result while
+        a poll is in flight. Otherwise every new poll would read as FAILURE for
+        a tick and invalidate the running route.
+
+        An unanswered poll is abandoned after `poll_timeout_sec` and resent.
+        Service responses do get dropped under load, and without the timeout
+        a lost first reply would wedge the mission in FAILURE forever.
+
+        Returns:
+            True if the last completed poll reported all nodes active.
+        """
         if self._future is None:
             if self._client.service_is_ready():
                 self._future = self._client.call_async(Trigger.Request())
@@ -383,12 +340,17 @@ class VehicleStatusOK(py_trees.behaviour.Behaviour):
 
 
 class Localize(py_trees.behaviour.Behaviour):
-    """Narrower than VehicleStatusOK: specifically "are we localized," not
-    general system health. SUCCESS iff map->base_footprint resolves and is
-    recent (per the established convention, base_frame is base_footprint,
-    not base_link -- see localization/config's own header comments)."""
+    """Succeeds if map->base_footprint resolves and is recent."""
 
     def __init__(self, name, node, tf_buffer, max_tf_age_sec=MAX_TF_AGE_SEC):
+        """Initializes the check.
+
+        Args:
+            name: Behaviour name.
+            node: Node whose clock defines "now".
+            tf_buffer: Shared tf2 buffer.
+            max_tf_age_sec: Oldest acceptable stamp in seconds.
+        """
         super().__init__(name)
         self.node = node
         self.tf_buffer = tf_buffer
@@ -401,6 +363,13 @@ class Localize(py_trees.behaviour.Behaviour):
 
 
 def _at_position(name, dock_key, prefix):
+    """Returns a condition that is true if the position is "<prefix>:<dock>".
+
+    Args:
+        name: Behaviour name.
+        dock_key: Blackboard key holding the dock letter.
+        prefix: "dock" or "predock".
+    """
     class _AtPosition(py_trees.behaviour.Behaviour):
         def __init__(self):
             super().__init__(name)
@@ -419,28 +388,19 @@ def _at_position(name, dock_key, prefix):
 
 
 def _not_docked_anywhere(name, tf_buffer, docks):
-    """SUCCESS iff NEITHER signal says the robot is currently docked
-    somewhere -- a fail-safe OR of two independent checks (Task 8 review
-    finding #1):
+    """Returns a condition that succeeds only if the robot is not docked.
 
-      1. BB_CURRENT_POSITION == "dock:<something>" -- the normal, fast path:
-         this tree's own record of having just completed a DockRobot call.
-      2. _near_any_dock_pose(tf_buffer, docks) -- a TF ground-truth fallback
-         that does NOT depend on this process's own in-memory state, so it
-         still catches "docked" correctly even if BB_CURRENT_POSITION was
-         reset by a mission_node crash/restart while the robot was
-         physically still sitting docked. See _near_any_dock_pose's own
-         docstring for why speculatively firing UndockRobot off this signal
-         alone is safe (opennav_docking fails it harmlessly, never moves
-         the robot, if there's nothing to undock from).
+    Either signal means docked (OR): the blackboard position is "dock:...", or
+    `_near_any_dock_pose` finds the robot at a dock pose. The TF signal covers
+    a mission_node restart that cleared the blackboard. It gates UndockRobot,
+    where a false negative deadlocks the planner and a false positive only
+    costs a short undock.
 
-    Either signal alone is enough to conclude "docked" (OR, not AND) --
-    this check only needs to decide whether to ATTEMPT an undock, not to
-    prove definitively that one is needed; a false positive costs one cheap
-    failed action call (see _near_any_dock_pose), while a false negative
-    reintroduces the exact planner deadlock this whole mechanism exists to
-    prevent. Used to gate UndockRobot: only call it when something says
-    we're actually docked."""
+    Args:
+        name: Behaviour name.
+        tf_buffer: tf2 buffer for the TF check.
+        docks: Dock letter to `mission.docks.Dock`.
+    """
 
     class _NotDocked(py_trees.behaviour.Behaviour):
         def __init__(self):
@@ -461,17 +421,21 @@ def _not_docked_anywhere(name, tf_buffer, docks):
 
 
 def build_ensure_undocked(node, tf_buffer, docks, position_writer):
-    """Selector: SUCCESS immediately if _not_docked_anywhere says we're not
-    currently docked; otherwise fires a real UndockRobot action call before
-    returning (RUNNING while in flight, SUCCESS/FAILURE on its result).
+    """Builds a selector that undocks the robot if it is docked.
 
-    Extracted as its own top-level function (rather than inlined in
-    build_goto_dock_subtree, where it originally lived) specifically so it
-    can be unit-tested in isolation -- see
-    test_mission_tree.py's test_ensure_undocked_* tests, which tick this
-    directly against a counting fake `undock_robot` action server and
-    assert it fires/doesn't fire under each of the blackboard/TF signal
-    combinations, independent of the full dock/navigate/undock subtree.
+    Succeeds at once when `_not_docked_anywhere` does. Otherwise sends an
+    UndockRobot goal. Kept separate so tests can tick it against a fake
+    undock server.
+
+    Args:
+        node: Node that owns the action client.
+        tf_buffer: tf2 buffer for the dock-proximity check.
+        docks: Dock letter to `mission.docks.Dock`.
+        position_writer: Blackboard client with write access to
+            `BB_CURRENT_POSITION`.
+
+    Returns:
+        The "Not docked?" selector.
     """
 
     def mark_undocked():
@@ -479,50 +443,30 @@ def build_ensure_undocked(node, tf_buffer, docks, position_writer):
             position_writer.unset(BB_CURRENT_POSITION)
 
     def undock_goal():
-        """UndockRobot.Goal with `dock_type` explicitly set.
+        """Returns an UndockRobot goal with `dock_type` set.
 
-        nav2_msgs/action/UndockRobot.action's own comment:
-
-            If initialized on a dock so the server doesn't know what type of
-            dock its on, you must specify what dock it is to know where to
-            stage for undocking. [...] If not set & server instance was used
-            to dock, server will use current dock information from last
-            docking request.
-
-        Leaving it empty (what this tree did before) makes the server fall
-        back to its own in-process `curr_dock_type_`, which is empty after a
-        docking_server restart -- so the goal is then rejected outright with
-        DockNotValid ("No dock information to undock from!"). Sending the
-        type removes that one dependency on server-side memory, and is a
-        no-op when the stash is valid (same plugin either way). "arena_dock"
-        is the only entry in `dock_plugins` in
-        perception/config/docking.yaml; keep the two in sync.
-
-        WHAT THIS DOES NOT FIX, measured live 2026-10-02, do not assume
-        otherwise: it does NOT make undocking work after a docking_server
-        restart. Verified against the running stack by restarting
-        docking_server while the robot sat physically docked at A and
-        watching every subsequent UndockRobot goal abort with "Robot is not
-        in the dock, no need to undock". opennav_docking's undockRobot()
-        gates on `dock->isCharger() && (!dock->isDocked() &&
-        !dock->isCharging())` BEFORE it uses dock_type for anything, and
-        SimpleChargingDock::isDocked() measures against the dock pose it
-        stashed during its own approach -- also lost in the restart, with no
-        parameter to supply it and no `is_charger: false` escape hatch in
-        Jazzy's plugin (its declared params are use_battery_status,
-        use_external_detection_pose, external_detection_*, filter_coef,
-        charging_threshold, use_stall_detection, stall_*, docking_threshold,
-        staging_*). So Task 8's "full-stack restart while physically docked"
-        limitation stands; it is an opennav_docking design constraint, not
-        something this client can send its way out of.
+        Without `dock_type` the server falls back to the dock type from its
+        last docking request, which is empty after a docking_server restart.
+        Setting it removes that dependency. It does not make undocking work
+        after such a restart: opennav_docking still aborts with "Robot is not
+        in the dock", because the dock pose it stashed was lost too. Verified
+        on 2026-10-02 against the running stack.
         """
         goal = UndockRobot.Goal()
         goal.dock_type = DOCK_PLUGIN_TYPE
         return goal
 
+    def describe_undock():
+        try:
+            where = position_writer.get(BB_CURRENT_POSITION)
+        except Exception:  # Nothing recorded: the TF check found a dock.
+            where = None
+        return f"undocking from {where.split(':')[-1]}" if where else "undocking"
+
     undock = CallAction(
         "UndockRobot", node=node, action_type=UndockRobot,
         action_name="undock_robot", goal_builder=undock_goal, on_success=mark_undocked,
+        log_tag="undock", describe=describe_undock,
     )
     return py_trees.composites.Selector(
         name="Not docked?", memory=False,
@@ -530,12 +474,20 @@ def build_ensure_undocked(node, tf_buffer, docks, position_writer):
 
 
 def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
-    """dock_key is BB_SOURCE or BB_DESTINATION — resolved at tick time, so the
-    same subtree definition serves both the Load and Deliver branches.
-    `tf_buffer` is build_mission_tree's own shared tf2_ros.Buffer (same one
-    VehicleStatusOK/Localize use) -- threaded through to
-    build_ensure_undocked's TF ground-truth check, not a new subscription."""
+    """Builds the subtree that drives to a dock and docks.
 
+    The dock is read from the blackboard at tick time, so one definition
+    serves both the load and deliver branches.
+
+    Args:
+        node: Node that owns the action clients.
+        dock_key: `BB_SOURCE` or `BB_DESTINATION`.
+        docks: Dock letter to `mission.docks.Dock`.
+        tf_buffer: Shared tf2 buffer, passed on to `build_ensure_undocked`.
+
+    Returns:
+        The "GoToDock" selector.
+    """
     position_writer = py_trees.blackboard.Client(name=f"position-writer-{dock_key}")
     position_writer.register_key(key=dock_key, access=py_trees.common.Access.READ)
     position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
@@ -566,43 +518,38 @@ def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
         goal.dock_id = dock.letter
         return goal
 
+    def describe_navigate():
+        dock = docks[position_writer.get(dock_key)]
+        return (f"going to the pre-dock pose of dock {dock.letter} "
+                f"({dock.staging_pose['x']:.2f}, {dock.staging_pose['y']:.2f})")
+
+    def describe_dock():
+        return f"docking at {docks[position_writer.get(dock_key)].letter}"
+
     navigate = CallAction(
         "NavigateToPose(staging)", node=node, action_type=NavigateToPose,
         action_name="navigate_to_pose", goal_builder=navigate_goal, on_success=mark_predock,
+        log_tag="nav", describe=describe_navigate,
     )
     dock_is_free = WaitUntil(
         "DockIsFree?", condition=lambda: True, timeout_sec=60.0, poll_sec=1.0,
-    )  # stubbed free-check — real multi-robot occupancy comes from perception later
+    )  # Stub: real multi-robot occupancy will come from perception.
     dock_action = CallAction(
         "DockRobot", node=node, action_type=DockRobot,
         action_name="dock_robot", goal_builder=dock_goal, on_success=mark_dock,
+        log_tag="dock", describe=describe_dock,
     )
 
-    # Real-stack discovery (Task 8): opennav_docking parks the robot nose-first
-    # against the dock's wall, close enough that the LIDAR/camera obstacle
-    # layers mark the robot's own current cell as lethal/inflated in the
-    # global costmap -- NavigateToPose's planner then can never find a start
-    # pose within tolerance to plan FROM, forever, for any destination. There
-    # was no undock step anywhere in this tree before, so the first "dock,
-    # then navigate elsewhere" transition (never exercised end-to-end until
-    # Task 8's full route test) deadlocked the whole mission. Fixed by
-    # calling the real `/undock_robot` action (opennav_docking's own
-    # UndockRobot, live alongside dock_robot) before ever trying to navigate
-    # away from a dock -- it reverses the robot off the dock using local
-    # costmap/odometry control, not a global plan, so it doesn't hit the same
-    # chicken-and-egg problem. Gated on build_ensure_undocked's fail-safe-OR
-    # check (blackboard state OR live TF ground truth -- see that function
-    # and _not_docked_anywhere's docstrings) so it's skipped only when
-    # NEITHER signal says we're docked (e.g. the very first leg of the whole
-    # mission, spawning free), not just on this process's own possibly-stale
-    # blackboard record.
+    # A docked robot sits so close to the wall that its own cell is lethal in
+    # the global costmap and Nav2 cannot plan away from it. Undock first, using
+    # local control; skipped when neither the blackboard nor TF says docked.
     ensure_undocked = build_ensure_undocked(node, tf_buffer, docks, position_writer)
 
     move_and_dock = py_trees.composites.Sequence(name="Move and dock", memory=True, children=[
         ensure_undocked,
-        # A failed Nav2 goal to the pre-dock pose does not stop the docking:
-        # tag_dock_server, which answers DockRobot, checks for itself whether
-        # something is standing on that pose and, if so, drives in past it.
+        # A failed Nav2 goal to the pre-dock pose does not stop docking:
+        # tag_dock_server checks for itself whether the pose is occupied and
+        # drives in past it.
         py_trees.composites.Selector(name="At pre-dock?", memory=False, children=[
             at_predock,
             py_trees.composites.Selector(name="Try the pre-dock", memory=True, children=[
@@ -618,9 +565,17 @@ def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
 
 
 def build_mission_tree(node, saga_client, docks):
-    # Single shared Buffer/TransformListener for both health-check behaviours
-    # below, rather than one pair each -- avoids duplicate /tf, /tf_static
-    # subscriptions on the same node for the same data.
+    """Builds the full mission tree.
+
+    Args:
+        node: Node that owns the clients, services and TF listener.
+        saga_client: Client for the Saga event server.
+        docks: Dock letter to `mission.docks.Dock`.
+
+    Returns:
+        The root "Mission" sequence.
+    """
+    # One shared buffer and listener avoids duplicate /tf subscriptions.
     tf_buffer = tf2_ros.Buffer()
     tf_listener = tf2_ros.TransformListener(tf_buffer, node, spin_thread=False)
     vehicle_status_ok = VehicleStatusOK("VehicleStatusOK", node, tf_buffer, tf_listener)
@@ -655,12 +610,9 @@ def build_mission_tree(node, saga_client, docks):
         have_route, load, deliver, ReportRouteDone("ReportRouteDone"), ClearRoute("ClearRoute"),
     ])
 
-    # py_trees 2.5.0 (ROS 2 Jazzy's installed version) folded the old standalone
-    # ReactiveSequence class into Sequence's `memory` flag: Sequence(memory=False)
-    # re-ticks from its first child every tick (never remembers a previously-running
-    # child), which is exactly ReactiveSequence's semantics -- needed here so the
-    # vehicle-status/localization guards are re-checked every tick even while `route`
-    # (memory=True, so it tracks its own progress) stays RUNNING underneath.
+    # In py_trees 2.5 a Sequence with memory=False is the old ReactiveSequence:
+    # it re-ticks the guards every tick while `route` (memory=True) keeps its
+    # own progress.
     mission = py_trees.composites.Sequence(name="Mission", memory=False, children=[
         vehicle_status_ok, localize, route,
     ])

@@ -141,15 +141,12 @@ def test_call_action_reaches_success_and_fires_on_success_callback():
 
 
 class _RecordingGoalHandle:
-    """Stands in for an rclpy ClientGoalHandle: records cancel requests.
+    """Stands in for an rclpy ClientGoalHandle and records cancel requests.
 
-    A real in-flight goal can't be used here without a cancellable action
-    server AND a multi-threaded executor (the stub servers block their one
-    executor thread inside execute, so they can't service a cancel request).
-    The contract under test is this class's own: "an invalidated CallAction
-    asks the server to cancel", i.e. that cancel_goal_async() is called at
-    all. The server side of cancellation is verified live, not here -- see
-    this fix wave's report."""
+    A real in-flight goal would need a cancellable action server and a
+    multi-threaded executor (the stub servers block their one executor thread in
+    execute). The contract under test is that an invalidated CallAction calls
+    cancel_goal_async(); the server side is verified live."""
 
     def __init__(self):
         self.accepted = True
@@ -174,10 +171,9 @@ def _call_action_with_fake_handle(node):
 
 
 def test_call_action_terminate_invalid_cancels_the_in_flight_goal():
-    """py_trees invalidating a RUNNING CallAction (a failed Mission guard)
-    must actually cancel the goal on the
-    server, not just drop this side's futures -- otherwise Nav2 /
-    opennav_docking keeps driving the robot while the tree reports
+    """Invalidating a RUNNING CallAction (a failed Mission guard) cancels the goal.
+
+    Otherwise Nav2 or opennav_docking keeps driving while the tree reports
     "stopped"."""
     rclpy.init()
     try:
@@ -195,10 +191,10 @@ def test_call_action_terminate_invalid_cancels_the_in_flight_goal():
 
 
 def test_call_action_terminate_success_does_not_cancel():
-    """terminate() also fires on every ordinary completion (py_trees calls
-    stop(SUCCESS)/stop(FAILURE) from tick()). Cancelling there would be a
-    pointless round trip against an already-terminal goal, so only INVALID
-    cancels."""
+    """terminate() also fires on ordinary completion, which must not cancel.
+
+    Cancelling an already-terminal goal is a pointless round trip, so only
+    INVALID cancels."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_call_action_terminate_success")
@@ -231,10 +227,11 @@ def test_call_action_terminate_invalid_without_a_goal_handle_is_a_noop():
 
 
 def test_call_action_terminate_invalid_cancels_a_goal_still_being_accepted():
-    """The race the `_cancel_once_accepted` callback exists for: the goal was
-    sent but the server hadn't returned its handle yet when the behaviour was
-    invalidated. Dropping the future there would leak a goal nobody can
-    cancel afterwards, so the cancel has to be deferred onto the future."""
+    """The race `_cancel_once_accepted` exists for.
+
+    The goal was sent but the handle had not returned when the behaviour was
+    invalidated. Dropping the future would leak an uncancellable goal, so the
+    cancel is deferred onto it."""
     rclpy.init()
     try:
         node = rclpy.create_node("test_call_action_terminate_racing_send")
@@ -258,13 +255,11 @@ def test_call_action_terminate_invalid_cancels_a_goal_still_being_accepted():
 
 
 class _CancellableServer:
-    """A real action server that accepts goals, never finishes them, and
-    records cancel requests.
+    """A real action server that accepts goals, never finishes them and records cancels.
 
-    Deferred execution (`handle_accepted_callback` that only stashes the
-    handle) is what makes this usable on a SingleThreadedExecutor: an
-    execute callback that looped waiting for a cancel would block the one
-    executor thread and never service the cancel request itself."""
+    Deferred execution (`handle_accepted_callback` only stashes the handle)
+    keeps it usable on a SingleThreadedExecutor, where an execute callback
+    waiting for a cancel would block the thread that must service it."""
 
     def __init__(self, node):
         self.accepted_goals = []
@@ -286,12 +281,11 @@ class _CancellableServer:
 
 
 def test_call_action_cancel_reaches_a_real_action_server():
-    """End-to-end over real rclpy action plumbing, not a fake handle: tick
-    CallAction until it holds an accepted goal, invalidate it the way
-    py_trees does when a guard fails, and assert the SERVER actually receives
-    the cancel request. This is the behaviour the whole stop-on-fault design rests
-    on -- Nav2/opennav_docking keep driving the robot until this request
-    arrives."""
+    """End to end over real rclpy action plumbing, not a fake handle.
+
+    Ticks CallAction until it holds an accepted goal, invalidates it as py_trees
+    does when a guard fails, and asserts the server receives the cancel. The
+    stop-on-fault design rests on this: Nav2 keeps driving until it arrives."""
     rclpy.init()
     try:
         server_node = rclpy.create_node("test_cancellable_server")
@@ -327,21 +321,18 @@ def test_call_action_cancel_reaches_a_real_action_server():
 
 
 def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal():
-    """The other half of the accept race, and the half that actually happens:
-    the send future has RESOLVED (the server accepted the goal) but no tick
-    has run since, so update() never moved the handle into _goal_handle.
+    """The other half of the accept race, and the one that actually happens.
 
-    This is the normal state for one full tick after every dispatch --
-    initialise() sends and update() runs in the same tick with no spin
-    between them, and the memory=False `Mission` Sequence then invalidates
-    the `route` subtree without ticking it again. Deferring the cancel onto
-    an already-done future (add_done_callback) would be too late to matter,
-    and the pre-fix `not done()` guard skipped the cancel entirely: the
-    server keeps driving the robot through the whole fault.
+    The send future has resolved but no tick has run since, so update() never
+    moved the handle into _goal_handle. That is the normal state for a tick after
+    every dispatch: initialise() sends and update() runs in the same tick, and the
+    memory=False `Mission` sequence then invalidates `route` without ticking it
+    again. Deferring onto an already-done future would be too late, and the old
+    `not done()` guard skipped the cancel, so the server kept driving through the
+    fault.
 
-    Real rclpy plumbing and a real server, deliberately: the bug lives in
-    the interaction between the future's resolved state and terminate(), so
-    a hand-built Future would let a wrong fix pass."""
+    Uses real rclpy plumbing and a real server on purpose: a hand-built Future
+    would let a wrong fix pass."""
     rclpy.init()
     try:
         server_node = rclpy.create_node("test_unharvested_server")
@@ -358,9 +349,8 @@ def test_call_action_terminate_invalid_cancels_an_accepted_but_unharvested_goal(
         assert behaviour.client.wait_for_server(timeout_sec=10.0)
         behaviour.initialise()
 
-        # Spin until the server has accepted -- but NEVER call update(), so
-        # the handle is never harvested. This is the exact interleaving a
-        # fault hits on the tick after a dispatch.
+        # Spin until the server has accepted, but never call update(), so the
+        # handle is never taken: the interleaving a fault hits after a dispatch.
         deadline = time.monotonic() + 10.0
         while not behaviour._send_future.done() and time.monotonic() < deadline:
             executor.spin_once(timeout_sec=0.05)
@@ -407,5 +397,87 @@ def test_call_action_records_the_goal_handle_once_the_goal_is_accepted():
         assert behaviour._goal_handle is not None, \
             "CallAction never captured the accepted goal's handle"
         assert behaviour._goal_handle.accepted is True
+    finally:
+        rclpy.shutdown()
+
+
+class _LogRecorder:
+    def __init__(self):
+        self.lines = []
+
+    def info(self, msg):
+        self.lines.append(("info", msg))
+
+    def warning(self, msg):
+        self.lines.append(("warning", msg))
+
+
+def test_call_action_logs_start_and_arrival_with_its_tag():
+    rclpy.init()
+    try:
+        server = StubActionServers(delay_sec=0.05)
+        client_node = rclpy.create_node("test_bt_log_client")
+        executor = SingleThreadedExecutor()
+        executor.add_node(server)
+        executor.add_node(client_node)
+        behaviour = CallAction(
+            "navigate", node=client_node, action_type=NavigateToPose,
+            action_name="navigate_to_pose", goal_builder=NavigateToPose.Goal,
+            log_tag="nav", describe=lambda: "going to dock A staging (1.00, 2.00)")
+        behaviour.logger = _LogRecorder()
+        behaviour.client.wait_for_server(timeout_sec=5.0)
+        behaviour.initialise()
+        status = py_trees.common.Status.RUNNING
+        deadline = time.monotonic() + 5.0
+        while status == py_trees.common.Status.RUNNING and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.05)
+            status = behaviour.update()
+        assert status == py_trees.common.Status.SUCCESS
+        assert behaviour.logger.lines == [
+            ("info", "[nav] going to dock A staging (1.00, 2.00)"),
+            ("info", "[nav] done: going to dock A staging (1.00, 2.00)"),
+        ]
+    finally:
+        rclpy.shutdown()
+
+
+def test_call_action_logs_a_rejected_goal_as_a_failure():
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_bt_log_rejected")
+        behaviour = CallAction(
+            "dock", node=node, action_type=NavigateToPose,
+            action_name="navigate_to_pose", goal_builder=NavigateToPose.Goal,
+            log_tag="dock", describe=lambda: "docking at A")
+        behaviour.logger = _LogRecorder()
+
+        class _Rejected:
+            accepted = False
+
+        class _Done:
+            def done(self):
+                return True
+
+            def result(self):
+                return _Rejected()
+
+        behaviour._described = "docking at A"
+        behaviour._send_future = _Done()
+        assert behaviour.update() == py_trees.common.Status.FAILURE
+        assert behaviour.logger.lines == [("warning", "[dock] failed (goal rejected): docking at A")]
+    finally:
+        rclpy.shutdown()
+
+
+def test_call_action_without_describe_logs_nothing():
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_bt_log_none")
+        behaviour = CallAction(
+            "quiet", node=node, action_type=NavigateToPose,
+            action_name="navigate_to_pose", goal_builder=NavigateToPose.Goal)
+        behaviour.logger = _LogRecorder()
+        behaviour.initialise()
+        assert behaviour.logger.lines == []
     finally:
         rclpy.shutdown()

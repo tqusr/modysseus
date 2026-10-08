@@ -1,137 +1,101 @@
-"""Mapping mission on the REAL robot: wheel + gyro fusion + SLAM + AprilTag capture.
+"""Mapping mission on the real robot: wheel and gyro fusion, SLAM, AprilTag capture.
 
     ros2 launch localization mapping_mission_hardware.launch.py
 
-`mapping.launch.py` is INCLUDED, so the lifecycle watchdog, the
-sync-vs-async choice and the reasoning behind both stay in exactly one place.
+Includes `mapping.launch.py`, so the lifecycle watchdog and the sync-versus-async
+choice live in one place.
 
-WHY THIS EXISTS. `mapper_params_hardware.yaml` sets `odom_frame: odom`,
-so slam_toolbox looks up an `odom -> base_footprint` transform for every
-scan - and until this launch, NOTHING published that transform on hardware.
-There was no wheel odometry node at all. Mapping on the real robot was
-therefore not merely degraded, it was broken: every scan's transform lookup
-would fail, continuously, with no map to show for the drive.
+`mapper_params_hardware.yaml` sets `odom_frame: odom`, so slam_toolbox looks up
+`odom -> base_footprint` for every scan. Nothing published it on hardware
+before, so mapping was broken. `wheel_odometry_node` now integrates the
+`/wheel_encoders` stream from the vendor's `ugv02_serial_node` (accumulated
+distance per side) into a pose and `/odom`.
 
-WHAT NOW PUBLISHES IT: REAL WHEEL ODOMETRY, NOT A STUB. `wheel_odometry_node`
-integrates the `/wheel_encoders` stream the vendor's `ugv02_serial_node`
-publishes - accumulated distance per side, straight off the chassis MCU - into
-a pose and publishes `/odom`.
+The EKF owns `odom -> base_footprint`, not the wheels, because wheel odometry
+measures turning badly (the scrub below). `localization.launch.py` runs here
+too: `gyro_bias_node` removes the gyro's bias and the EKF fuses forward speed
+from `/odom` with turn rate from the gyro (see `config/ekf.yaml`). The EKF
+broadcasts the TF and `wheel_odometry_node`'s broadcast is off, since two
+publishers of one edge fight. slam_toolbox is seeded from the fused estimate.
 
-WHO OWNS `odom -> base_footprint`: THE EKF, NOT THE WHEELS. Wheel odometry
-alone measures turning badly (the scrub described below). So
-`localization.launch.py` also runs here: `gyro_bias_node` removes the chassis
-gyro's bias, and the robot_localization EKF fuses forward speed from `/odom`
-with turn rate from the gyro (`config/ekf.yaml` says what is fused and why).
-The EKF broadcasts the TF (`publish_tf:=true`) and `wheel_odometry_node`'s own
-broadcast is turned off, because two publishers of one TF edge fight - see
-`ekf.yaml`. slam_toolbox reads that TF, so it is seeded from the fused
-estimate.
+Turn calibration: measured on the real robot and kept in `config/hardware.yaml`,
+the one place to change it (edit, then rebuild and re-source). `wheel_separation`
+is 0.4084 m, not the geometric track of 0.17452 m: a skid-steer scrubs
+its wheels sideways to turn, so the ideal model over-predicts yaw rate. The
+value comes from 5 clockwise in-place turns on the arena floor
+(|dR - dL| / (2 pi N)); `localization/wheel_odometry.py`'s docstring has the
+method and numbers. It is a single clockwise run; a counter-clockwise one is
+still to be averaged in. The Python constants are only code defaults. If the
+map is rotationally wrong (corridors meeting at the wrong angle, a square room
+closing as a parallelogram), suspect `wheel_separation` first.
 
-  THE TURN CALIBRATION IS MEASURED ON THE REAL ROBOT, AND LIVES IN
-  `config/hardware.yaml`. The node's `wheel_separation` is 0.4084 m there,
-  which is NOT this chassis's geometric track (0.17452 m): a skid-steer has to
-  scrub its wheels sideways to rotate, so the ideal differential model
-  over-predicts yaw rate. 0.4084 is the effective separation from spinning 5
-  clockwise turns in place on the arena floor (|dR - dL| / (2 pi N)); that
-  file and `localization/localization/wheel_odometry.py`'s module docstring
-  have the method and numbers. It is a SINGLE clockwise run, with a
-  counter-clockwise one still to come to average. `config/hardware.yaml` is
-  the one place to change the robot's calibration (edit, rebuild/re-source the
-  install); the Python constants are only the node's code defaults.
+Only two of the four driven wheels are sensed (6-wheel 4WD, front axle
+instrumented only). The odometry cannot see a rear wheel slipping against the
+front one, and skid-steer scrub guarantees some slip. It is still a real
+motion prior for seeding each scan match.
 
-  If the map comes out rotationally wrong - corridors meeting at the wrong
-  angle, a square room closing as a parallelogram - `wheel_separation` is the
-  first suspect.
+Encoder units: the vendor labels `/wheel_encoders` `position` as metres but the
+MCU counts whole centimetres (a measured ~2.00 m drive gave 201 counts). The
+correction is `encoder_scale` in `config/hardware.yaml`; see
+`localization/wheel_odometry.py`.
 
-  ONLY TWO OF THE FOUR DRIVEN WHEELS ARE SENSED. The chassis is 6-wheel, 4WD
-  with the front and rear pairs driven, and only the front axle is
-  instrumented - the same limitation `hardware.launch.py`'s
-  `joint_state_relay` comment describes. So this is real odometry, not perfect
-  odometry: it cannot see a rear wheel slipping differently from the front one
-  on the same side, and skid-steer scrub guarantees some slip. It is still a
-  real motion prior, which is what slam_toolbox needs to seed each scan match,
-  and incomparably better than the nothing that was there before.
+AprilTag detection: apriltag_ros runs alongside mapping so one drive builds
+the map and captures the real dock poses. It starts 5 s after SLAM so it does
+not compete with slam_toolbox's CONFIGURE/ACTIVATE window. It includes
+`perception`'s `apriltag.launch.py` with `image_topic:=/oak/rgb/image_raw` and
+`rectify:=true` (the OAK-D image is distorted and apriltag_ros ignores
+distortion, so `image_proc` rectifies first and the detector reads
+`/oak/rgb/image_rect`). Pass `apriltag:=false` for a lidar-only run, e.g. if
+the Jetson cannot keep up. The camera driver is the vendor's.
 
-  ENCODER UNIT CALIBRATION. The real robot's `/wheel_encoders` `position`
-  field is mislabelled by the vendor as metres, but the underlying MCU counts
-  are actually whole CENTIMETRES. Confirmed by a physical calibration test:
-  driving the robot a measured ~2.00 m produced a 201-count average delta
-  across the left/right wheels, i.e. ~0.00995 m per count (~1 cm, a 0.5%
-  match). This supersedes an earlier ~1/29 "tick count" assumption, which
-  predicted only ~58 counts for the same run (off by 3.47x). See
-  `localization/localization/wheel_odometry.py`'s module docstring ("ENCODER
-  UNIT CALIBRATION") for the full writeup.
+  Needs `sudo apt install ros-jazzy-apriltag-ros ros-jazzy-image-proc`. The
+  tag-orientation convention in `perception/dock_capture.py` has never been
+  checked against a live tag, so the first capture is that check (see "STILL
+  UNVERIFIED AGAINST A LIVE TAG" there; capture dock A first).
 
-  This confirmed centimetre-to-metre correction is applied via
-  `encoder_scale` in `config/hardware.yaml`.
+No device drivers: this starts odometry, fusion, SLAM and (by default)
+AprilTag detection only. The serial link (`/wheel_encoders`), lidar (`/scan`),
+OAK-D (`/oak/rgb/image_raw`) and RViz come from the vendor's
+`hardware.launch.py`, which must already be running and which nothing here
+restarts.
 
-APRILTAG DETECTION, FOR DOCK CAPTURE. This file runs apriltag_ros alongside
-mapping so one drive both builds the map and captures the arena's real dock
-poses, 5 s after SLAM starts (so it does not compete with slam_toolbox's
-CONFIGURE/ACTIVATE window). It includes `perception`'s `apriltag.launch.py`
-with `image_topic:=/oak/rgb/image_raw` and `rectify:=true`: the real OAK-D RGB
-image is distorted and apriltag_ros ignores distortion, so `image_proc`'s rectify_node runs first and the detector
-reads `/oak/rgb/image_rect`. Pass `apriltag:=false` for the lidar-only run
-this launch used to be (e.g. if the Jetson cannot keep up). The camera driver
-itself is the vendor's, started by `hardware.launch.py`.
+Params: `mapper_params_hardware.yaml`, loaded by `mapping.launch.py`.
+`correlation_search_space_dimension` is 0.5 because a +-1 m window in this
+symmetric room can lock onto the wrong wall and costs ~16x the matching work.
+`transform_timeout: 1.0` stays: it absorbs the ~12 ms the encoder stamps are
+back-dated by, and `capture_dock_pose.py` and `mission_tree.py` rely on
+slam_toolbox stamping map->odom that far ahead. `do_loop_closing: false` is an
+open trade-off to revisit once the narrower window has been tried. Read that
+file's comments before changing it.
 
-  Needs `sudo apt install ros-jazzy-apriltag-ros ros-jazzy-image-proc` on the
-  robot. The tag-orientation convention in `perception/perception/
-  dock_capture.py` has never been checked against a live tag; the first
-  capture on the robot is that check (see "STILL UNVERIFIED AGAINST A LIVE
-  TAG" there, and capture dock A first).
+Terminals, in start order:
 
-NO DEVICE DRIVERS. This launch starts odometry, fusion,
-SLAM and (by default) AprilTag detection, nothing else. The robot's own
-drivers - the serial link that produces `/wheel_encoders`, the lidar that produces `/scan`, the OAK-D camera that produces
-`/oak/rgb/image_raw`, and RViz - come from the vendor's `hardware.launch.py`,
-which you are already running in its own terminal to drive the robot at all.
-Nothing here would work without it, and nothing here should restart it.
-
-THE PARAMS FILE is `mapper_params_hardware.yaml`, which mapping.launch.py
-loads. `correlation_search_space_dimension` is 0.5: on the robot a +-1 m
-window in this symmetric room can lock onto the wrong wall and costs ~16x the
-matching work per scan. `transform_timeout: 1.0` stays (it absorbs the ~12 ms the encoder stamps are
-back-dated by, and capture_dock_pose.py and mission_tree.py rely on
-slam_toolbox stamping map->odom that far ahead), and `do_loop_closing: false`
-is an open trade-off on hardware, to revisit after the narrower window has
-been tried. Read the hardware file's comments before changing anything.
-
-THE TERMINALS, in the order they have to start.
-
-  0. The robot itself, which you already have running:
+  0. The robot itself, already running:
 
          ros2 launch einride_mini_truck_bringup hardware.launch.py
 
-  1. This launch - wheel odometry, gyro fusion, SLAM in mapping mode and
-     AprilTag detection:
+  1. This launch (odometry, fusion, SLAM in mapping mode, AprilTag):
 
          ros2 launch localization mapping_mission_hardware.launch.py
 
-     KEEP THE ROBOT STILL until `gyro_bias_node` logs "gyro bias
-     calibrated" (a few seconds): it measures the gyro's offset while the
-     wheels say the robot is parked. Then wait for "slam_toolbox is ACTIVE" / "slam_toolbox activation CONFIRMED"
-     before driving anywhere. `mapping.launch.py`'s watchdog prints it, and a
-     mapping run that never reaches `active` silently maps nothing - see that
-     file's docstring, which is where the lifecycle story lives.
+     Keep the robot still until `gyro_bias_node` logs "gyro bias calibrated"
+     (a few seconds), then wait for "slam_toolbox activation CONFIRMED" before
+     driving. A run that never reaches `active` maps nothing (see
+     `mapping.launch.py`).
 
-  2. Teleop - drive the robot:
+  2. Teleop (the terminal must keep focus):
 
          ros2 run teleop_twist_keyboard teleop_twist_keyboard
 
-     This terminal must keep focus to steer.
+     Drive slowly and smoothly. Skid-steer odometry is worst in fast turns and
+     sharp direction changes, and every metre of error becomes a metre of
+     error in the pose slam_toolbox seeds its scan match from.
 
-     DRIVE SLOWLY AND SMOOTHLY. Wheel odometry on a skid-steer is at its worst
-     exactly where it is pushed hardest: fast turns and sharp direction
-     changes scrub the most, and scrub is the part of the motion the wheels
-     cannot see. Every metre of error it makes is a metre of error in the pose
-     slam_toolbox seeds its scan match from.
-
-  3. The capture tool - record a dock pose per keypress, on the robot:
+  3. The capture tool, recording one dock pose per keypress:
 
          ros2 run perception capture_dock_pose
 
-     Drive to a dock, stop with its tag square on at about 0.6 m, type `i` +
+     Drive to a dock, stop with its tag square on at about 0.6 m, type `i` and
      Enter. Capture dock A (tag 0) first. The tool rewrites the dock lines in
      `~/modysseus/src/mission/config/docks.yaml` and
      `~/modysseus/src/perception/config/docking.yaml` on the robot.
@@ -141,33 +105,20 @@ THE TERMINALS, in the order they have to start.
          ros2 run nav2_map_server map_saver_cli -f src/localization/maps/arena_real
 
   5. `git diff` in `~/modysseus` (a plausible pose on the arena wall, staging
-     pose about 0.6 m out), then COMMIT the captures there, on the robot, so a
-     later `git pull` does not conflict. They stay local; nothing sends them
-     to the laptop.
+     pose about 0.6 m out), then commit the captures on the robot so a later
+     `git pull` does not conflict. They stay local.
 
-WATCHING THE MAP GROW IN RVIZ. The vendor's `hardware.launch.py` already
-starts RViz, but its config
-(`einride_mini_truck_bringup/config/einride_mini_truck.rviz`) has NO Map
-display - checked, it carries Grid, RobotModel, TF, LaserScan, PointCloud2,
-Odometry and three Image displays and nothing else. Add one by hand in the
-running RViz: Displays panel -> "Add" -> "By topic" -> `/map` -> Map.
+Watching the map in RViz: the vendor's `hardware.launch.py` starts RViz, but
+its config (`einride_mini_truck.rviz`) has no Map display. Add one by hand
+(Displays -> Add -> By topic -> `/map` -> Map) and change Global Options ->
+Fixed Frame from `base_footprint` to `map`. Otherwise the robot stays pinned
+to the screen centre and the world slides under it. That `base_footprint`
+default in `hardware.launch.py` predates the `odom` frame and is now stale.
 
-Also change Global Options -> Fixed Frame from `base_footprint` to `map`.
-`hardware.launch.py` passes `fixed_frame: base_footprint` to the vendor's
-`common.launch.py` because until now hardware had no `odom` frame at all (its
-comment says to change it "in the same commit that starts publishing it" -
-which is this one, in this repo, so that vendor-side default is now stale).
-With the fixed frame left at `base_footprint` the robot stays nailed to the
-centre of the screen and the world slides around underneath it, which makes a
-growing map very hard to read.
-
-WHAT THIS LAUNCH DOES NOT INCLUDE, and why.
-
-  - `localize.launch.py` / Nav2 / docking / mission. Mapping mode and
-    localization mode are mutually exclusive (both publish map->odom), and
-    nothing on the autonomy side should be driving while a human is.
-  - `oak_points_filter`. It feeds Nav2's collision monitor, which is not
-    running here.
+Not included: `localize.launch.py`, Nav2, docking and the mission (mapping and
+localization both publish map->odom, and nothing autonomous should drive while
+a human does), and `oak_points_filter` (it feeds Nav2's collision monitor,
+which is not running).
 """
 
 import os
@@ -182,33 +133,26 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.substitutions import FindPackageShare
 
+
 def generate_launch_description():
+    """Returns odometry, mapping and (by default) AprilTag detection."""
     share = get_package_share_directory('localization')
     mapping_path = os.path.join(share, 'launch', 'mapping.launch.py')
 
     mapping = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(mapping_path))
 
-    # Wheel odometry + gyro fusion (the EKF owns odom -> base_footprint), shared
-    # with full_stack_hardware.launch.py. See hardware_odometry.launch.py and
-    # the docstring above for the caveats.
+    # Wheel odometry and gyro fusion (the EKF owns odom -> base_footprint),
+    # shared with hardware.launch.py.
     hardware_odometry = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(share, 'launch', 'hardware_odometry.launch.py')))
 
-    # AprilTag detection, so one drive both builds the map and captures where
-    # the docks physically are (`ros2 run perception capture_dock_pose`).
-    # perception's launch is found through its share directory at run time and
-    # NOT declared as a package dependency: perception exec_depends on
-    # localization, so the reverse edge would be a cycle colcon refuses to
-    # order.
-    #
-    # The camera is the vendor's: hardware.launch.py already runs it and
-    # publishes /oak/rgb/image_raw (distorted, bgr8) and /oak/rgb/camera_info.
-    # Hence rectify:=true (apriltag_ros ignores distortion) and wall-clock time.
-    # The launch file is located with FindPackageShare so it is resolved only
-    # when the (conditioned) timer fires: `apriltag:=false` then runs without
-    # perception installed.
+    # AprilTag detection, so one drive builds the map and captures dock poses.
+    # Not a declared package dependency: perception already depends on
+    # localization, so that would be a cycle. FindPackageShare resolves it only
+    # when the timer fires, so `apriltag:=false` runs without perception.
+    # The vendor camera publishes distorted /oak/rgb/image_raw, hence rectify.
     apriltag = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare('perception'),
@@ -219,7 +163,7 @@ def generate_launch_description():
         }.items())
 
     return LaunchDescription([
-        # `apriltag:=false` gives the lidar-only run this launch used to be.
+        # `apriltag:=false` gives a lidar-only run.
         DeclareLaunchArgument(
             'apriltag', default_value='true',
             description='Run AprilTag detection (rectified) alongside mapping.'),
@@ -247,9 +191,8 @@ def generate_launch_description():
         hardware_odometry,
         mapping,
 
-        # Staggered: slam_toolbox is busy with its
-        # CONFIGURE/ACTIVATE window in the first seconds and rectify + detect
-        # would compete with it.
+        # Staggered so rectify and detect do not compete with slam_toolbox's
+        # CONFIGURE/ACTIVATE window.
         TimerAction(
             period=5.0,
             actions=[apriltag],
