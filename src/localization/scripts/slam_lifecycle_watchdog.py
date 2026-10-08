@@ -1,26 +1,22 @@
 #!/usr/bin/env python3
-"""Drive and verify a slam_toolbox lifecycle node's transition to `active`.
+"""Drives a slam_toolbox lifecycle node to `active` and verifies it got there.
 
-Why this exists: slam_toolbox's `*_slam_toolbox_node` is a managed lifecycle
-node that processes no scans at all until it is CONFIGUREd and ACTIVATEd. In
-this environment its `change_state` service response is regularly lost -
-the node logs "failed to send response to /slam_toolbox/change_state
-(timeout)" - so anything that waits on that response, or on the state-change
-event that launch derives from it, can hang forever while the node sits in
-`inactive` doing nothing. That failure is silent: the launch looks healthy,
-`/map` is simply never published, and the problem only surfaces when a map
-save comes back empty.
+    slam_lifecycle_watchdog.py [node_name] [timeout_sec]   (/slam_toolbox, 60)
 
-This watchdog is immune to the lost response because it never trusts one. It
-polls `get_state` as the single source of truth and re-issues whatever
-transition the observed state calls for, so a dropped request or a dropped
-response just means the next poll retries. It also makes failure loud: if the
-node has not reached `active` before the deadline it logs an ERROR naming the
-state it got stuck in and exits non-zero, instead of leaving the run to
-silently collect nothing.
+slam_toolbox is a managed lifecycle node that processes no scans until it is
+configured and activated. Here its `change_state` response is often lost ("failed
+to send response to /slam_toolbox/change_state (timeout)"), so anything
+waiting on that response can hang while the node sits `inactive`. The failure
+is silent: launch looks healthy, `/map` is never published, and the problem
+shows up as an empty saved map.
 
-Exit code 0 means the node was observed in `active`. Any non-zero exit means
-mapping is NOT running and the map that results will be empty or partial.
+The watchdog never trusts a response. It polls `get_state` and re-issues the
+transition the observed state calls for, so a dropped request or response
+just means the next poll retries. If the node is not `active` by the deadline
+it logs an ERROR naming the stuck state and exits non-zero.
+
+Exit code 0 means the node was seen `active`. Non-zero means mapping is not
+running and the resulting map will be empty or partial.
 """
 
 import sys
@@ -30,13 +26,13 @@ from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 from rclpy.node import Node
 
-#: States we can act on, mapped to the transition that moves them forward.
+# States we can act on, mapped to the transition that moves them forward.
 _ADVANCE = {
     State.PRIMARY_STATE_UNCONFIGURED: Transition.TRANSITION_CONFIGURE,
     State.PRIMARY_STATE_INACTIVE: Transition.TRANSITION_ACTIVATE,
 }
 
-#: Transitional states - the node is already working, just wait and re-poll.
+# Transitional states: the node is already working, so wait and re-poll.
 _IN_FLIGHT = {
     State.TRANSITION_STATE_CONFIGURING,
     State.TRANSITION_STATE_ACTIVATING,
@@ -44,12 +40,20 @@ _IN_FLIGHT = {
     State.TRANSITION_STATE_DEACTIVATING,
 }
 
-_CALL_TIMEOUT = 5.0  # per service call; a lost response must not hang us
+_CALL_TIMEOUT = 5.0  # Per service call, so a lost response cannot hang us.
 _POLL_PERIOD = 1.0
 
 
 class LifecycleWatchdog(Node):
+    """Polls a lifecycle node and nudges it to `active`."""
+
     def __init__(self, target, deadline):
+        """Initializes the watchdog.
+
+        Args:
+            target: Name of the lifecycle node, e.g. "/slam_toolbox".
+            deadline: Clock time in nanoseconds after which `run` gives up.
+        """
         super().__init__('slam_lifecycle_watchdog')
         self._target = target
         self._deadline = deadline
@@ -57,12 +61,16 @@ class LifecycleWatchdog(Node):
         self._change = self.create_client(ChangeState, f'{target}/change_state')
 
     def _call(self, client, request):
-        """Call a service, returning None rather than blocking forever.
+        """Calls a service, returning None instead of blocking forever.
 
-        A None result is not treated as an error anywhere in this file: the
-        caller simply re-polls. That is the whole point - this environment
-        drops `change_state` responses, and a watchdog that waited on them
-        would reproduce the bug it exists to catch.
+        None is never an error here; callers just re-poll.
+
+        Args:
+            client: Service client.
+            request: Request to send.
+
+        Returns:
+            The response, or None if the service or its response timed out.
         """
         if not client.wait_for_service(timeout_sec=_CALL_TIMEOUT):
             return None
@@ -71,18 +79,24 @@ class LifecycleWatchdog(Node):
         return future.result() if future.done() else None
 
     def current_state(self):
+        """Returns the target's `(state_id, label)`, or `(None, 'unreachable')`."""
         response = self._call(self._get, GetState.Request())
         if response is None:
             return None, 'unreachable'
         return response.current_state.id, response.current_state.label
 
     def request(self, transition_id):
+        """Requests a lifecycle transition; the result is ignored (we re-poll)."""
         req = ChangeState.Request()
         req.transition.id = transition_id
-        self._call(self._change, req)  # result deliberately ignored; we re-poll
+        self._call(self._change, req)
 
     def run(self):
-        """Poll until `active`, nudging the node forward. True iff active."""
+        """Polls until `active`, nudging the node forward.
+
+        Returns:
+            True if the node became active before the deadline.
+        """
         last_label = None
         while rclpy.ok() and self.get_clock().now().nanoseconds < self._deadline:
             state_id, label = self.current_state()
@@ -110,20 +124,19 @@ class LifecycleWatchdog(Node):
         return False
 
     def _sleep(self, seconds):
-        # spin while waiting so service responses that do arrive get handled
+        """Spins for `seconds` so responses that do arrive are handled."""
         end = self.get_clock().now().nanoseconds + int(seconds * 1e9)
         while rclpy.ok() and self.get_clock().now().nanoseconds < end:
             rclpy.spin_once(self, timeout_sec=0.1)
 
 
 def main():
+    """Runs the watchdog and exits 0 if the node became active, else 1."""
     target = sys.argv[1] if len(sys.argv) > 1 else '/slam_toolbox'
     timeout = float(sys.argv[2]) if len(sys.argv) > 2 else 60.0
 
     rclpy.init()
-    # Deliberately the steady system clock: this watches a node's lifecycle,
-    # which happens in wall-clock time and must still time out if /clock stalls
-    # or never starts.
+    # Wall-clock deadline so it still times out if /clock stalls.
     node = LifecycleWatchdog(target, 0)
     node._deadline = node.get_clock().now().nanoseconds + int(timeout * 1e9)
     try:

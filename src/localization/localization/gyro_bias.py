@@ -1,94 +1,82 @@
 """Pure gyro-bias estimation behind `gyro_bias_node.py`.
 
-NOTHING HERE IMPORTS rclpy OR ANY ROS MESSAGE, on purpose - the same split as
-`wheel_odometry.py` versus `wheel_odometry_node.py`, and for the same reason:
-the logic is unit-testable without a ROS graph or a robot (see
+Imports no ROS, so it is unit-testable without a graph or a robot (see
 `localization/test/test_gyro_bias.py`).
 
-WHY THIS EXISTS. `ekf.yaml` takes the robot's turn rate from the chassis gyro
-(ICM-20948) and integrates it into the heading. A gyro reports a small
-constant offset (bias) on top of the true rate - the ICM-20948 datasheet
-allows up to +/-5 deg/s straight out of the box, and it wanders with
-temperature. Integrated, a bias of only 0.1 deg/s is 6 degrees of heading per
-minute, even with the robot parked. robot_localization does not estimate gyro
-bias itself, so it has to be removed before the EKF sees the data.
+`ekf.yaml` takes the turn rate from the chassis gyro (ICM-20948) and
+integrates it into heading. A gyro reads a small constant offset (bias) on
+top of the true rate: up to +/-5 deg/s out of the box per the datasheet, and
+it drifts with temperature. A bias of 0.1 deg/s is already 6 degrees of
+heading per minute while parked, and robot_localization does not estimate it.
 
-HOW. The wheels tell us when the robot is standing still, and a gyro on a
-robot that is standing still should read zero - so whatever it reads then IS
-the bias. Two phases:
+A gyro on a standing-still robot should read zero, so whatever it reads then
+is the bias. The wheels say when the robot is still. Two phases:
 
-  - STARTUP CALIBRATION: the first `startup_sec` seconds of standing still are
-    averaged with equal weight. That converges fast and gives a usable bias
-    before anyone drives.
-  - ZERO-VELOCITY UPDATES: after that, every standing-still sample nudges the
-    bias with an exponential moving average of time constant `time_constant`,
-    so it follows slow temperature drift without reacting to noise.
+  - Startup calibration: the first `startup_sec` seconds of standing still
+    are averaged with equal weight.
+  - Zero-velocity updates: afterwards each standing-still sample nudges the
+    bias through an exponential moving average with time constant
+    `time_constant`, following slow drift without reacting to noise.
 
 While the robot moves, the bias is held and only subtracted.
 
-WHAT COUNTS AS STANDING STILL. Neither side's accumulated encoder angle has
-moved more than `still_angle_epsilon` from where it was at least `still_hold`
-seconds ago. Measured against an anchor, not sample to sample, so very slow
-motion still accumulates past the threshold. On hardware one encoder count is
-a whole centimetre (see `wheel_odometry.py`'s ENCODER UNIT CALIBRATION note),
-far above the threshold, so any count change is motion.
+Standing still means neither side's accumulated encoder angle has moved more
+than `still_angle_epsilon` from where it was at least `still_hold` seconds
+ago. The anchor comparison means very slow motion still accumulates past the
+threshold. One hardware encoder count is a whole centimetre, far above the
+threshold, so any count change is motion.
 
-GUARDS. A standing-still sample is still refused when:
+A standing-still sample is still refused when:
 
-  - the encoder data is older than `encoder_timeout` at the gyro's stamp - no
-    fresh encoders means we do not actually know the robot is still;
+  - the encoder data is older than `encoder_timeout` at the gyro's stamp, or
   - the reading is implausible for a parked robot (`max_startup_rate` before
-    calibration, `max_still_rate` away from the current bias after it) -
-    someone bumping or lifting the robot is not bias.
+    calibration, `max_still_rate` from the bias after it), e.g. the robot
+    was bumped or lifted.
 
-ONLY THE z AXIS. `ekf.yaml` runs in `two_d_mode` and fuses only yaw rate, so
-roll and pitch rate biases would change nothing downstream.
+Only the z axis is handled: `ekf.yaml` runs in `two_d_mode` and fuses only
+yaw rate.
 """
 
 from dataclasses import dataclass
 
-#: Largest encoder-angle change, in radians, still treated as not moving.
-#: On hardware one count is 0.01 m / 0.040 m = 0.25 rad, so this can never
-#: hide a real count.
+#: Largest encoder-angle change (rad) treated as not moving. One hardware
+#: count is 0.25 rad, so this never hides a real count.
 STILL_ANGLE_EPSILON_RAD = 1e-3
 
-#: How long the encoders must have been still, in seconds, before gyro
-#: samples count as bias. Covers the robot settling after it stops.
+#: Seconds the encoders must be still before gyro samples count as bias.
 STILL_HOLD_SEC = 0.5
 
 #: Seconds of standing-still data averaged before the bias is "calibrated".
 STARTUP_CALIBRATION_SEC = 2.0
 
-#: Time constant, in seconds, of the moving average used after calibration.
-#: Long compared with noise (2.62e-3 rad/s per sample), short compared with
-#: thermal drift (minutes).
+#: Time constant (s) of the post-calibration moving average: long against
+#: noise (2.62e-3 rad/s per sample), short against thermal drift (minutes).
 BIAS_TIME_CONSTANT_SEC = 30.0
 
-#: Oldest encoder sample, in seconds before the gyro stamp, that still vouches
-#: for the robot standing still. Encoders run near 80 Hz on hardware.
+#: Oldest encoder sample (s before the gyro stamp) that still vouches for
+#: standing still. Encoders run near 80 Hz.
 ENCODER_TIMEOUT_SEC = 0.2
 
-#: During startup calibration: largest |rate| accepted as bias, rad/s. Above
-#: the ICM-20948's worst-case +/-5 deg/s (0.087 rad/s) zero-rate offset.
+#: Largest |rate| (rad/s) accepted as bias during calibration; above the
+#: ICM-20948's worst-case +/-5 deg/s (0.087 rad/s) offset.
 MAX_STARTUP_RATE_RADPS = 0.2
 
-#: After calibration: largest |rate - bias| accepted as bias, rad/s. About 8
-#: sigma of the gyro's per-sample noise.
+#: Largest |rate - bias| (rad/s) accepted after calibration; about 8 sigma of
+#: per-sample noise.
 MAX_STILL_RATE_RADPS = 0.02
 
-#: Longest gap between gyro samples that is counted towards calibration time
-#: or used as an averaging step, in seconds. Keeps a stalled stream from
-#: looking like seconds of calibration data.
+#: Longest gyro gap (s) counted as calibration time or an averaging step, so
+#: a stalled stream does not look like seconds of data.
 MAX_GYRO_GAP_SEC = 0.1
 
 
 @dataclass(frozen=True)
 class Correction:
-    """What one gyro sample did.
+    """The result of one gyro sample.
 
     Attributes:
-        rate: the bias-corrected yaw rate, rad/s.
-        bias: the bias that was subtracted, rad/s.
+        rate: Bias-corrected yaw rate, rad/s.
+        bias: Bias that was subtracted, rad/s.
         used_for_bias: True if this sample updated the bias.
     """
 
@@ -98,10 +86,10 @@ class Correction:
 
 
 class GyroBias:
-    """Estimates and removes the gyro's yaw-rate bias. See the module docstring.
+    """Estimates and removes the gyro's yaw-rate bias.
 
-    Stateful but ROS-free: the node hands it encoder samples and gyro samples,
-    each with its own header stamp in seconds.
+    Stateful but ROS-free: the node feeds it encoder and gyro samples, each
+    with its header stamp in seconds. See the module docstring.
     """
 
     def __init__(self,
@@ -113,6 +101,21 @@ class GyroBias:
                  max_startup_rate=MAX_STARTUP_RATE_RADPS,
                  max_still_rate=MAX_STILL_RATE_RADPS,
                  max_gyro_gap=MAX_GYRO_GAP_SEC):
+        """Initializes the estimator; defaults are the module constants.
+
+        Args:
+            still_angle_epsilon: Encoder angle change, rad, still counted as not moving.
+            still_hold: Seconds the encoders must be still before samples count.
+            startup_sec: Seconds of still data averaged before calibration.
+            time_constant: Seconds, of the moving average after calibration.
+            encoder_timeout: Oldest encoder sample, s, that still vouches.
+            max_startup_rate: Largest |rate| accepted during calibration, rad/s.
+            max_still_rate: Largest |rate - bias| accepted afterwards, rad/s.
+            max_gyro_gap: Longest gyro gap, s, counted as a sample interval.
+
+        Raises:
+            ValueError: If `time_constant` or `startup_sec` is not positive.
+        """
         if time_constant <= 0.0:
             raise ValueError(
                 'time_constant must be > 0, got {}'.format(time_constant))
@@ -130,28 +133,34 @@ class GyroBias:
 
         self._bias = 0.0
         self._calibrated = False
-        #: Startup averaging: sum of rate * dt and of dt over still samples.
+        # Startup averaging: sum of rate * dt and of dt over still samples.
         self._startup_weighted_sum = 0.0
         self._startup_time = 0.0
-        #: `(stamp, left, right)` where the encoders last moved, or None.
+        # (stamp, left, right) where the encoders last moved, or None.
         self._still_anchor = None
-        #: Stamp of the newest encoder sample, or None.
+        # Stamp of the newest encoder sample, or None.
         self._last_encoder_stamp = None
-        #: Stamp of the previous gyro sample, or None.
+        # Stamp of the previous gyro sample, or None.
         self._last_gyro_stamp = None
 
     @property
     def bias(self):
-        """Current bias estimate, rad/s. 0.0 until data arrives."""
+        """Returns the current bias estimate in rad/s; 0.0 until data arrives."""
         return self._bias
 
     @property
     def calibrated(self):
-        """True once `startup_sec` of standing-still data has been averaged."""
+        """Returns True once `startup_sec` of still data has been averaged."""
         return self._calibrated
 
     def add_encoders(self, stamp_sec, left_angle, right_angle):
-        """Fold in one encoder sample: accumulated per-side angles, radians."""
+        """Adds one encoder sample.
+
+        Args:
+            stamp_sec: Sample header stamp, seconds.
+            left_angle: Accumulated left-side angle, radians.
+            right_angle: Accumulated right-side angle, radians.
+        """
         if (self._last_encoder_stamp is not None
                 and stamp_sec <= self._last_encoder_stamp):
             return
@@ -164,7 +173,7 @@ class GyroBias:
             self._still_anchor = (stamp_sec, left_angle, right_angle)
 
     def is_still(self, stamp_sec):
-        """True if the encoders vouch for the robot standing still at `stamp_sec`."""
+        """Returns True if the encoders vouch for standing still at `stamp_sec`."""
         if self._still_anchor is None or self._last_encoder_stamp is None:
             return False
         if stamp_sec - self._last_encoder_stamp > self.encoder_timeout:
@@ -172,15 +181,15 @@ class GyroBias:
         return self._last_encoder_stamp - self._still_anchor[0] >= self.still_hold
 
     def correct(self, stamp_sec, rate):
-        """Fold in one gyro yaw-rate sample and return it bias-corrected.
+        """Adds one gyro yaw-rate sample and corrects it.
 
         Args:
-            stamp_sec: the sample's header stamp, seconds.
-            rate: measured yaw rate, rad/s.
+            stamp_sec: Sample header stamp, seconds.
+            rate: Measured yaw rate, rad/s.
 
         Returns:
-            A `Correction`. The bias is updated first, so a standing-still
-            sample is corrected with the estimate it just contributed to.
+            A `Correction`. The bias is updated first, so a still sample is
+            corrected with the estimate it just contributed to.
         """
         previous = self._last_gyro_stamp
         if previous is not None and stamp_sec <= previous:
@@ -204,7 +213,7 @@ class GyroBias:
         return Correction(rate - self._bias, self._bias, used)
 
     def _plausible(self, rate):
-        """Whether a standing-still reading could really be bias."""
+        """Returns whether a standing-still reading could be bias."""
         if self._calibrated:
             return abs(rate - self._bias) <= self.max_still_rate
         return abs(rate) <= self.max_startup_rate

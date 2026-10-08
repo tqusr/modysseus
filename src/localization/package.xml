@@ -7,35 +7,29 @@
   <maintainer email="albin@stenboda.se">Albin</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <!-- Only so localization/ installs as an importable Python package; see
-       CMakeLists.txt. The build type stays ament_cmake. -->
+  <!-- Installs localization/ as an importable Python package (see CMakeLists.txt). -->
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <depend>robot_localization</depend>
   <depend>slam_toolbox</depend>
   <exec_depend>laser_filters</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
-  <!-- wheel_odometry_node.py: it consumes sensor_msgs/JointState, publishes
-       nav_msgs/Odometry, and broadcasts geometry_msgs/TransformStamped
-       through tf2_ros. numpy only for its constant covariance arrays, which
-       is the generated setter's fast path at ~80 Hz. -->
+  <!-- wheel_odometry_node.py: consumes JointState, publishes Odometry and
+       broadcasts TransformStamped via tf2_ros. numpy is only for its constant
+       covariance arrays. -->
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <test_depend>ament_cmake_pytest</test_depend>
-  <!-- NOT declared: a dependency on `perception`, even though
-       mapping_mission_hardware.launch.py includes its apriltag.launch.py. perception
-       already exec_depends on localization (its docking.launch.py runs
-       `ros2 run localization slam_lifecycle_watchdog.py`), so the reverse edge
-       would be a circular dependency colcon refuses to order. Both packages
-       live in this one workspace, so the include resolves at runtime; a
-       missing perception is reported by launch as a plain
-       PackageNotFoundError.
-       mapping_mission_hardware.launch.py also tells the operator to run
-       teleop_twist_keyboard, which is a separate process in its own terminal
-       and not launched from here, hence not a dependency either. -->
+  <!-- Not declared: a dependency on `perception`, though
+       mapping_mission_hardware.launch.py includes its apriltag.launch.py.
+       perception already depends on localization (docking.launch.py runs
+       slam_lifecycle_watchdog.py), so the reverse edge would be a cycle. Both
+       live in this workspace, so the include resolves at runtime; if perception
+       is missing, launch reports PackageNotFoundError. teleop_twist_keyboard is
+       likewise a separate process and not a dependency. -->
   <export>
     <build_type>ament_cmake</build_type>
   </export>

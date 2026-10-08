@@ -1,33 +1,28 @@
 #!/usr/bin/env python3
-"""Publish `/imu/corrected`: `/imu` with the gyro's yaw-rate bias removed.
+"""Publishes `/imu/corrected`: `/imu` with the gyro's yaw-rate bias removed.
 
     ros2 run localization gyro_bias_node.py
 
-The EKF (`ekf.yaml`, `imu0: imu/corrected`) takes the robot's turn rate from
-this topic. ALL the logic lives in `localization.gyro_bias`, which imports no
-ROS and is unit-tested without a ROS graph; read that module's docstring for
-how the bias is estimated and when a sample is trusted. This node only
-subscribes, calls in there, and republishes.
+The EKF (`ekf.yaml`, `imu0: imu/corrected`) takes the turn rate from this
+topic. All logic is in `localization.gyro_bias` (ROS-free, unit-tested); this
+node subscribes, calls in there and republishes.
 
-KEEP THE ROBOT STILL FOR THE FIRST FEW SECONDS. The startup calibration needs
-`startup_calibration` seconds of standing still (plus `still_hold` to settle).
-The node logs "gyro bias calibrated" when it is done. Driving earlier is not
-fatal - the bias keeps whatever partial estimate it has and finishes
-calibrating at the next stop - but the heading drifts faster until then.
+Keep the robot still for the first few seconds. Startup calibration needs
+`startup_calibration` seconds of standing still plus `still_hold` to settle,
+and the node logs "gyro bias calibrated" when done. Driving earlier is not
+fatal (calibration finishes at the next stop) but heading drifts faster until
+then.
 
-WHAT IS CHANGED: `angular_velocity.z` only. Everything else in the message,
-including the header stamp and the REP-145 `-1` orientation covariance on
-hardware, is passed through untouched. See the module docstring for why z
-alone.
+Only `angular_velocity.z` changes. Everything else, including the header stamp
+and the REP-145 `-1` orientation covariance, passes through.
 
-QoS. Both inputs are best-effort on hardware (`qos_profile_sensor_data`), and
-a reliable subscription to a best-effort publisher silently receives nothing,
-so the subscriptions are best-effort. The output is published RELIABLE: a
-reliable publisher can serve both reliable and best-effort subscribers, so
-the EKF receives it whatever QoS it asks for.
+QoS: both inputs are best-effort on hardware (`qos_profile_sensor_data`), and
+a reliable subscription to a best-effort publisher receives nothing, so the
+subscriptions are best-effort. The output is reliable, which serves both
+reliable and best-effort subscribers.
 
-use_sim_time IS NOT DECLARED HERE - rclpy declares it itself; the launch file
-sets it. See `wheel_odometry_node.py` for the exception that would follow.
+`use_sim_time` is not declared here: rclpy declares it and the launch file
+sets it (see `wheel_odometry_node.py`).
 """
 
 import rclpy
@@ -44,15 +39,22 @@ from localization.gyro_bias import (BIAS_TIME_CONSTANT_SEC,
                                     STILL_ANGLE_EPSILON_RAD, STILL_HOLD_SEC,
                                     GyroBias)
 
-#: Throttle for repeated warnings, in seconds. Both inputs run near 80 Hz.
+# Throttle for repeated warnings, in seconds (both inputs run near 80 Hz).
 WARN_THROTTLE_SEC = 5.0
 
 
 class GyroBiasNode(Node):
-    """Thin ROS shell around `localization.gyro_bias.GyroBias`."""
+    """Thin ROS shell around `localization.gyro_bias.GyroBias`.
+
+    Parameters:
+        left_joint, right_joint: Joint names in `/wheel_encoders`.
+        still_angle_epsilon, still_hold, startup_calibration, time_constant,
+        encoder_timeout, max_startup_rate, max_still_rate: See
+            `localization.gyro_bias.GyroBias`.
+    """
 
     def __init__(self, **kwargs):
-        # kwargs reach rclpy.node.Node, so a test can pass parameter_overrides.
+        """Initializes the node; `kwargs` go to `Node` (e.g. parameter_overrides)."""
         super().__init__('gyro_bias_node', **kwargs)
 
         self.declare_parameter('left_joint', 'left_up_wheel_link_joint')
@@ -78,8 +80,8 @@ class GyroBiasNode(Node):
             max_still_rate=p('max_still_rate').value,
         )
         self._announced_calibration = False
-        #: Stamp of the first IMU message, so the warning below stays quiet
-        #: during the settling window when "not still yet" is expected.
+        # Stamp of the first IMU message; keeps the warning below quiet while
+        # the robot is expected to still be settling.
         self._first_imu_stamp = None
 
         self._imu_pub = self.create_publisher(Imu, 'imu/corrected', 10)
@@ -95,13 +97,13 @@ class GyroBiasNode(Node):
                 self._estimator.still_hold + self._estimator.startup_sec))
 
     def _on_encoders(self, msg):
+        """Feeds the estimator one encoder sample."""
         names = list(msg.name)
         if self._left_joint in names and self._right_joint in names:
             left = names.index(self._left_joint)
             right = names.index(self._right_joint)
         else:
-            # Same fallback, and same documented wire order, as
-            # wheel_odometry_node.py: left first, then right.
+            # Documented wire order, as in wheel_odometry_node.py.
             left, right = 0, 1
         if max(left, right) >= len(msg.position):
             self.get_logger().warning(
@@ -114,6 +116,7 @@ class GyroBiasNode(Node):
             msg.position[left], msg.position[right])
 
     def _on_imu(self, msg):
+        """Republishes an IMU message with the bias removed from yaw rate."""
         stamp = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
         if self._first_imu_stamp is None:
             self._first_imu_stamp = stamp
@@ -137,6 +140,7 @@ class GyroBiasNode(Node):
 
 
 def main(args=None):
+    """Runs the node until interrupted."""
     rclpy.init(args=args)
     node = None
     try:

@@ -1,39 +1,35 @@
 # Real-robot calibration for wheel_odometry_node, loaded by
-# mapping_mission_hardware.launch.py. THIS FILE is the one place to change the
-# robot's calibration; the constants in localization/wheel_odometry.py are only
-# the node's code defaults (and what the unit tests use) - keep them in step.
-# (Not the vendor's einride_mini_truck_hardware/config/hardware.yaml.)
+# hardware_odometry.launch.py. This is the one place to change it; the
+# constants in localization/wheel_odometry.py are code defaults and what the
+# tests use, so keep them in step. (Not the vendor's hardware.yaml.)
 wheel_odometry_node:
   ros__parameters:
     # Wheel radius in metres, from model.sdf and the vendor driver's own
     # wheel_radius; /wheel_encoders position is radians = MCU cm / this.
     wheel_radius: 0.040
 
-    # EFFECTIVE wheel separation in metres, NOT the geometric track (0.17452).
-    # Measured on the real robot: 5 clockwise turns in place on the arena
-    # floor gave dL=+16025, dR=-16050 units, so |dR-dL| = 12.830 m over
-    # 5*2*pi rad -> 0.4084 m (scrub factor 2.340). SINGLE clockwise run; a
-    # counter-clockwise run is still to do, to average. Raise it if the map
-    # comes out under-rotated, lower it if over-rotated.
+    # Effective separation in metres, not the geometric track (0.17452).
+    # Measured: 5 clockwise in-place turns gave dL=+16025, dR=-16050 units, so
+    # |dR-dL| = 12.830 m over 5*2*pi rad -> 0.4084 m (scrub factor 2.340).
+    # Single clockwise run; average in a counter-clockwise one. Raise it if the
+    # map is under-rotated, lower it if over-rotated.
     wheel_separation: 0.4084
 
-    # Centimetre-to-metre correction: the MCU counts are whole centimetres,
-    # though the vendor labels them metres. Confirmed by driving ~2.00 m,
-    # which gave a 201-count average delta (~1 cm per count).
+    # Centimetres to metres: the MCU counts whole centimetres, though the
+    # vendor labels them metres (a ~2.00 m drive gave 201 counts).
     encoder_scale: 0.01
 
-# wheel_drive_node: T:1 left/right wheel speeds from a Twist. The robot's only
-# drive path; see scripts/wheel_drive_node.py.
+# wheel_drive_node: T:1 left/right wheel speeds from a Twist; the robot's only
+# drive path (see scripts/wheel_drive_node.py).
 wheel_drive_node:
   ros__parameters:
     port: /dev/ugv02
     baud: 115200
-    # Keep equal to wheel_odometry_node's wheel_separation above: the
-    # controller and the odometry share one calibration.
+    # Keep equal to wheel_odometry_node's: one shared calibration.
     wheel_separation: 0.4084
     # 0 = unlimited. The MCU's real ceiling is unmeasured.
     max_wheel_speed: 0.0
-    # 0 = unlimited: the node passes Nav2's angular velocity through unchanged.
+    # 0 = unlimited: Nav2's angular velocity passes through unchanged.
     max_angular_velocity: 0.0
     cmd_timeout: 0.5
     send_rate: 20.0

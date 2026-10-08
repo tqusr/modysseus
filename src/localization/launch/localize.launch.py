@@ -1,67 +1,39 @@
-"""Run slam_toolbox in localization mode against the saved arena pose graph.
+"""Runs slam_toolbox in localization mode against the saved arena pose graph.
 
-The long-running counterpart to mapping.launch.py: instead of building a map,
-it loads the one built earlier (src/localization/maps/<map>, default
-`arena_real`) and relocalizes the robot against it, publishing `map -> odom`
-(which, combined with the EKF's `odom -> base_footprint` and the static
-`base_footprint -> base_link`, makes `map -> base_link` resolve too).
+The long-running counterpart to `mapping.launch.py`: it loads the map built
+earlier (`src/localization/maps/<map>`, default `arena_real`) and relocalizes
+against it, publishing `map -> odom`.
 
-MAP FORMAT - read this before pointing this at a different saved map.
+Map format: `map_file_name` is not the nav2_map_server pair (<map>.yaml and
+<map>.pgm). slam_toolbox's localization mode loads a serialized pose graph,
+`<map>.posegraph` plus `<map>.data` (an internal karto format). Without them
+on_configure fails to load a map and the node does nothing useful, which is
+easy to mistake for the lifecycle race below.
 
-`map_file_name` here is NOT the nav2_map_server occupancy-grid pair
-(<map>.yaml/<map>.pgm) that map_saver_cli produces. slam_toolbox's
-own `mode: localization` loads a SERIALIZED POSE GRAPH instead, which it reads
-as "<map_file_name>.posegraph" + "<map_file_name>.data" - a different,
-slam_toolbox-internal (karto) format. Without <map>.posegraph/<map>.data,
-on_configure fails to load a map and this node will not do anything useful -
-easy to mistake for the lifecycle-activation race below if you don't check
-for it first.
+When re-mapping the arena, regenerate both pairs from the same live mapping
+run: `<map>.yaml` and `<map>.pgm` (map_saver_cli) and `<map>.posegraph` and
+`<map>.data` (serialize_map). Call both save services back-to-back on the one
+running slam_toolbox. The Nav2 costmap loads `<map>.yaml` while this launch
+loads `<map>.posegraph`, and with `do_loop_closing: false` two independent
+mapping passes drift differently, so the two would disagree on the world
+geometry with no check to catch it.
 
-THE RULE, if you ever re-map the arena: regenerate `<map>.yaml`/`<map>.pgm`
-(map_saver_cli) AND `<map>.posegraph`/`<map>.data` (serialize_map) from the SAME live mapping
-run, before tearing anything down - call both save services back-to-back
-against the one running slam_toolbox instance that just finished driving the
-arena. Never update one pair without the other. They are two different
-projections of the same pose graph, so a four-way byte-identical-run
-guarantee is what makes a downstream consumer (the Nav2 costmap loads
-<map>.yaml while this launch's localizer loads <map>.posegraph) see the same
-world geometry from both. Regenerating one pair from a fresh, independent
-mapping run while leaving the other pair in place silently reintroduces two
-copies of the arena that only agree by coincidence of start pose - with
-`do_loop_closing: false` (no global consistency correction), two independent
-passes drift differently even from an identical start, and nothing in either
-format's own self-consistency check (TF tree resolves, pixel grid looks
-sane) can detect that kind of cross-artifact disagreement.
+Lifecycle: same problem and fix as `mapping.launch.py` (see its docstring).
+slam_toolbox's `change_state` response is often lost, so
+`slam_lifecycle_watchdog.py` polls `get_state`, re-issues transitions and
+fails loudly if the node is not `active` in time. It is mode-agnostic, so it
+works unchanged here. Like mapping, this uses the synchronous node
+(`localization_slam_toolbox_node`).
 
-LIFECYCLE - identical reasoning and fix as mapping.launch.py; read that
-file's docstring for the full history. Short version: `*_slam_toolbox_node`
-is a managed lifecycle node that processes no scans until CONFIGUREd and then
-ACTIVATEd, and in this environment the node's `change_state` response is
-regularly lost, so anything that waits on that response (the vendor's own
-`localization_launch.py` included) or on the state-change event launch
-derives from it can leave the node silently stuck `inactive` forever. The fix
-here is the same `slam_lifecycle_watchdog.py` used for mapping: it polls
-`get_state` directly, re-issues whatever transition the observed state calls
-for without ever waiting on a `change_state` response, and fails loudly (ERROR
-log + non-zero exit) if the node does not reach `active` within the timeout.
-The watchdog script is mode-agnostic - it only drives generic lifecycle
-states by node name, so the exact same script works unmodified here.
+Everything runs on wall-clock time. The `map` argument (default `arena_real`)
+names the saved pose graph.
 
-Also uses `sync_slam_toolbox_node`'s localization counterpart
-(`localization_slam_toolbox_node`) rather than the async variant, for the
-same reason as mapping.launch.py.
-
-Everything runs on wall-clock time. The `map` launch argument (default
-`arena_real`) names the saved pose graph.
-
-START POSE. `map_start_pose` ("x, y, yaw" in the map frame, metres and
-radians; default "0.0, 0.0, 0.0", the pose graph's origin) is REQUIRED by
-slam_toolbox to load the graph at all: with neither `map_start_pose` nor
-`map_start_at_dock` set, localization mode logs "Map starting pose not
-specified", skips the load and still activates with an EMPTY graph. It is only
-the seed: the scan matcher captures about +-20 degrees of heading, so when the
-robot does not start at the given pose either pass its real pose here or
-correct it once active with `/initialpose` (RViz "2D Pose Estimate").
+Start pose: `map_start_pose` ("x, y, yaw" in the map frame in m and rad,
+default "0.0, 0.0, 0.0", the graph's origin) is required, otherwise
+slam_toolbox logs "Map starting pose not specified", skips the load and
+activates with an empty graph. It is only a seed: the scan matcher captures
+about +-20 degrees of heading. If the robot starts elsewhere, pass its real
+pose or correct it once active with `/initialpose` (RViz "2D Pose Estimate").
 """
 
 import os
@@ -80,17 +52,22 @@ from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
-#: Generous: it only bounds how long we wait before declaring the run dead,
-#: and a heavily loaded machine can take a while to initialise Ceres.
+# Generous: bounds the wait before declaring the run dead; a loaded machine
+# can take a while to initialise Ceres.
 ACTIVATION_TIMEOUT = 60.0
 
 
 def _require_pose_graph(map_file_name):
-    """Fail at launch if the pose graph is missing.
+    """Raises if the pose graph is missing.
 
-    slam_toolbox only logs "Failed to read file" for a missing graph, still
-    configures successfully and the watchdog then reports localization live,
-    so Nav2 and the mission would run against an empty map.
+    slam_toolbox only logs "Failed to read file" and still activates, so Nav2
+    and the mission would otherwise run against an empty map.
+
+    Args:
+        map_file_name: Pose graph path without extension.
+
+    Raises:
+        RuntimeError: If `<map>.posegraph` or `<map>.data` does not exist.
     """
     missing = [path for path in (map_file_name + '.posegraph', map_file_name + '.data')
                if not os.path.exists(path)]
@@ -102,7 +79,17 @@ def _require_pose_graph(map_file_name):
 
 
 def _parse_start_pose(text):
-    """"x, y, yaw" (brackets and spaces optional) -> [x, y, yaw] as floats."""
+    """Parses "x, y, yaw" (brackets and spaces optional).
+
+    Args:
+        text: The pose text.
+
+    Returns:
+        `[x, y, yaw]` as floats.
+
+    Raises:
+        RuntimeError: If `text` is not three numbers.
+    """
     parts = text.strip().strip('[]').replace(',', ' ').split()
     try:
         pose = [float(part) for part in parts]
@@ -115,6 +102,7 @@ def _parse_start_pose(text):
 
 
 def _launch_nodes(context):
+    """Returns the scan filter, slam_toolbox and the activation machinery."""
     # A bool, not text: rclpy declares `use_sim_time` as a bool.
     use_sim_time = False
     share = get_package_share_directory('localization')
@@ -125,8 +113,7 @@ def _launch_nodes(context):
     map_start_pose = _parse_start_pose(
         LaunchConfiguration('map_start_pose').perform(context))
 
-    # Removes the robot's own antennas from /scan; slam_toolbox reads the
-    # result. See config/scan_filter.yaml.
+    # Removes the robot's antennas from /scan (config/scan_filter.yaml).
     scan_filter = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
@@ -157,7 +144,7 @@ def _launch_nodes(context):
             transition_id=transition_id,
         ))
 
-    # Fast path: react to the real transition the instant it is observed.
+    # Fast path: activate as soon as the transition is observed.
     activate_on_configured = RegisterEventHandler(OnStateTransition(
         target_lifecycle_node=slam_node,
         start_state='configuring',
@@ -165,7 +152,7 @@ def _launch_nodes(context):
         entities=[change_state(Transition.TRANSITION_ACTIVATE)],
     ))
 
-    # Authority: polls get_state, retries as needed, and fails loudly.
+    # Authority: polls get_state, retries and fails loudly.
     watchdog = ExecuteProcess(
         cmd=['ros2', 'run', 'localization', 'slam_lifecycle_watchdog.py',
              '/slam_toolbox', str(ACTIVATION_TIMEOUT)],
@@ -194,6 +181,7 @@ def _launch_nodes(context):
 
 
 def generate_launch_description():
+    """Declares `map` and `map_start_pose`, then launches the nodes."""
     return LaunchDescription([
         DeclareLaunchArgument(
             'map', default_value='arena_real',

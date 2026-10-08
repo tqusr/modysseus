@@ -1,11 +1,11 @@
-"""Wheel-speed drive for the real robot: its only drive path.
+"""Wheel-speed drive for the real robot, its only drive path.
 
     ros2 launch localization wheel_drive.launch.py
 
 Starts `wheel_drive_node`, which turns `cmd_vel_ctrl` into `T:1` left/right
-wheel speeds. Nav2 ends in `cmd_vel_ctrl` (navigation.launch.py). Read
-`scripts/wheel_drive_node.py`: it is a second writer on the serial port next
-to the vendor driver.
+wheel speeds. Nav2 ends in `cmd_vel_ctrl` (navigation.launch.py). See
+`scripts/wheel_drive_node.py`: it is a second serial writer next to the vendor
+driver.
 """
 
 import os
@@ -17,6 +17,7 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    """Returns `wheel_drive_node` with the hardware calibration."""
     share = get_package_share_directory('localization')
     return LaunchDescription([
         Node(

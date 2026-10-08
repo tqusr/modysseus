@@ -1,29 +1,25 @@
 """Differential-drive kinematics for the UGV02, run on the Jetson.
 
-No ROS and no serial port in here, so it is unit-tested without either. The
-node that uses it is `scripts/wheel_drive_node.py`.
+No ROS and no serial port, so it is unit-tested without either. The node that
+uses it is `scripts/wheel_drive_node.py`.
 
-WHY THIS EXISTS. The vendor driver sends the MCU a body twist, `{"T":13,"X":..,
-"Z":..}`, and the MCU does the wheel kinematics itself, with a track width we
-cannot see or change. The chassis is a 6-wheel skid-steer, which has to scrub
-its wheels sideways to rotate, so the real yaw rate comes out well below `Z`
-(`wheel_odometry.py` measured the effective separation at 0.4084 m against a
-0.17452 m geometric track: a scrub factor of 2.34). The alternative the MCU
-offers is `{"T":1,"L":..,"R":..}`, a speed for each side, in m/s. This module
-turns (v, w) into that pair using the EFFECTIVE separation, so a commanded
-yaw rate is what the robot does.
+The vendor driver sends the MCU a body twist (`{"T":13,"X":..,"Z":..}`) and
+the MCU applies its own track width, which we cannot see or change. The
+6-wheel skid-steer scrubs sideways to turn, so the real yaw rate is well
+below `Z` (`wheel_odometry.py` measured an effective separation of 0.4084 m
+against a 0.17452 m geometric track). This module instead turns (v, w) into
+the per-side speeds of `{"T":1,"L":..,"R":..}` (m/s) using the effective
+separation, so a commanded yaw rate is what the robot does:
 
     left  = v - w * separation / 2
     right = v + w * separation / 2
 
-This is the same maths `diff_drive_controller` runs. That package is a
-ros2_control plugin and needs a controller manager and a hardware interface;
-neither is installed or worth adding for two numbers, so the kinematics are
-here and the serial write is in the node.
+This is the `diff_drive_controller` maths, without its ros2_control
+dependencies.
 
-`separation` is read from `config/hardware.yaml`, the single place the robot's
-turn calibration lives, so the odometry and this controller cannot disagree.
-It is a single clockwise measurement; see that file.
+`separation` comes from `config/hardware.yaml`, the single place the turn
+calibration lives, so odometry and drive cannot disagree. It is a single
+clockwise measurement.
 """
 
 import json
@@ -35,18 +31,25 @@ CMD_WHEELS_TYPE = 1
 
 def twist_to_wheels(linear, angular, separation, max_wheel_speed=0.0,
                     max_angular=0.0):
-    """Return `(left, right)` wheel speeds in m/s for a body twist.
+    """Converts a body twist to wheel speeds.
 
-    If `max_angular` is positive, |angular| is clamped to it first. That caps
-    how fast the robot may turn without touching how fast it may drive, which
-    a wheel-speed limit cannot do: a pivot needs only about 0.15 m/s per side
-    at 0.75 rad/s, far under any limit that still lets it drive straight.
+    A positive `max_angular` caps turn rate without limiting drive speed,
+    which a wheel-speed limit cannot do. A positive `max_wheel_speed` scales
+    both sides by the same factor when either exceeds it, so the robot keeps
+    its curve and only slows down.
 
-    If `max_wheel_speed` is positive and either side would exceed it, both are
-    scaled down by the same factor. That keeps the ratio of the two sides, so
-    the robot follows the same curve more slowly instead of a flatter one, which
-    is what `diff_drive_controller` does too. Clamping each side on its own
-    would turn a hard turn into a gentler one.
+    Args:
+        linear: Forward speed in m/s.
+        angular: Yaw rate in rad/s.
+        separation: Effective wheel separation in m.
+        max_wheel_speed: Per-side speed limit in m/s; 0 disables it.
+        max_angular: Yaw-rate limit in rad/s; 0 disables it.
+
+    Returns:
+        `(left, right)` wheel speeds in m/s.
+
+    Raises:
+        ValueError: If `separation` is not positive.
     """
     if separation <= 0.0:
         raise ValueError('separation must be positive, got {}'.format(separation))
@@ -65,11 +68,19 @@ def twist_to_wheels(linear, angular, separation, max_wheel_speed=0.0,
 
 
 def encode_wheels(left, right):
-    """Encode a `T:1` command line, newline included, ready for the port.
+    """Encodes a `T:1` command line, newline included, ready for the port.
 
-    Raises ValueError for NaN or infinity: `json.dumps` would write the bare
-    tokens `NaN`/`Infinity`, which are not JSON and would desynchronise the
-    MCU's parser. The vendor driver guards `T:13` the same way.
+    Args:
+        left: Left wheel speed in m/s.
+        right: Right wheel speed in m/s.
+
+    Returns:
+        The UTF-8 encoded line.
+
+    Raises:
+        ValueError: If a speed is NaN or infinite. `json.dumps` would write
+            bare `NaN`/`Infinity`, which is not JSON and would desynchronise
+            the MCU's parser.
     """
     left = float(left)
     right = float(right)

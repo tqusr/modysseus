@@ -1,44 +1,34 @@
 #!/usr/bin/env python3
-"""Publish `/odom` and the `odom -> base_footprint` TF from `/wheel_encoders`.
+"""Publishes `/odom` and the `odom -> base_footprint` TF from `/wheel_encoders`.
 
     ros2 run localization wheel_odometry_node.py
 
-This is the robot's odometry source. Before it existed, nothing published a
-dynamic `odom -> base_footprint` transform at all: `mapper_params_hardware.yaml`
-sets `odom_frame: odom`, so slam_toolbox looks that transform up for every
-single scan. The EKF (`ekf.yaml`) fuses this node's `/odom` with the gyro and
-owns the TF edge, so `hardware_odometry.launch.py` runs this node with
-`publish_tf: false`.
+This is the robot's odometry source. slam_toolbox looks up `odom ->
+base_footprint` for every scan (`mapper_params_hardware.yaml`, `odom_frame:
+odom`) and nothing else published it. The EKF (`ekf.yaml`) fuses this node's
+`/odom` with the gyro and owns the TF edge, so `hardware_odometry.launch.py`
+runs this node with `publish_tf: false`.
 
-WHAT CONSUMES WHAT. slam_toolbox does NOT subscribe to `/odom`; it reads the
-TF. So the `TransformBroadcaster` below is the load-bearing half for mapping,
-and the `nav_msgs/Odometry` message is for robot_localization (once the EKF
-phase reaches hardware) and for RViz. Both are published from the same pose
-and with the same stamp, so they can never disagree.
+slam_toolbox reads the TF, not `/odom`, so the TF is the half that matters
+for mapping. `/odom` is for robot_localization and RViz. Both come from the
+same pose and stamp. Two unsynchronised publishers of one TF edge caused a
+TF_OLD_DATA storm before (see `ekf.yaml`).
 
-Two unsynchronised publishers of one TF edge is a failure this project has
-already paid for once - see `ekf.yaml`'s comment on the TF_OLD_DATA storm
-that caused.
+All arithmetic is in `localization.wheel_odometry` (ROS-free, unit-tested).
+Read its docstring before changing anything here: the input contract, the
+position-delta choice, the scrub-corrected `wheel_separation` and its
+calibration, and the unverified forward-positive sign assumption are there.
 
-ALL the arithmetic lives in `localization.wheel_odometry`, which imports no
-ROS and is unit-tested without a ROS graph. Read that module's docstring
-before touching anything here: it is where the input contract, the
-position-deltas-not-velocity decision, the scrub-corrected `wheel_separation`
-and its real-robot spin-in-place calibration, and the still-unverified forward-positive
-sign assumption are all written down.
+Timestamps: each pose carries the encoder sample's header stamp, which the
+vendor driver back-dates by the serial transmission time (~12 ms at 115200
+baud). The TF therefore trails real time slightly, and a scan stamped later
+makes tf2 wait rather than extrapolate; `transform_timeout: 1.0` in
+`mapper_params_hardware.yaml` covers that. Stamping with `now()` would date the
+pose differently from its data.
 
-TIMESTAMPS. Every pose is stamped with the encoder sample's own header stamp,
-which the vendor driver back-dates by the line's serial transmission time
-(~12 ms at 115200 baud). The TF therefore trails real time slightly, so a
-scan stamped later than the newest encoder sample needs tf2 to wait rather
-than extrapolate; `mapper_params_hardware.yaml`'s `transform_timeout: 1.0`
-covers that comfortably. The alternative - stamping with `now()` - would date
-the pose differently from the data it was computed from, which is worse.
-
-use_sim_time IS NOT DECLARED HERE, deliberately. rclpy's own `TimeSource`
-declares it during `Node.__init__`, so declaring it again raises
-`ParameterAlreadyDeclaredException` and the node would not start at all. It is
-set where it belongs, by the launch file, to false.
+`use_sim_time` is not declared here: rclpy declares it in `Node.__init__`, and
+declaring it again raises `ParameterAlreadyDeclaredException`. The launch file
+sets it to false.
 """
 
 import numpy
@@ -59,13 +49,11 @@ from localization.wheel_odometry import (ENCODER_SCALE_FACTOR,
                                          WHEEL_SEPARATION_M, WheelOdometry,
                                          yaw_to_quaternion)
 
-#: How often repeated complaints about the same condition are allowed through,
-#: in seconds. The encoder stream runs near 80 Hz, so an unthrottled warning
-#: would bury every other line in the terminal.
+# Seconds between repeated warnings; the encoder stream runs near 80 Hz.
 WARN_THROTTLE_SEC = 5.0
 
-#: Messages for the `update()` outcomes worth telling the operator about.
-#: `UPDATE_FIRST_SAMPLE` is absent: it happens exactly once and is normal.
+# Operator messages for `update()` outcomes. UPDATE_FIRST_SAMPLE is absent: it
+# happens once and is normal.
 _STATUS_WARNINGS = {
     UPDATE_BACKWARD_TIME: (
         'encoder sample stamped at or before the previous one; skipping it. '
@@ -83,10 +71,22 @@ _STATUS_WARNINGS = {
 
 
 class WheelOdometryNode(Node):
-    """Thin ROS shell around `localization.wheel_odometry.WheelOdometry`."""
+    """Thin ROS shell around `localization.wheel_odometry.WheelOdometry`.
+
+    Parameters:
+        wheel_radius: Wheel radius in m.
+        wheel_separation: Effective, scrub-corrected separation in m.
+        left_joint, right_joint: Joint names in `/wheel_encoders`.
+        odom_frame, base_frame: Frames of the published pose and TF.
+        publish_tf: Whether to broadcast the TF (off when the EKF owns it).
+        max_sample_gap, max_wheel_speed, encoder_scale: See
+            `localization.wheel_odometry.WheelOdometry`.
+        position_stddev, yaw_stddev, linear_velocity_stddev, yaw_rate_stddev:
+            Placeholder standard deviations for the published covariances.
+    """
 
     def __init__(self, **kwargs):
-        # kwargs reach rclpy.node.Node, so a test can pass parameter_overrides.
+        """Initializes the node; `kwargs` go to `Node` (e.g. parameter_overrides)."""
         super().__init__('wheel_odometry_node', **kwargs)
 
         self._declare_parameters()
@@ -113,12 +113,8 @@ class WheelOdometryNode(Node):
 
         self._odom_pub = self.create_publisher(Odometry, 'odom', 10)
         self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
-        # Sensor-data QoS to match the publisher: ugv02_serial_node publishes
-        # /wheel_encoders with qos_profile_sensor_data (best effort), and a
-        # reliable subscription cannot connect to a best-effort publisher at
-        # all. It would not error - it would simply never receive a message,
-        # which is the same silent nothing this project hit with
-        # hardware.launch.py's joint_state_relay, from the opposite direction.
+        # Best-effort like the publisher; a reliable subscription would
+        # silently never receive anything.
         self._encoder_sub = self.create_subscription(
             JointState, 'wheel_encoders', self._on_encoders,
             qos_profile_sensor_data)
@@ -135,46 +131,32 @@ class WheelOdometryNode(Node):
                     self._left_joint, self._right_joint))
 
     def _declare_parameters(self):
-        """Declare every tunable. Nothing in this node is hardcoded."""
+        """Declares every tunable parameter."""
         self.declare_parameter('wheel_radius', WHEEL_RADIUS_M)
-        # The EFFECTIVE, scrub-corrected separation, and a parameter rather
-        # than a constant so it can be re-tuned without a rebuild. The default
-        # is WHEEL_SEPARATION_M, measured on the real robot; see
-        # localization.wheel_odometry's docstring.
+        # Effective, scrub-corrected; a parameter so it can be re-tuned without a rebuild.
         self.declare_parameter('wheel_separation', WHEEL_SEPARATION_M)
 
-        # Spelled as model.sdf and the vendor driver's encoder_joint_names
-        # spell them, left first. Looked up by name so a reordered or extended
-        # JointState cannot silently swap the robot's sides.
+        # As in model.sdf and the vendor driver. Looked up by name so a
+        # reordered JointState cannot swap the sides.
         self.declare_parameter('left_joint', 'left_up_wheel_link_joint')
         self.declare_parameter('right_joint', 'right_up_wheel_link_joint')
 
         # Match mapper_params_hardware.yaml's odom_frame/base_frame.
         self.declare_parameter('odom_frame', 'odom')
         self.declare_parameter('base_frame', 'base_footprint')
-        # Turn this off when something else owns the edge (the EKF does, see
-        # hardware_odometry.launch.py). The /odom topic is published either way.
+        # Off when the EKF owns the TF edge; /odom is published either way.
         self.declare_parameter('publish_tf', True)
 
         self.declare_parameter('max_sample_gap', MAX_SAMPLE_GAP_SEC)
         self.declare_parameter('max_wheel_speed', MAX_WHEEL_SPEED_MPS)
 
-        # Confirmed centimetre-unit correction. Defaults to the correction,
-        # not to 1.0, because this node is the real-hardware odometry source
-        # and without it the pose it publishes is 100x too large - see
-        # localization.wheel_odometry's module docstring ("ENCODER UNIT
-        # CALIBRATION") and ENCODER_SCALE_FACTOR. WheelOdometry itself still
-        # defaults to 1.0 for any other caller (e.g. tests) that does not
-        # expect a hidden scale. Exposed as a parameter, not baked in, so it
-        # can still be overridden - e.g. down to 1.0 to disable it.
+        # Centimetre correction. Defaults on because without it the real
+        # robot's pose is 100x too large; set 1.0 to disable.
         self.declare_parameter('encoder_scale', ENCODER_SCALE_FACTOR)
 
-        # Covariances. These are PLACEHOLDERS, not measurements: nothing has
-        # characterised this chassis's wheel slip yet. They are here because a
-        # published all-zero covariance is worse than an honest guess -
-        # robot_localization takes it literally and treats the pose as exact.
-        # Replace them with measured values when the EKF phase reaches
-        # hardware; until then only RViz reads them.
+        # Placeholder covariances, not measurements: wheel slip is not
+        # characterised yet. All zeros would make robot_localization treat the
+        # pose as exact.
         self.declare_parameter('position_stddev', 0.05)
         self.declare_parameter('yaw_stddev', 0.05)
         self.declare_parameter('linear_velocity_stddev', 0.05)
@@ -182,18 +164,16 @@ class WheelOdometryNode(Node):
 
     @staticmethod
     def _planar_covariance(linear_stddev, angular_stddev):
-        """One constant 6x6 row-major covariance for a planar estimate.
+        """Returns a constant 6x6 row-major covariance for a planar estimate.
 
-        Built once as a `numpy.float64` array rather than a Python list: that
-        is the generated setter's fast path, and assigning a 36-element list
-        costs an element-by-element type check at every one of ~80 messages a
-        second. Sharing one array across messages is safe because it never
-        changes; the messages themselves are built fresh each cycle.
+        A `numpy.float64` array avoids a per-element type check on each of the
+        ~80 messages a second, and sharing it is safe because it never changes.
+        The z, roll and pitch rows stay zero: `two_d_mode` in `ekf.yaml` means
+        nothing here estimates them.
 
-        The out-of-plane rows (z, roll, pitch) are left at zero rather than
-        given a large variance: `two_d_mode` in `ekf.yaml` means no consumer
-        here estimates them, and inventing a number for a quantity this node
-        cannot observe would be the same mistake as inventing a small one.
+        Args:
+            linear_stddev: Standard deviation for x and y.
+            angular_stddev: Standard deviation for yaw.
         """
         covariance = numpy.zeros(36, dtype=numpy.float64)
         covariance[0] = covariance[7] = linear_stddev ** 2   # x, y
@@ -201,16 +181,17 @@ class WheelOdometryNode(Node):
         return covariance
 
     def _side_indices(self, msg):
-        """Locate the left and right entries of a `/wheel_encoders` message.
+        """Locates the left and right entries of a `/wheel_encoders` message.
 
-        By joint name when both configured names are present, which is the
-        case for the vendor driver. Falls back to indices
-        0 and 1 - the documented wire order - with a warning, so an unexpected
-        naming still produces odometry rather than silence, but never silently.
+        Matches by joint name. Otherwise falls back, with a warning, to the
+        documented wire order (indices 0 and 1).
+
+        Args:
+            msg: The `JointState` message.
 
         Returns:
             `(left_index, right_index)`, or None if the message cannot carry
-            two sides at all.
+            two sides.
         """
         positions = len(msg.position)
         if positions < 2:
@@ -236,7 +217,7 @@ class WheelOdometryNode(Node):
         return (0, 1)
 
     def _on_encoders(self, msg):
-        """Integrate one sample and publish the result."""
+        """Integrates one sample and publishes the result."""
         indices = self._side_indices(msg)
         if indices is None:
             return
@@ -244,8 +225,8 @@ class WheelOdometryNode(Node):
 
         stamp = Time.from_msg(msg.header.stamp)
         if stamp.nanoseconds == 0:
-            # A zero stamp would make every dt zero. Say so, because the
-            # symptom otherwise is just a pose that never moves.
+            # A zero stamp makes every dt zero, which would look like a pose
+            # that never moves.
             self.get_logger().warning(
                 '/wheel_encoders header stamp is zero; nothing can be '
                 'integrated. Is a publisher stamping with sim time and '
@@ -264,14 +245,12 @@ class WheelOdometryNode(Node):
                                speed=self._odometry.max_wheel_speed),
                 throttle_duration_sec=WARN_THROTTLE_SEC)
 
-        # Published for every sample, including the ones that could not be
-        # integrated: holding the pose still keeps the TF edge alive, and a
-        # live edge at a stale pose is what lets slam_toolbox fall back on
-        # scan matching instead of failing the lookup outright.
+        # Published even when the sample was not integrated: a live edge at a
+        # held pose lets slam_toolbox scan-match instead of failing the lookup.
         self._publish(msg.header.stamp, update)
 
     def _publish(self, stamp, update):
-        """Publish `update`'s pose as both an Odometry message and a TF."""
+        """Publishes `update`'s pose as an Odometry message and a TF."""
         pose = update.pose
         _, _, qz, qw = yaw_to_quaternion(pose.theta)
 
@@ -303,6 +282,7 @@ class WheelOdometryNode(Node):
 
 
 def main(args=None):
+    """Runs the node until interrupted."""
     rclpy.init(args=args)
     node = None
     try:
@@ -311,8 +291,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        # node stays None if construction itself failed - e.g. a
-        # wheel_separation of 0 - and rclpy still has to be shut down.
+        # node is None if construction failed (e.g. wheel_separation of 0).
         if node is not None:
             node.destroy_node()
         if rclpy.ok():

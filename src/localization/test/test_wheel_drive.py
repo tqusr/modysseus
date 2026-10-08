@@ -1,8 +1,7 @@
-"""Unit tests for localization.wheel_drive -- the pure maths behind
-`ros2 run localization wheel_drive_node.py`. No rclpy, no serial port, no robot.
+"""Unit tests for localization.wheel_drive, the maths behind `wheel_drive_node.py`.
 
-WHAT THESE TESTS CANNOT DO: say what the MCU does with a T:1 line (its units,
-its speed ceiling, whether it has a deadband). That is a hardware check.
+No ROS, serial port or robot. They cannot say what the MCU does with a T:1 line
+(units, speed ceiling, deadband); that is a hardware check.
 """
 
 import json

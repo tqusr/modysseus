@@ -1,43 +1,30 @@
-### ekf_filter_node parameters
+# ekf_filter_node: fuses wheel odometry (/odom) and the bias-corrected gyro
+# (/imu/corrected, from gyro_bias_node) into /odometry/filtered.
+# Plan: docs/superpowers/plans/2026-10-03-imu-wheel-odometry-fusion.md
 #
-# Fuses wheel odometry (/odom) and the bias-corrected chassis gyro
-# (/imu/corrected, from gyro_bias_node) into /odometry/filtered. Plan: docs/superpowers/plans/
-# 2026-10-03-imu-wheel-odometry-fusion.md.
-#
-# WHAT EACH SENSOR CONTRIBUTES. Velocities only; the EKF integrates them into
-# the pose itself.
-#
-#   - Wheels: forward speed (vx) and "no sideways motion" (vy, always 0 for a
+# Fused (velocities only; the EKF integrates them into the pose):
+#   - Wheels: forward speed (vx) and "no sideways motion" (vy = 0 for a
 #     skid-steer). Encoders measure distance well.
-#   - Gyro: turn rate (vyaw), and nothing else. A skid-steer has to scrub its
-#     wheels sideways to turn, so the wheels measure rotation badly; the gyro
-#     does not care about friction. Its slow drift (bias) is removed upstream
-#     by gyro_bias_node, which uses the wheels to tell when the robot is
-#     standing still.
+#   - Gyro: turn rate (vyaw) only. Skid-steer scrub makes the wheels measure
+#     rotation badly. The gyro's drift is removed upstream by gyro_bias_node.
 #
-# WHAT IS DELIBERATELY NOT FUSED, and why:
+# Not fused:
+#   - Wheel pose (x, y, yaw): the integral of the same wheel velocities, so it
+#     counts the wheels twice and its heading would fight the gyro.
+#   - Wheel yaw rate: measured badly, would fight the gyro.
+#   - IMU orientation: the MCU sends raw rates only (REP-145,
+#     orientation_covariance[0] = -1).
+#   - Accelerometer: removing gravity needs the robot's tilt, which is not
+#     available, so tilt would leak into forward acceleration.
 #
-#   - Wheel pose (x, y, yaw). It is the integral of the same wheel velocities,
-#     so fusing both counts the wheels twice, and the wheels' own heading
-#     would fight the gyro's.
-#   - Wheel yaw rate. The wheels measure rotation badly (see above), so it
-#     would fight the gyro.
-#   - IMU orientation. The robot's MCU sends raw rates only
-#     (orientation_covariance[0] = -1, REP-145).
-#   - Accelerometer. Removing gravity needs the robot's tilt, which hardware
-#     does not have, so any tilt leaks gravity into forward acceleration.
+# Clock and TF come from localization.launch.py: use_sim_time false and
+# publish_tf true. This node owns odom->base_footprint, and
+# hardware_odometry.launch.py turns wheel_odometry_node's TF off. Two
+# publishers of one edge cause TF_OLD_DATA warnings and "Failed to meet update
+# rate" errors. slam_toolbox reads this TF.
 #
-# CLOCK AND TF are set by localization.launch.py, not here: use_sim_time is
-# false (wall clock) and publish_tf is true. This node owns
-# odom->base_footprint; hardware_odometry.launch.py turns
-# wheel_odometry_node's own TF off, because two publishers of one TF edge
-# fight (continuous TF_OLD_DATA warnings and cascading "Failed to meet update
-# rate" errors). slam_toolbox reads that TF, so it gets the fused estimate.
-#
-# Frame note: the /odom message has child_frame_id "base_footprint" (not
-# "base_link"), and a static base_footprint->base_link transform is
-# broadcast. base_link_frame is set to base_footprint to match that chain for
-# internal sensor-frame transforms.
+# Frames: /odom has child_frame_id base_footprint (not base_link) and a static
+# base_footprint->base_link is broadcast, so base_link_frame is base_footprint.
 ekf_filter_node:
   ros__parameters:
     frequency: 30.0

@@ -1,12 +1,9 @@
 """Launch-description tests for launch/mapping_mission_hardware.launch.py.
 
-Pins the `apriltag` argument: on (the default) the real-robot mapping run also
-starts AprilTag detection - rectified, on wall-clock time - and off it is the
-lidar-only run it used to be. The launch files are imported and evaluated
-in-process (see perception/test/launch_helpers.py); nothing is started.
-
-Needs `localization` and `perception` built and their install sourced, as the
-launch file locates the perception launch through the share directory.
+Pins the `apriltag` argument: on (the default) the mapping run also starts
+rectified AprilTag detection on wall-clock time, and off it is lidar-only. The
+launch files are evaluated in-process (see perception/test/launch_helpers.py);
+nothing is started. Needs `localization` and `perception` built and sourced.
 """
 
 import importlib.util
@@ -41,11 +38,10 @@ def _description_and_context(**launch_arguments):
 
 
 def _apriltag_timers(description):
-    """The delayed actions that include a launch file.
+    """Returns the delayed actions that include a launch file.
 
-    The included file is not matched by name here: before a launch context
-    evaluates it, an include's `location` is only the repr of its
-    substitutions. The file is asserted on, evaluated, in the tests below.
+    Not matched by name: before evaluation an include's `location` is only the
+    repr of its substitutions, so the tests below assert on the evaluated file.
     """
     return [
         e for e in description.entities

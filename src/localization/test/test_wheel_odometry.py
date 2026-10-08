@@ -1,23 +1,18 @@
-"""Unit tests for localization.wheel_odometry -- the pure maths behind
-`ros2 run localization wheel_odometry_node.py`.
+"""Unit tests for localization.wheel_odometry, the maths behind `wheel_odometry_node.py`.
 
-No rclpy, no tf2, no ROS graph, no robot: every test here is plain
-Python against plain functions, which is the reason that module exists
-separately from the node at all.
+No ROS or robot: plain Python against plain functions, which is why that module
+is separate from the node.
 
-WHAT THESE TESTS CANNOT DO, and it matters. They pin down the kinematics and
-every guard, but they cannot confirm the two things that only the real robot
-can answer:
+They pin down the kinematics and every guard, but cannot confirm what only the
+real robot can answer:
 
-  - that the MCU's `odl`/`odr` increase when the robot drives FORWARD (the
-    sign assumption; see the module docstring), and
+  - that the MCU's `odl`/`odr` increase when driving forward (the sign
+    assumption; see the module docstring), and
   - that `wheel_separation = 0.4084` (one clockwise spin-in-place run) holds
-    for every floor and turn direction, rather than just the one measured.
+    for every floor and turn direction.
 
-Both are listed, with the symptoms to watch for, in this feature's report.
-What the tests do instead is make sure that IF those two inputs are right, the
-pose that comes out is right - so a bad map can be blamed on calibration
-rather than on arithmetic.
+What they do guarantee is that if those two inputs are right, the pose is
+right, so a bad map can be blamed on calibration and not on arithmetic.
 """
 
 import math
@@ -46,12 +41,11 @@ def test_localization_package_importable():
 # --------------------------------------------------------------------------
 
 def test_effective_separation_is_the_geometric_track_times_the_scrub_factor():
-    """Guards the number most likely to be 'corrected' back to the track width.
+    """Guards the number most likely to be "corrected" back to the track width.
 
-    The separation is the geometric 0.17452 x the measured scrub 2.340,
-    rounded to 0.4084. If somebody edits one of
-    the three without the others, this fails rather than quietly changing
-    every turn the robot records.
+    The separation is the geometric 0.17452 times the measured scrub 2.340,
+    rounded to 0.4084. Editing one of the three without the others fails here
+    instead of quietly changing every recorded turn.
     """
     assert GEOMETRIC_TRACK_M * SCRUB_FACTOR == pytest.approx(
         WHEEL_SEPARATION_M, abs=5e-5)
@@ -133,10 +127,10 @@ def test_arc_step_equal_displacements_is_pure_translation():
 
 
 def test_arc_step_right_side_faster_is_positive_yaw():
-    """REP-103: positive yaw is counter-clockwise, i.e. a LEFT turn.
+    """REP-103: positive yaw is counter-clockwise, a left turn.
 
-    The right side travelling further than the left IS a left turn, so this
-    is the test that catches the sides being swapped in `arc_step`.
+    The right side travelling further is a left turn, so this catches the sides
+    being swapped in `arc_step`.
     """
     _, dtheta = arc_step(0.0, 0.1)
     assert dtheta > 0.0
@@ -154,10 +148,10 @@ def test_arc_step_opposite_displacements_is_pure_rotation():
 
 
 def test_arc_step_uses_the_separation_it_is_given():
-    """A wider effective track means the same wheels produce LESS yaw.
+    """A wider effective track means the same wheels produce less yaw.
 
-    Which is the whole point of the scrub correction: the uncorrected
-    geometric track would over-predict the turn.
+    That is the point of the scrub correction: the geometric track would
+    over-predict the turn.
     """
     _, narrow = arc_step(0.0, 0.1, wheel_separation=GEOMETRIC_TRACK_M)
     _, wide = arc_step(0.0, 0.1, wheel_separation=WHEEL_SEPARATION_M)
@@ -187,11 +181,10 @@ def test_advance_rotation_in_place_does_not_translate():
 
 
 def test_advance_quarter_circle_to_the_left_closes_exactly():
-    """One unit-radius quarter turn from the origin must land at (1, 1, pi/2).
+    """A unit-radius quarter turn from the origin must land at (1, 1, pi/2).
 
-    The closed form gets this in a single step; an Euler step would land at
-    (pi/2, 0) - which is the systematic turn error this test exists to keep
-    out.
+    The closed form does it in one step; an Euler step would land at (pi/2, 0),
+    the systematic turn error this keeps out.
     """
     pose = advance(Pose2D(), math.pi / 2.0, math.pi / 2.0)
     assert pose.x == pytest.approx(1.0)
@@ -209,8 +202,8 @@ def test_advance_quarter_circle_to_the_right_mirrors_it():
 def test_advance_one_arc_equals_many_small_ones():
     """Subdividing an arc must not change where it ends.
 
-    The independent check on the closed form: 500 small steps of the same
-    total arc and turn have to agree with one big step.
+    An independent check on the closed form: 500 small steps must agree with one
+    big step over the same arc and turn.
     """
     ds, dtheta = 0.8, 1.1
     whole = advance(Pose2D(), ds, dtheta)
@@ -228,8 +221,8 @@ def test_advance_one_arc_equals_many_small_ones():
 def test_advance_straight_branch_matches_the_arc_branch_at_the_threshold():
     """The epsilon must not introduce a step in the output.
 
-    Just above and just below `STRAIGHT_LINE_EPSILON_RAD` take different code
-    paths, and they have to agree to well within anything measurable.
+    Just above and below `STRAIGHT_LINE_EPSILON_RAD` take different code paths
+    and must agree to well within anything measurable.
     """
     just_curved = advance(Pose2D(), 0.005, 1e-8)
     as_straight = advance(Pose2D(), 0.005, 0.0)
@@ -264,10 +257,8 @@ def test_wheel_odometry_defaults_to_the_robot_the_module_documents():
     assert odometry.wheel_separation == WHEEL_SEPARATION_M
     assert odometry.max_sample_gap_sec == MAX_SAMPLE_GAP_SEC
     assert odometry.max_wheel_speed == MAX_WHEEL_SPEED_MPS
-    # The class itself must stay neutral: the encoder unit correction is
-    # something only wheel_odometry_node.py opts into, not a hidden default
-    # that would surprise a caller constructing WheelOdometry directly (e.g.
-    # these very tests).
+    # The class stays neutral: only wheel_odometry_node.py opts into the unit
+    # correction, so direct callers (like these tests) get no hidden scale.
     assert odometry.encoder_scale == 1.0
 
 
@@ -275,11 +266,10 @@ def test_wheel_odometry_defaults_to_the_robot_the_module_documents():
     (0.0, 0.2), (-0.04, 0.2), (0.04, 0.0), (0.04, -0.2),
 ])
 def test_wheel_odometry_rejects_impossible_geometry(radius, separation):
-    """Caught at construction, not silently per sample.
+    """Bad geometry is caught at construction, not per sample.
 
     A zero separation divides by zero on every message and a negative one
-    mirrors the robot's steering - both far easier to diagnose as a refusal to
-    start than as a map that comes out wrong.
+    mirrors the steering; a refusal to start is easier to diagnose than a wrong map.
     """
     with pytest.raises(InvalidGeometry):
         WheelOdometry(wheel_radius=radius, wheel_separation=separation)
@@ -290,11 +280,10 @@ def test_wheel_odometry_rejects_impossible_geometry(radius, separation):
 # --------------------------------------------------------------------------
 
 def test_first_sample_has_nothing_to_integrate_but_still_yields_a_pose():
-    """The origin pose IS the useful output of the first sample.
+    """The origin pose is the useful output of the first sample.
 
-    Publishing it is what puts `odom -> base_footprint` into TF before
-    slam_toolbox's first scan lookup, which is the entire reason this node
-    exists.
+    Publishing it puts `odom -> base_footprint` into TF before slam_toolbox's
+    first scan lookup.
     """
     odometry = WheelOdometry()
     update = odometry.update(100.0, 12.3, 45.6)
@@ -318,11 +307,10 @@ def test_first_sample_ignores_however_large_the_accumulated_angles_are():
 # --------------------------------------------------------------------------
 
 def _angle_for(distance_m, wheel_radius=WHEEL_RADIUS_M):
-    """The accumulated-angle delta the driver would report for a distance.
+    """Returns the accumulated-angle delta the driver reports for a distance.
 
-    `ugv02_serial_node` publishes `distance_to_angle(metres, radius)`, which
-    is just `metres / radius`; this is that, inverted, so the tests can be
-    written in metres.
+    `ugv02_serial_node` publishes `metres / radius`; this inverts it so tests can
+    be written in metres.
     """
     return distance_m / wheel_radius
 
@@ -410,10 +398,10 @@ def test_combined_turn_moves_forward_and_to_the_left():
 
 
 def test_a_full_left_circle_returns_to_the_origin():
-    """End-to-end: 360 degrees of constant turn must close the loop.
+    """End to end: 360 degrees of constant turn must close the loop.
 
-    This is the test that would catch a sign error, a factor of two, or a
-    radius/separation mix-up, because all three stop the circle closing.
+    Catches a sign error, a factor of two or a radius/separation mix-up, since
+    all three stop the circle closing.
     """
     odometry = WheelOdometry()
     odometry.update(0.0, 0.0, 0.0)
@@ -458,10 +446,10 @@ def test_a_backwards_stamp_is_skipped():
 
 
 def test_an_out_of_order_sample_does_not_cost_the_anchor():
-    """The whole reason `UPDATE_BACKWARD_TIME` keeps the anchor.
+    """`UPDATE_BACKWARD_TIME` keeps the anchor.
 
-    After a stale sample is dropped, the next good one must still measure from
-    the last GOOD reading, so no distance is lost.
+    After a stale sample is dropped, the next good one still measures from the
+    last good reading, so no distance is lost.
     """
     odometry = WheelOdometry()
     odometry.update(1.0, 0.0, 0.0)
@@ -552,33 +540,27 @@ def test_the_pose_survives_every_skipped_sample_unchanged():
 # --------------------------------------------------------------------------
 # WheelOdometry.update: encoder_scale (confirmed centimetre-unit correction)
 #
-# See the module docstring's "ENCODER UNIT CALIBRATION" section and
-# ENCODER_SCALE_FACTOR: the real encoder data's `position` field is whole
-# centimetres mislabelled as metres, confirmed by a measured ~2.00 m drive
-# producing 201 counts (~1 cm/count). These tests only pin down that the
-# multiplier is wired in correctly - the calibration itself is covered by
-# the dedicated test below.
+# The real `position` field is whole centimetres mislabelled as metres (a ~2.00 m
+# drive gave 201 counts); see `ENCODER_SCALE_FACTOR`. These tests pin that the
+# multiplier is wired in correctly; the calibration has its own test below.
 # --------------------------------------------------------------------------
 
 def test_encoder_scale_defaults_to_a_no_op():
-    """Redundant with the construction test above, but explicit on purpose.
+    """Redundant with the construction test above, on purpose.
 
-    The whole point of defaulting `encoder_scale` to 1.0 is that nobody who
-    does not ask for it sees any behaviour change. This test would fail if
-    that default were ever accidentally flipped to ENCODER_SCALE_FACTOR or
-    anything else non-neutral.
+    Defaulting `encoder_scale` to 1.0 means nobody who does not ask for it sees a
+    change. This fails if the default flips to ENCODER_SCALE_FACTOR or anything
+    non-neutral.
     """
     odometry = WheelOdometry()
     assert odometry.encoder_scale == 1.0
 
 
 def test_encoder_scale_of_one_matches_every_existing_result_exactly():
-    """encoder_scale=1.0 must be byte-identical to not passing it at all.
+    """encoder_scale=1.0 must be identical to not passing it.
 
-    Multiplying by 1.0 is exact in IEEE-754 for every finite float, so this
-    compares with `==`, not `pytest.approx`: anything less than an exact
-    match would mean encoder_scale was implemented as something other than a
-    plain multiplicative no-op at 1.0.
+    Multiplying by 1.0 is exact in IEEE-754, so this compares with `==` and not
+    `pytest.approx`; anything less means it is not a plain no-op at 1.0.
     """
     baseline = WheelOdometry()
     scaled = WheelOdometry(encoder_scale=1.0)
@@ -605,9 +587,11 @@ def test_encoder_scale_of_one_matches_every_existing_result_exactly():
 
 
 def test_encoder_scale_scales_straight_line_displacement_exactly():
-    """A non-1.0 encoder_scale must scale the computed displacement by exactly
-    that factor - straight-line motion, where the relationship is linear and
-    unambiguous (no sin/cos of a scaled angle involved, unlike a turn)."""
+    """A non-1.0 encoder_scale scales the displacement by exactly that factor.
+
+    Uses straight-line motion, where the relationship is linear (no sin/cos of a
+    scaled angle, unlike a turn).
+    """
     raw = WheelOdometry()
     corrected = WheelOdometry(encoder_scale=0.5)
     raw.update(0.0, 0.0, 0.0)
@@ -654,8 +638,6 @@ def test_encoder_scale_scales_in_place_rotation_exactly():
 def test_encoder_scale_factor_is_the_documented_one_over_one_hundred():
     """Guards the shipped calibration constant against an accidental edit.
 
-    1/100 is the confirmed centimetre-to-metre conversion - see the module
-    docstring's "ENCODER UNIT CALIBRATION" note - not a placeholder, so this
-    pins the exact value that is actually reviewed and shipped.
+    1/100 is the confirmed centimetre-to-metre conversion, not a placeholder.
     """
     assert ENCODER_SCALE_FACTOR == pytest.approx(1.0 / 100.0)

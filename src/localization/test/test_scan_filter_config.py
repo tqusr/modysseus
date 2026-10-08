@@ -1,10 +1,9 @@
 """Guards config/scan_filter.yaml against silently becoming a pass-through.
 
-A ROS 2 params file only applies to a node whose name matches its top-level
-key. If the launch files rename the laser_filters node (name='scan_filter')
-but the YAML stays keyed on the executable's default name
-(scan_to_scan_filter_chain), the node starts with NO filterN parameters, runs
-an empty chain and republishes /scan unchanged - no error, no warning.
+A params file only applies to a node whose name matches its top-level key. If
+the launch files name the node 'scan_filter' but the YAML stays keyed on the
+default executable name, the node runs an empty chain and republishes /scan
+unchanged, with no error or warning.
 """
 
 import ast
@@ -17,8 +16,7 @@ PKG = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 YAML_PATH = os.path.join(PKG, 'config', 'scan_filter.yaml')
 LAUNCH_FILES = ['mapping.launch.py', 'localize.launch.py']
 
-# Real mounting measured on the robot with
-# `ros2 run tf2_ros tf2_echo base_link base_lidar_link` (2026-10-03):
+# Mounting measured with `tf2_echo base_link base_lidar_link` (2026-10-03):
 # translation [0.040, 0.000, 0.040], yaw +90 deg.
 LIDAR_X = 0.040
 LIDAR_YAW = math.pi / 2

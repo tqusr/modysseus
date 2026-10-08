@@ -1,41 +1,20 @@
 slam_toolbox:
-  # Adapted from slam_toolbox's shipped localization example
-  # (/opt/ros/jazzy/share/slam_toolbox/config/mapper_params_localization.yaml),
-  # which - like the mapping example - ships with `mode: mapping` left
-  # uncommented; it must be explicitly switched to `localization` here.
+  # Localization params for slam_toolbox, adapted from the shipped
+  # mapper_params_localization.yaml (which leaves `mode: mapping` set).
   #
-  # `map_file_name` is deliberately NOT set in this file. It is injected by
-  # launch/localize.launch.py as an absolute path computed from
-  # get_package_share_directory('localization') + '/maps/<map>', the same
-  # way that launch file already overrides use_sim_time/use_lifecycle_manager
-  # on top of this yaml - see that file. Two things to know about the target:
+  # `map_file_name` is not set here: launch/localize.launch.py injects it as an
+  # absolute path under the package share's maps/ directory. Note:
   #
-  # 1. It is NOT the nav2_map_server occupancy-grid pair map_saver_cli
-  #    produces (<map>.yaml/<map>.pgm). slam_toolbox's own
-  #    `mode: localization` loads a SERIALIZED POSE GRAPH via
-  #    `serialization::read()`, which expects "<map_file_name>.posegraph" and
-  #    "<map_file_name>.data" - a completely different, slam_toolbox-internal
-  #    (karto) format. Without those two files, on_configure's
-  #    loadPoseGraphByParams() fails to find them and the node does not come
-  #    up as a working localizer - easy to mistake for another
-  #    lifecycle-activation race, so written down here for whoever hits it
-  #    next.
-  # 2. THE RULE, if you ever re-map this arena: regenerate
-  #    <map>.yaml/<map>.pgm (map_saver_cli) AND <map>.posegraph/<map>.data
-  #    (serialize_map) from the SAME live mapping run, before tearing
-  #    anything down. Never update one pair without the other - they must
-  #    represent identical world geometry, because the Nav2 costmap
-  #    loads <map>.yaml while this launch's localizer loads <map>.posegraph,
-  #    and the two need to agree on where the walls and docks are. It is not
-  #    enough for both pairs to start from the same pose (position AND
-  #    heading) - with `do_loop_closing: false` below (no global consistency
-  #    correction), two independently-run mapping passes drift differently
-  #    from each other even from an identical start, and nothing in either
-  #    format's own self-consistency check (TF tree resolves cleanly, pixel
-  #    grid looks sane) can detect that kind of cross-artifact disagreement
-  #    after the fact. Save both formats back-to-back against the one
-  #    slam_toolbox instance that just finished driving the arena, not from
-  #    two separate mapping runs even if both start at the same place.
+  # 1. It is not the nav2_map_server pair (<map>.yaml and <map>.pgm).
+  #    Localization mode loads a serialized pose graph, <map>.posegraph plus
+  #    <map>.data (an internal karto format). Without them the node does not
+  #    work as a localizer, which is easy to mistake for a lifecycle race.
+  # 2. When re-mapping, regenerate both pairs (map_saver_cli and serialize_map)
+  #    from the same live mapping run, back-to-back on the one slam_toolbox
+  #    instance. The Nav2 costmap loads <map>.yaml and this localizer loads
+  #    <map>.posegraph, and they must agree on where walls and docks are. With
+  #    `do_loop_closing: false` two independent passes drift differently even
+  #    from the same start pose, and no self-consistency check catches that.
   ros__parameters:
     solver_plugin: solver_plugins::CeresSolver
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
@@ -46,28 +25,22 @@ slam_toolbox:
 
     # ROS Parameters
     #
-    # base_frame is base_footprint, not base_link - same reason as
-    # mapper_params_hardware.yaml: the EKF owns odom->base_footprint, and a
-    # static base_footprint->base_link already gives base_link its parent.
+    # base_footprint, not base_link, as in mapper_params_hardware.yaml.
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
     scan_topic: /scan_filtered
     mode: localization
 
-    # map_start_pose is NOT set here: launch/localize.launch.py injects it
-    # from its `map_start_pose` launch argument (default [0.0, 0.0, 0.0]).
-    # It cannot simply be left out: without map_start_pose or
-    # map_start_at_dock, localization mode logs "Map starting pose not
-    # specified", skips loading the pose graph and still activates with an
-    # EMPTY map (seen on the robot, 2026-10-03).
-    # It is only a seed and constrains heading as much as position: the scan
-    # matcher's angular search (coarse_search_angle_offset: 0.349 rad =~ 20
-    # deg) cannot bridge a larger heading error, and a seed outside its
-    # capture range fails SILENTLY (it converges on a wrong map->odom, TF
-    # still resolves). So whenever the robot does not start at the seed,
-    # pass its real pose as the launch argument or publish it once on
-    # `/initialpose` (RViz "2D Pose Estimate") after activation.
+    # map_start_pose is injected by launch/localize.launch.py from its launch
+    # argument (default [0.0, 0.0, 0.0]). It is required: without it or
+    # map_start_at_dock, localization mode skips loading the pose graph and
+    # activates with an empty map (seen on the robot, 2026-10-03). It is a seed
+    # for heading as much as position: the scan matcher's angular search
+    # (coarse_search_angle_offset 0.349 rad, ~20 deg) cannot bridge more, and
+    # a seed outside it fails silently with a wrong map->odom. If the robot
+    # starts elsewhere, pass its real pose or publish it on `/initialpose`
+    # (RViz "2D Pose Estimate") after activation.
 
     debug_logging: false
     throttle_scans: 1
@@ -75,15 +48,13 @@ slam_toolbox:
     map_update_interval: 5.0
     resolution: 0.025
     restamp_tf: false
-    # LD19P vendor-documented range is 0.02-12 m, same as Task 2's mapping
-    # config - the shipped example's 0.0-20.0 would let slam_toolbox treat
-    # returns well past what the sensor can actually see as real.
+    # LD19P range is 0.02-12 m; the shipped 0.0-20.0 would accept returns
+    # beyond what the sensor can see.
     min_laser_range: 0.02
     max_laser_range: 12.0
     minimum_time_interval: 0.5
-    # Same as mapper_params_hardware.yaml: the encoder stamps are back-dated
-    # ~12 ms, and a tight transform_timeout turned that into
-    # tf2::NoDataForExtrapolationException.
+    # As in mapper_params_hardware.yaml: encoder stamps are back-dated ~12 ms,
+    # which a tight timeout turned into NoDataForExtrapolationException.
     transform_timeout: 1.0
     tf_buffer_duration: 60.0
     stack_size_to_use: 40000000
@@ -99,15 +70,9 @@ slam_toolbox:
     scan_buffer_maximum_scan_distance: 10.0
     link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 1.5
-    # Disabled for the same reason Task 2 disabled it for mapping: this is a
-    # small (6x6 m), highly symmetric arena with docks placed symmetrically
-    # on every wall, and loop closure repeatedly produced bad matches between
-    # perceptually-similar corners/walls during mapping, which the pose-graph
-    # optimizer "resolved" by teleporting part of the map tens of meters
-    # away. The localizer still has to disambiguate the same symmetric
-    # geometry, so the same false-positive risk applies; frame-to-frame scan
-    # matching against the known-good fixed map is enough for tracking a
-    # short, local drive.
+    # Off as for mapping: in this small, symmetric 6x6 m arena loop closure
+    # matched similar-looking corners and teleported part of the map tens of
+    # meters away. Scan matching against the fixed map suffices for a short drive.
     do_loop_closing: false
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
@@ -115,10 +80,8 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # Correlation Parameters - Correlation Parameters
-    # Widened from the shipped 0.5 m for the same reason as the mapping
-    # config: gives the scan matcher room to find the true match even when
-    # the odometry-seeded center is off by more than 0.5 m, which matters
-    # more in a room this symmetric.
+    # Wider than the shipped 0.5 m, so the matcher can recover when the
+    # odometry-seeded centre is off by more than 0.5 m.
     correlation_search_space_dimension: 2.0
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1

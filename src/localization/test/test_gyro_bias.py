@@ -1,13 +1,10 @@
-"""Unit tests for localization.gyro_bias -- the pure logic behind
-`ros2 run localization gyro_bias_node.py`.
+"""Unit tests for localization.gyro_bias, the logic behind `gyro_bias_node.py`.
 
-No rclpy, no ROS graph, no robot. The streams below are synthetic:
-gyro and encoders at 80 Hz with identical stamps, the way the vendor driver
-publishes them from one `T:1001` line.
+No ROS or robot. The streams are synthetic: gyro and encoders at 80 Hz with
+identical stamps, as the vendor driver publishes them from one `T:1001` line.
 
-WHAT THESE TESTS CANNOT DO: confirm the real ICM-20948's bias, its drift with
-temperature, or that its z axis points up on the real board. Those are
-hardware checks, listed in the fusion plan's Task 6.
+They cannot confirm the real ICM-20948's bias, its temperature drift or that its
+z axis points up. Those are hardware checks (fusion plan, Task 6).
 """
 
 import random
@@ -27,9 +24,13 @@ GYRO_NOISE = 2.62e-3
 
 def run(estimator, start, duration, bias, true_rate=0.0, wheel_speed=0.0,
         seed=0, encoders=True, angles=(0.0, 0.0)):
-    """Feed `duration` seconds of samples; return (end_time, angles, corrections).
+    """Feeds `duration` seconds of samples.
 
-    `wheel_speed` is per side, rad/s of wheel angle, equal on both sides.
+    Args:
+        wheel_speed: Per-side wheel angle rate in rad/s, equal on both sides.
+
+    Returns:
+        `(end_time, angles, corrections)`.
     """
     rng = random.Random(seed)
     left, right = angles

@@ -12,9 +12,8 @@ slam_toolbox:
 
     # ROS Parameters
     #
-    # base_frame is base_footprint, not base_link: the EKF owns
-    # odom->base_footprint, and a static base_footprint->base_link already
-    # gives base_link its parent, so this is the only valid choice.
+    # base_footprint, not base_link: the EKF owns odom->base_footprint and a
+    # static base_footprint->base_link gives base_link its parent.
     odom_frame: odom
     map_frame: map
     base_frame: base_footprint
@@ -22,9 +21,8 @@ slam_toolbox:
     use_map_saver: true
     mode: mapping #localization
 
-    # if you'd like to immediately start continuing a map at a given pose
-    # or at the dock, but they are mutually exclusive, if pose is given
-    # will use pose
+    # To continue a map at a pose or at the dock (mutually exclusive; a pose
+    # wins):
     #map_file_name: test_steve
     # map_start_pose: [0.0, 0.0, 0.0]
     #map_start_at_dock: true
@@ -35,17 +33,15 @@ slam_toolbox:
     map_update_interval: 5.0
     resolution: 0.025
     restamp_tf: false
-    # LD19P vendor-documented range is 0.02-12 m; the shipped example's
-    # 0.0-20.0 would let slam_toolbox raster returns from well past what the
-    # sensor can actually see.
+    # LD19P range is 0.02-12 m; the shipped 0.0-20.0 would raster returns
+    # beyond what the sensor can see.
     min_laser_range: 0.02 #for rastering images
     max_laser_range: 12.0 #for rastering images
     minimum_time_interval: 0.5
-    # Raised from 0.2 s. It absorbs the ~12 ms the encoder stamps are
-    # back-dated by, and
-    # slam_toolbox stamps map->odom this far ahead, which
-    # perception/perception/capture_dock_pose.py and mission_tree.py rely on.
-    # Do not change it without checking both.
+    # Raised from 0.2 s to absorb the ~12 ms the encoder stamps are back-dated
+    # by. slam_toolbox stamps map->odom this far ahead, which
+    # perception/capture_dock_pose.py and mission_tree.py rely on; check both
+    # before changing it.
     transform_timeout: 1.0
     tf_buffer_duration: 60.0
     stack_size_to_use: 40000000 #// program needs a larger stack size to serialize large maps
@@ -55,17 +51,11 @@ slam_toolbox:
     use_scan_matching: true
     use_scan_barycenter: true
     minimum_travel_distance: 0.5
-    # Reduced from 0.5 rad (~28.6 deg): with do_loop_closing disabled (see
-    # below), a single weak link in the scan-matching chain can never be
-    # corrected afterward. The waypoint drive does several near-in-place
-    # rotations of 90+ degrees; at the old 0.5 rad threshold, slam_toolbox
-    # could skip straight past a large chunk of that rotation before
-    # inserting its next keyframe, leaving too little scan overlap with the
-    # previous one for a reliable match in this symmetric room - observed
-    # as a reproducible failure signature (map stretching to 13-15m instead
-    # of the real ~6m arena, always breaking around the same early turn).
-    # A tighter heading threshold forces more keyframes during rotation,
-    # keeping consecutive scans close enough to match reliably.
+    # Reduced from 0.5 rad (~28.6 deg). Without loop closure a weak scan match
+    # is never corrected, and the drive has several near-in-place turns of 90+
+    # degrees. At 0.5 rad keyframes were skipped mid-turn, leaving too little
+    # overlap to match: the map stretched to 13-15 m instead of ~6 m, always
+    # at the same early turn. A tighter threshold adds keyframes during turns.
     minimum_travel_heading: 0.15
     check_min_dist_and_heading_precisely: false
     scan_buffer_size: 10
@@ -73,25 +63,12 @@ slam_toolbox:
     link_match_minimum_response_fine: 0.1  
     link_scan_maximum_distance: 1.5
     loop_search_maximum_distance: 3.0
-    # OPEN TRADE-OFF. Without loop closure, any heading or position error
-    # made during the drive is never corrected, so one bad scan match stays in
-    # the map for good. With it, the symmetric room invites false loop
-    # closures (below). Revisit only after the narrower correlation window
-    # (0.5, below) has been tried on the robot: it should make bad matches
-    # rarer, which changes how much loop closure is needed.
-    #
-    # Why it is off: the arena is a small, highly symmetric room with docks
-    # placed symmetrically on every wall. During mapping runs, loop closure
-    # repeatedly produced bad matches between
-    # perceptually-similar-but-different corners/walls, which the pose-graph
-    # optimizer then "resolved" by teleporting a large chunk of the map tens
-    # of meters away (confirmed via a quick occupied-cell bounding-box check
-    # on /map - a good run stays within the known ~6x6 m extent, a bad one
-    # spans 15-20+ m). Frame-to-frame scan matching alone (use_scan_matching)
-    # is enough to track a single short mapping pass around a room this
-    # small; loop closure's main benefit (correcting drift over long/large
-    # trajectories) isn't needed here and its false-positive risk in a
-    # symmetric room outweighs it.
+    # Open trade-off. Without loop closure one bad scan match stays in the map
+    # for good. With it, the symmetric room (docks on every wall) produced false
+    # closures that teleported part of the map tens of meters away: a good run
+    # stays within the ~6x6 m extent of /map, a bad one spans 15-20+ m. Scan
+    # matching alone suffices for one short pass. Revisit after trying the
+    # narrower correlation window below on the robot.
     do_loop_closing: false
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0  
@@ -99,14 +76,11 @@ slam_toolbox:
     loop_match_minimum_response_fine: 0.45
 
     # Correlation Parameters - Correlation Parameters
-    # 0.5 m, the slam_toolbox default. The scan matcher only searches this
-    # window around the pose odometry predicts. A wider window does harm: a
-    # +-1 m search in a room where every wall and dock looks alike can lock
-    # onto the wrong wall, and it costs ~16x the correlation work per scan on
-    # a Jetson running sync_slam_toolbox_node, which processes every scan and
-    # falls behind when matching is slow.
-    # If the robot now loses track after fast turns, the window is too narrow
-    # for the odometry error: try 1.0 before going back to 2.0.
+    # 0.5 m, the default: the window searched around the odometry prediction.
+    # A +-1 m window can lock onto the wrong wall in this symmetric room and
+    # costs ~16x the work per scan, and sync_slam_toolbox_node falls behind
+    # when matching is slow. If the robot loses track after fast turns, try
+    # 1.0 before 2.0.
     correlation_search_space_dimension: 0.5
     correlation_search_space_resolution: 0.01
     correlation_search_space_smear_deviation: 0.1 

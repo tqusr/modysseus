@@ -1,63 +1,45 @@
-"""Run slam_toolbox in mapping mode against /scan_filtered (antennas removed).
+"""Runs slam_toolbox in mapping mode on /scan_filtered (antennas removed).
 
-One-time data-collection launch: drive the robot around the arena while this
-runs, then save the resulting map with nav2_map_server's map_saver_cli.
-localize.launch.py is the long-running counterpart that consumes the saved
-map instead of building one.
+One-time data collection: drive the robot around the arena while this runs,
+then save the map with nav2_map_server's map_saver_cli. `localize.launch.py`
+is the long-running counterpart that consumes the saved map.
 
-Runs on wall-clock time (there is no /clock on the robot) with
+Runs on wall-clock time (no /clock on the robot) with
 `mapper_params_hardware.yaml`.
 
-Uses `sync_slam_toolbox_node`, not the async variant: over a multi-minute
-mapping run, `async_slam_toolbox_node` proved unreliable in testing -
-observed failures included outright crashes (unhandled
-`tf2::NoDataForExtrapolationException`, SIGABRT) and severely distorted maps.
-`sync_slam_toolbox_node` processes scans synchronously with no async-queue
-pressure, which fits this one-time offline mapping pass fine, and proved
-stable where async did not.
+Uses `sync_slam_toolbox_node`, not the async one: over a multi-minute run the
+async node crashed (unhandled `tf2::NoDataForExtrapolationException`, SIGABRT)
+and produced badly distorted maps. The sync node has no async-queue pressure
+and was stable.
 
-LIFECYCLE - read this before adapting this launch file.
+Lifecycle: `*_slam_toolbox_node` is a managed lifecycle node that processes no
+scans until configured and activated. Getting it there is unreliable here and
+every failure is silent: launch looks healthy, `/map` is never published, and
+the saved map comes back empty. Two failures seen in this repo:
 
-`*_slam_toolbox_node` is a managed lifecycle node: it processes no scans at
-all until CONFIGUREd and then ACTIVATEd. Getting it there is genuinely
-unreliable here, and every failure mode is silent - the launch looks healthy,
-`/map` is simply never published, and you only find out when a saved map
-comes back empty. Two distinct ways it has actually failed in this repo:
+1. slam_toolbox's `online_sync_launch.py` emits CONFIGURE and waits on an
+   `OnStateTransition(configuring -> inactive)` handler to emit ACTIVATE. The
+   node's `change_state` response is often lost ("failed to send response to
+   /slam_toolbox/change_state (timeout)"), launch never sees the transition
+   and the node stays inactive.
+2. Fixed timers (CONFIGURE at 3 s, ACTIVATE at 10 s) are not chained to
+   CONFIGURE's result. Under this stack's sustained load a slow CONFIGURE
+   makes ACTIVATE fire too early and get rejected.
 
-1. slam_toolbox's shipped `online_sync_launch.py` emits CONFIGURE and then
-   waits on an `OnStateTransition(configuring -> inactive)` handler to emit
-   ACTIVATE. In this environment the node's `change_state` response is
-   regularly lost ("failed to send response to /slam_toolbox/change_state
-   (timeout)"), launch never observes the transition, the handler never
-   fires, and the node sits inactive for the entire run.
-2. Replacing that with fixed wall-clock timers (CONFIGURE at 3s, ACTIVATE at
-   10s) swaps one silent failure for another: the timers are independent, not
-   chained off CONFIGURE's actual result, so under the sustained ~15/16-core
-   load this stack produces, a slow CONFIGURE (node allocation, Ceres
-   solver init, parameter loading) means every ACTIVATE fires too early, gets
-   rejected, and the node again sits inactive.
+So this file uses three mechanisms and assumes none of them worked:
 
-So this file uses three mechanisms, and critically does not assume any of
-them worked:
+- CONFIGURE on a short timer (the node must exist first).
+- An `OnStateTransition` handler that emits ACTIVATE once the node is seen
+  `inactive`. This is the fast path, but failure 1 breaks it.
+- `slam_lifecycle_watchdog.py`, the authority. It polls `get_state` every
+  second, re-issues the transition the observed state calls for and never
+  waits on a `change_state` response, so it survives both failures. If the
+  node is not `active` by the timeout it logs an ERROR and exits non-zero,
+  which this launch surfaces as its own ERROR. Wait for "slam_toolbox is
+  ACTIVE" before trusting a mapping run.
 
-- CONFIGURE on a short timer (the node must exist before it can be asked).
-- An `OnStateTransition` handler that emits ACTIVATE the moment the node is
-  actually observed reaching `inactive`. This is the fast path, and it is
-  correctly gated on the real transition - but it is the mechanism failure
-  mode 1 breaks, so it cannot be relied on alone.
-- `slam_lifecycle_watchdog.py`, which is the authority. It polls `get_state`
-  on a 1s interval, re-issues whatever transition the observed state calls
-  for, and never waits on a `change_state` response (a lost one just means
-  the next poll retries). It is therefore immune to both failure modes above,
-  it has no assumed window for CONFIGURE to finish within, and it FAILS
-  LOUDLY: if the node has not reached `active` within the timeout it logs an
-  ERROR saying so and exits non-zero, which this launch file surfaces again
-  as its own ERROR. Watch for "slam_toolbox is ACTIVE" in the launch output
-  before trusting a mapping run.
-
-Redundant ACTIVATEs are harmless - an ACTIVATE against an already-active node
-is a no-op that logs "No transition matching 3 found for current state
-active", not an error that affects mapping.
+Redundant ACTIVATEs are harmless: against an active node they log "No
+transition matching 3 found for current state active" and change nothing.
 """
 
 import os
@@ -74,20 +56,20 @@ from launch_ros.event_handlers import OnStateTransition
 from launch_ros.events.lifecycle import ChangeState
 from lifecycle_msgs.msg import Transition
 
-#: Generous: it only bounds how long we wait before declaring the run dead,
-#: and a heavily loaded machine can take a while to initialise Ceres.
+# Generous: bounds the wait before declaring the run dead; a loaded machine
+# can take a while to initialise Ceres.
 ACTIVATION_TIMEOUT = 60.0
 
 
 def generate_launch_description():
+    """Returns the scan filter, slam_toolbox and the activation machinery."""
     config = os.path.join(
         get_package_share_directory('localization'),
         'config',
         'mapper_params_hardware.yaml',
     )
 
-    # Removes the robot's own antennas from /scan; slam_toolbox reads the
-    # result. See config/scan_filter.yaml.
+    # Removes the robot's antennas from /scan (config/scan_filter.yaml).
     scan_filter = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
@@ -119,7 +101,7 @@ def generate_launch_description():
             transition_id=transition_id,
         ))
 
-    # Fast path: react to the real transition the instant it is observed.
+    # Fast path: activate as soon as the transition is observed.
     activate_on_configured = RegisterEventHandler(OnStateTransition(
         target_lifecycle_node=slam_node,
         start_state='configuring',
@@ -127,7 +109,7 @@ def generate_launch_description():
         entities=[change_state(Transition.TRANSITION_ACTIVATE)],
     ))
 
-    # Authority: polls get_state, retries as needed, and fails loudly.
+    # Authority: polls get_state, retries and fails loudly.
     watchdog = ExecuteProcess(
         cmd=['ros2', 'run', 'localization', 'slam_lifecycle_watchdog.py',
              '/slam_toolbox', str(ACTIVATION_TIMEOUT)],
