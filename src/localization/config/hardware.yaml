@@ -22,8 +22,8 @@ wheel_odometry_node:
     # which gave a 201-count average delta (~1 cm per count).
     encoder_scale: 0.01
 
-# wheel_drive_node: T:1 left/right wheel speeds from a Twist, in place of the
-# MCU's own T:13 kinematics. Opt-in; see scripts/wheel_drive_node.py.
+# wheel_drive_node: T:1 left/right wheel speeds from a Twist. The robot's only
+# drive path; see scripts/wheel_drive_node.py.
 wheel_drive_node:
   ros__parameters:
     port: /dev/ugv02

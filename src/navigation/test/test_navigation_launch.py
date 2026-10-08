@@ -64,11 +64,9 @@ def test_wz_max_overrides_every_angular_limit_together():
     assert list(smoother['min_velocity']) == [-0.15, 0.0, -0.75]
 
 
-def test_cmd_vel_out_moves_the_end_of_the_safety_chain():
-    default = _node('collision_monitor')['inline_parameters']
-    moved = _node('collision_monitor', cmd_vel_out='cmd_vel_ctrl')['inline_parameters']
-    assert 'cmd_vel_out_topic' in default and default['cmd_vel_out_topic'] == 'cmd_vel'
-    assert moved['cmd_vel_out_topic'] == 'cmd_vel_ctrl'
+def test_the_safety_chain_ends_in_cmd_vel_ctrl():
+    params = _node('collision_monitor')['inline_parameters']
+    assert params['cmd_vel_out_topic'] == 'cmd_vel_ctrl'
 
 
 def test_the_files_limits_the_override_replaces_are_the_ones_we_think():

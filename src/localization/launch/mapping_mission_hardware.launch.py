@@ -92,8 +92,7 @@ itself is the vendor's, started by `hardware.launch.py`.
 
 NO SIM BRING-UP, AND NO DEVICE DRIVERS. This launch starts odometry, fusion,
 SLAM and (by default) AprilTag detection, nothing else. The robot's own
-drivers - the serial link that produces `/wheel_encoders` and accepts
-`/cmd_vel`, the lidar that produces `/scan`, the OAK-D camera that produces
+drivers - the serial link that produces `/wheel_encoders`, the lidar that produces `/scan`, the OAK-D camera that produces
 `/oak/rgb/image_raw`, and RViz - come from the vendor's `hardware.launch.py`,
 which you are already running in its own terminal to drive the robot at all.
 Nothing here would work without it, and nothing here should restart it.

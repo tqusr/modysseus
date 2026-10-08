@@ -70,7 +70,8 @@ def _nodes(**args):
 
 ALL = ['hardware_odometry.launch.py', 'localization.launch.py',
        'apriltag.launch.py', 'oak_points_filter.launch.py', 'localize.launch.py',
-       'docking.launch.py', 'navigation.launch.py', 'mission.launch.py']
+       'docking.launch.py', 'navigation.launch.py', 'mission.launch.py',
+       'wheel_drive.launch.py']
 
 
 def test_all_layers_on_by_default_and_no_simulator():
@@ -90,7 +91,7 @@ def test_every_node_is_on_wall_clock():
         'oak_cloud_container', 'planner_server',
         'rectify_node', 'scan_filter', 'slam_toolbox', 'tag_dock_server',
         'velocity_smoother',
-        'wheel_odometry_node']
+        'wheel_drive_node', 'wheel_odometry_node']
     for node in nodes:
         # oak filter / apriltag / etc. all set it; a node without it would
         # silently run with its YAML's `true`.
@@ -179,19 +180,8 @@ def _include_infos(**args):
                     yield 'include_info', h.describe_include(a, context)
 
 
-def test_wheel_drive_is_off_by_default():
+def test_wheel_drive_always_starts_and_nav2_turn_rate_matches():
     runs = _run()
-    assert not any(kind == 'include' and f.endswith('wheel_drive.launch.py')
-                   for kind, f in runs if kind == 'include')
-    nav = _nav_include_args()
-    assert nav['cmd_vel_out'] == 'cmd_vel'
-    assert nav['wz_max'] == ''
-
-
-def test_wheel_drive_starts_the_node_and_retargets_nav2():
-    runs = _run(wheel_drive='true')
     assert any(kind == 'include' and f.endswith('wheel_drive.launch.py')
                for kind, f in runs)
-    nav = _nav_include_args(wheel_drive='true')
-    assert nav['cmd_vel_out'] == 'cmd_vel_ctrl'
-    assert float(nav['wz_max']) == 0.75
+    assert float(_nav_include_args()['wz_max']) == 0.75

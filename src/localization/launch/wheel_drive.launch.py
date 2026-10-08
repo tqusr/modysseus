@@ -1,12 +1,11 @@
-"""Wheel-speed drive for the real robot (opt-in).
+"""Wheel-speed drive for the real robot: its only drive path.
 
     ros2 launch localization wheel_drive.launch.py
 
 Starts `wheel_drive_node`, which turns `cmd_vel_ctrl` into `T:1` left/right
-wheel speeds. Nav2 must publish to `cmd_vel_ctrl` for it to be driven:
-navigation.launch.py `cmd_vel_out:=cmd_vel_ctrl`. Read
-`scripts/wheel_drive_node.py` before using it: it is a second writer on the
-serial port next to the vendor driver.
+wheel speeds. Nav2 ends in `cmd_vel_ctrl` (navigation.launch.py). Read
+`scripts/wheel_drive_node.py`: it is a second writer on the serial port next
+to the vendor driver.
 """
 
 import os

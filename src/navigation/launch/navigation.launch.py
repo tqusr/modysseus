@@ -14,7 +14,7 @@ cmd_vel chain (the "safety chain" the task brief asks for), matching the
 stock bringup's own wiring:
     controller_server --(cmd_vel, remapped)--> cmd_vel_nav
     velocity_smoother  --(subscribes cmd_vel_nav, publishes cmd_vel_smoothed)
-    collision_monitor  --(cmd_vel_in_topic=cmd_vel_smoothed, cmd_vel_out_topic=cmd_vel)--> /cmd_vel
+    collision_monitor  --(cmd_vel_in_topic=cmd_vel_smoothed, cmd_vel_out_topic=cmd_vel_ctrl)--> /cmd_vel_ctrl
 behavior_server's own cmd_vel (used by Spin/BackUp/DriveOnHeading) is
 remapped the same way, so recovery behaviors go through the same smoother
 and collision monitor as normal path following - nothing in THIS launch file
@@ -108,9 +108,9 @@ def _launch_nodes(context):
     # wz_max, when given, replaces every angular-velocity limit in the file at
     # once (MPPI's wz_max, the rotation shim's pivot rate, the smoother's
     # limits), so they cannot disagree. Empty keeps the file's values. The
-    # hardware launch uses it with wheel_drive_node, where a commanded rate is
-    # the real rate; the file's 1.5 was tuned for the MCU's own kinematics,
-    # which turned ~2.3x weaker than commanded.
+    # hardware launch uses it because wheel_drive_node makes a commanded rate the
+    # real rate; the file's 1.5 was tuned for the MCU's own kinematics, which
+    # turned ~2.3x weaker than commanded.
     wz_text = LaunchConfiguration('wz_max').perform(context).strip()
     wz = float(wz_text) if wz_text else None
     controller_wz = ({'FollowPath.wz_max': wz,
@@ -173,9 +173,8 @@ def _launch_nodes(context):
         parameters=[config, {'use_sim_time': use_sim_time, **smoother_wz}],
     )
 
-    # cmd_vel_out is where the safety chain ends. Default `cmd_vel` (the
-    # vendor driver / the simulator); `cmd_vel_ctrl` hands it to
-    # localization's wheel_drive_node instead.
+    # The safety chain ends in cmd_vel_ctrl, which localization's
+    # wheel_drive_node turns into wheel speeds.
     collision_monitor = Node(
         package='nav2_collision_monitor',
         executable='collision_monitor',
@@ -183,7 +182,7 @@ def _launch_nodes(context):
         output='screen',
         parameters=[config, {
             'use_sim_time': use_sim_time,
-            'cmd_vel_out_topic': LaunchConfiguration('cmd_vel_out').perform(context),
+            'cmd_vel_out_topic': 'cmd_vel_ctrl',
         }],
     )
 
@@ -222,10 +221,6 @@ def generate_launch_description():
             'params_file', default_value='',
             description='Nav2 parameter file; empty = this package\'s '
                         'config/nav2_params.yaml (for tuning experiments)'),
-        DeclareLaunchArgument(
-            'cmd_vel_out', default_value='cmd_vel',
-            description='Topic the collision monitor publishes the final '
-                        'velocity on; cmd_vel_ctrl for wheel_drive_node'),
         DeclareLaunchArgument(
             'wz_max', default_value='',
             description='Override every angular-velocity limit (rad/s); '

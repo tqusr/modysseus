@@ -161,13 +161,12 @@ class ClearRoute(py_trees.behaviour.Behaviour):
 
 
 class StopRobot(py_trees.behaviour.Behaviour):
-    """Holds /cmd_vel at zero for as long as the safe-stop branch is active.
+    """Holds /cmd_vel_ctrl at zero for as long as the safe-stop branch is active.
 
     NOT a single publish (what this was originally, and a real final-review
-    finding): /cmd_vel has other publishers -- nav2_collision_monitor, the
+    finding): /cmd_vel_ctrl has other publishers -- nav2_collision_monitor, the
     last link in the navigation chain, pushes ~20 Hz, and docking_server
-    publishes there directly during a docking/undocking leg (see
-    perception/launch/docking.launch.py's documented exception). One zero
+    publishes there through the same chain during a docking/undocking leg. One zero
     Twist from here is simply overwritten by the next message from either of
     them, so the robot never actually stops. Worse, Mission ticks at 1 Hz
     (mission_node.py) and `safe_stop` is a memory=True Sequence, so this
@@ -197,7 +196,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
          itself. This is the backstop for ANY failure to deliver (a) --
          whether a py_trees composite subtlety, a future tree
          restructuring, or a tick loop that simply stopped. The failure it
-         exists to prevent is /cmd_vel pinned at zero for the life of the
+         exists to prevent is /cmd_vel_ctrl pinned at zero for the life of the
          process, which is unrecoverable and (measured, round 1) silently
          degrades navigation by interleaving zeros with the controller's
          commands.
@@ -211,7 +210,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
     The real stop is still CallAction.terminate()'s goal cancellation (the
     server-side fix); this is the belt-and-braces cover for the window
     between "goal cancel requested" and "the server has actually wound
-    down", and for anything commanding /cmd_vel that this tree never knew
+    down", and for anything commanding /cmd_vel_ctrl that this tree never knew
     about. So releasing the hold on the deadline is safe even mid-stop: the
     goal that was driving the robot is already cancelled.
     """
@@ -224,7 +223,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
     #: How long the zero-velocity hold survives without being re-armed by a
     #: tick before it expires itself. Must comfortably exceed the safe-stop
     #: cycle (see the class docstring); 10 s of stale hold in exchange for
-    #: never pinning /cmd_vel forever.
+    #: never pinning /cmd_vel_ctrl forever.
     DEFAULT_HOLD_TIMEOUT_SEC = 10.0
 
     def __init__(self, name, node, publish_hz=DEFAULT_PUBLISH_HZ,
@@ -236,12 +235,9 @@ class StopRobot(py_trees.behaviour.Behaviour):
         # the robot's motion choppy; with it off a safe stop no longer holds
         # the robot down, so only use it with a hand on the e-stop.
         self._zero_hold_enabled = hold_zero
-        # Zero goes to every place a velocity can enter the robot: /cmd_vel (the
-        # vendor driver / simulator) and cmd_vel_ctrl (where Nav2 ends when
-        # localization's wheel_drive_node drives the wheels). Holding only one
-        # would let the other keep driving. An unused topic costs nothing.
-        self._publishers = [node.create_publisher(Twist, topic, 10)
-                            for topic in ('/cmd_vel', '/cmd_vel_ctrl')]
+        # Zero goes where Nav2's safety chain ends: cmd_vel_ctrl, which
+        # localization's wheel_drive_node turns into wheel speeds.
+        self._publishers = [node.create_publisher(Twist, '/cmd_vel_ctrl', 10)]
         self._publish_hz = publish_hz
         self._hold_timeout_sec = hold_timeout_sec
         self._timer = None
@@ -264,7 +260,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
     def terminate(self, new_status):
         # INVALID means this branch lost -- the root Selector switched back
         # to `Mission`, or `safe_stop`'s own Sequence re-initialised for a
-        # new cycle. Stop holding /cmd_vel down so navigation can drive
+        # new cycle. Stop holding /cmd_vel_ctrl down so navigation can drive
         # again. SUCCESS/FAILURE, by contrast, happen on every tick within
         # an ongoing safe stop; the timer must survive those.
         if new_status == py_trees.common.Status.INVALID:
@@ -276,7 +272,7 @@ class StopRobot(py_trees.behaviour.Behaviour):
                 self._node.get_clock().now() > self._hold_deadline:
             self.logger.warning(
                 f"zero-velocity hold expired after {self._hold_timeout_sec}s without a "
-                "tick -- releasing /cmd_vel (the safe-stop branch should have been "
+                "tick -- releasing /cmd_vel_ctrl (the safe-stop branch should have been "
                 "invalidated; see StopRobot's docstring)")
             self._cancel_timer()
             return
@@ -861,7 +857,7 @@ def build_mission_tree(node, saga_client, docks, health_topics=(), hold_zero=Tru
     # SUCCESS does not clean up either. Concretely, before this wrapper:
     # `safe_stop` ended every cycle with SUCCESS (its Pause completing),
     # which made the root Selector SUCCESS, so a recovery landing on the
-    # very next tick left StopRobot's zero-/cmd_vel timer running for the
+    # very next tick left StopRobot's zero-/cmd_vel_ctrl timer running for the
     # life of the process -- roughly a coin flip per recovery, measured.
     # Recovery landing mid-cycle (root still RUNNING on safe_stop) took the
     # correct path, which is exactly why the first fix wave's unit tests and

@@ -10,13 +10,14 @@ robot. Design: docs/superpowers/specs/2026-10-03-hardware-full-stack-design.md.
 
 NEEDS THE ROBOT'S DRIVERS ALREADY RUNNING. The vendor's systemd service
 `einride-mini-truck` provides `/wheel_encoders`, `/imu`, `/scan` and the OAK-D
-topics, and consumes `/cmd_vel`. Nothing here starts or restarts it.
+topics, and provides the serial link. Nothing here starts or restarts it.
 
 THE STAGGER (seconds after launch; the offsets of the sim launch, except that
 odometry starts at once because there is no simulator to wait for):
 
      0  hardware_odometry   wheel odometry + gyro bias + EKF owning
                             odom -> base_footprint                (always)
+     0  wheel_drive         cmd_vel_ctrl -> T:1 wheel speeds      (always)
      5  apriltag            rectified, on /oak/rgb/image_raw      (apriltag)
      5  oak_points_filter   small cloud from /oak/stereo/image_raw,
                             voxel + crop box                      (nav)
@@ -120,21 +121,12 @@ def generate_launch_description():
                         {**HARDWARE, 'map': LaunchConfiguration('map'),
                          'map_start_pose': LaunchConfiguration('map_start_pose')})
     docking = _include('perception', 'docking.launch.py', HARDWARE, 'docking')
-    # wheel_drive:=true makes Nav2 end in cmd_vel_ctrl, and localization's
-    # wheel_drive_node write T:1 wheel speeds instead of the MCU's own T:13
-    # kinematics. Off by default.
+    # Nav2 ends in cmd_vel_ctrl, which localization's wheel_drive_node turns
+    # into T:1 wheel speeds. The commanded turn rate is the real one, so Nav2
+    # is told the rate we actually want (see navigation.launch.py).
     navigation = _include('navigation', 'navigation.launch.py', {
-        **HARDWARE,
-        'cmd_vel_out': PythonExpression([
-            "'cmd_vel_ctrl' if '", LaunchConfiguration('wheel_drive'),
-            "'.lower() in ('true', '1') else 'cmd_vel'"]),
-        # With wheel_drive the commanded turn rate is the real one, so Nav2
-        # is told the rate we actually want (see navigation.launch.py).
-        'wz_max': PythonExpression([
-            "'0.75' if '", LaunchConfiguration('wheel_drive'),
-            "'.lower() in ('true', '1') else ''"])}, 'nav')
-    wheel_drive = _include('localization', 'wheel_drive.launch.py',
-                           switch='wheel_drive')
+        **HARDWARE, 'wz_max': '0.75'}, 'nav')
+    wheel_drive = _include('localization', 'wheel_drive.launch.py')
     mission = _include('mission', 'mission.launch.py', {
         **HARDWARE, 'saga_url': LaunchConfiguration('saga_url'),
         'saga_token': LaunchConfiguration('saga_token'),
@@ -170,10 +162,6 @@ def generate_launch_description():
             'safe_stop_zero_hold', default_value='true',
             description='false = the mission safe stop does not publish zero '
                         'velocity (diagnostic only; keep a hand on the e-stop)'),
-        DeclareLaunchArgument(
-            'wheel_drive', default_value='false',
-            description='Run wheel_drive_node (T:1 wheel speeds) and point '
-                        'Nav2 at it, instead of the MCU\'s own T:13'),
         _warn_when('docking:=true with nav:=false: docking needs nav, its '
                    'collision checks use the Nav2 local costmap',
                    on='docking', off='nav'),

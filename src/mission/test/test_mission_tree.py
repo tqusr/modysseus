@@ -643,7 +643,7 @@ def test_vehicle_status_ok_retries_a_poll_whose_response_never_arrives():
 
 def _count_cmd_vel_messages(node, received):
     return node.create_subscription(
-        Twist, '/cmd_vel', lambda msg: received.append(msg), 10)
+        Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
 
 
 def test_stop_robot_publishes_a_zero_twist_on_every_tick():
@@ -919,26 +919,6 @@ def test_vehicle_status_ok_fails_while_a_health_topic_is_silent():
         rclpy.shutdown()
 
 
-def test_stop_robot_zeroes_cmd_vel_ctrl_too():
-    """With wheel_drive on, Nav2 ends in cmd_vel_ctrl; a hold that only covered
-    /cmd_vel would leave the robot driving through a safe stop."""
-    rclpy.init()
-    try:
-        node = rclpy.create_node("test_stop_robot_ctrl")
-        executor = SingleThreadedExecutor()
-        executor.add_node(node)
-        received = []
-        node.create_subscription(
-            Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
-        behaviour = StopRobot("StopRobot", node, publish_hz=0.001)
-        behaviour.update()
-        _spin_and_drain(executor, 0.2)
-        assert received and all(
-            m.linear.x == 0.0 and m.angular.z == 0.0 for m in received)
-    finally:
-        rclpy.shutdown()
-
-
 def test_stop_robot_publishes_nothing_when_the_hold_is_disabled():
     rclpy.init()
     try:
@@ -947,8 +927,6 @@ def test_stop_robot_publishes_nothing_when_the_hold_is_disabled():
         executor.add_node(node)
         received = []
         _count_cmd_vel_messages(node, received)
-        node.create_subscription(
-            Twist, '/cmd_vel_ctrl', lambda msg: received.append(msg), 10)
         behaviour = StopRobot("StopRobot", node, publish_hz=20.0, hold_zero=False)
         assert behaviour.update() == py_trees.common.Status.SUCCESS
         _spin_and_drain(executor, 0.3)
