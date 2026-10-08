@@ -1,72 +1,43 @@
-"""Bring up the Nav2 stack (costmaps, planner, controller, safety chain).
+"""Brings up the Nav2 stack: costmaps, planner, controller and safety chain.
 
-Structurally based on nav2_bringup's own navigation_launch.py
-(/opt/ros/jazzy/share/nav2_bringup/launch/navigation_launch.py), trimmed to
-what this task actually needs: no AMCL (slam_toolbox's localize.launch.py,
-Task 3, already publishes map->odom - a second localizer would fight it for
-the same TF edge), no composition (this stack is small enough that per-
-process nodes are simpler to reason about and restart individually), no
-multi-robot namespacing, no route_server/smoother_server/waypoint_follower/
-docking_server (not needed for a bare NavigateToPose - see nav2_params.yaml's
-own header comment for why).
+Based on nav2_bringup's `navigation_launch.py`, trimmed to a bare
+NavigateToPose (see the `nav2_params.yaml` header): no AMCL (slam_toolbox
+already publishes map->odom and a second localizer would fight it), no
+composition, no namespacing and no route, smoother, waypoint or docking server.
 
-cmd_vel chain (the "safety chain" the task brief asks for), matching the
-stock bringup's own wiring:
-    controller_server --(cmd_vel, remapped)--> cmd_vel_nav
-    velocity_smoother  --(subscribes cmd_vel_nav, publishes cmd_vel_smoothed)
-    collision_monitor  --(cmd_vel_in_topic=cmd_vel_smoothed, cmd_vel_out_topic=cmd_vel_ctrl)--> /cmd_vel_ctrl
-behavior_server's own cmd_vel (used by Spin/BackUp/DriveOnHeading) is
-remapped the same way, so recovery behaviors go through the same smoother
-and collision monitor as normal path following - nothing in THIS launch file
-bypasses the chain to reach the robot directly.
+The cmd_vel chain matches the stock bringup:
 
-ONE KNOWN, DELIBERATE EXCEPTION, OUTSIDE THIS FILE: `docking_server`
-(perception/launch/docking.launch.py, opennav_docking) publishes /cmd_vel
-DIRECTLY during docking and undocking legs - it does not go through this
-velocity smoother or this collision monitor. So while a docking or undocking
-action is running, the chain above is not in the loop at all, and the
-polygons configured for collision_monitor in nav2_params.yaml are not
-protecting the robot. Collision protection during those legs comes solely
-from docking_server's own `controller.use_collision_detection`
-(perception/config/docking.yaml), enabled in the final-review fix wave,
-which checks its projected approach trajectory against this stack's
-local_costmap. Rerouting docking through this chain was considered and
-rejected as too risky to the proven live delivery routes: the stop polygon
-would trip on the dock's own back wall on every approach. See
-docking.launch.py's own docstring for the full rationale.
+    controller_server --(cmd_vel remapped)--> cmd_vel_nav
+    velocity_smoother: cmd_vel_nav --> cmd_vel_smoothed
+    collision_monitor: cmd_vel_smoothed --> cmd_vel_ctrl
 
-Lifecycle: nav2_lifecycle_manager is Nav2's own purpose-built, widely-used
-manager for exactly this multi-node bring-up, rather than an ad-hoc
-launch-file event handler like the vendor event-based activation that bit
-slam_toolbox hard in Tasks 2/3.
+`behavior_server` (Spin, BackUp, DriveOnHeading) is remapped the same way, so
+nothing in this file bypasses the chain.
 
-That does NOT make it immune to the same underlying failure class, and an
-earlier version of this docstring wrongly implied it did. The failure is in
-the transport, not in who drives the transition: this environment drops
-`change_state` service RESPONSES under load (Nav2's own manager logs
-"failed to send response to /planner_server/change_state (timeout): client
-will not receive response"), and a manager waiting on a response that was
-lost never completes bring-up. OBSERVED HERE, not theorised: 1 of 4
-full-stack launches during the final-review fix wave wedged on exactly that
-signature and never reached `active`; the documented kill-and-relaunch got
-past it.
+One deliberate exception lies outside this file: `docking_server`
+(perception/launch/docking.launch.py) publishes /cmd_vel directly during
+docking and undocking, skipping the smoother and collision monitor. Protection
+there comes only from its `controller.use_collision_detection`
+(perception/config/docking.yaml), which checks the projected approach against
+the local_costmap. Routing docking through this chain was rejected: the stop
+polygon would trip on the dock's own back wall on every approach. See
+`docking.launch.py`.
 
-So the same mitigation that localization uses (localization/scripts/
-slam_lifecycle_watchdog.py - poll the node's state directly and retry,
-instead of trusting the response) is warranted for nav2_lifecycle_manager
-too. It is deliberately NOT implemented here yet: it is tracked as its own
-follow-up item because generalising that watchdog across a 6-node managed
-set is real work, not a docstring fix. Until then this is an operational
-procedure, not an automatic recovery: if the stack has not logged "Managed
-nodes are active" within ~30 s of this launch file starting, kill the whole
-launch and relaunch rather than waiting it out.
+Lifecycle: `nav2_lifecycle_manager` is Nav2's own manager for this bring-up,
+but it is not immune to the failure that bit slam_toolbox. This environment
+drops `change_state` service responses under load (Nav2 logs "failed to send
+response to /planner_server/change_state (timeout)"), and a manager waiting on
+a lost response never finishes. Observed: 1 of 4 full-stack launches wedged
+this way and never reached `active`. A watchdog like
+`localization/scripts/slam_lifecycle_watchdog.py` is warranted but not
+implemented; generalising it across the 6 managed nodes is a separate task.
+Until then, if "Managed nodes are active" has not been logged within ~30 s,
+kill the launch and relaunch.
 
-Verify with
-`ros2 service call /lifecycle_manager_navigation/is_active \
-std_srvs/srv/Trigger` or `ros2 service call /<node>/get_state
-lifecycle_msgs/srv/GetState` per node, same as it's verified in this task's
-report - do not assume activation succeeded just because the manager itself
-started cleanly.
+Verify activation with
+`ros2 service call /lifecycle_manager_navigation/is_active std_srvs/srv/Trigger`
+or `ros2 service call /<node>/get_state lifecycle_msgs/srv/GetState` per node.
+Do not assume it from the manager starting cleanly.
 """
 
 import os
@@ -90,29 +61,26 @@ LIFECYCLE_NODES = [
 
 
 def _launch_nodes(context):
-    # A bool, not text: rclpy declares `use_sim_time` as a bool. Wall clock:
-    # there is no /clock on the robot.
+    """Returns the Nav2 nodes, their lifecycle manager and the logging env var."""
+    # A bool, not text. Wall clock: there is no /clock on the robot.
     use_sim_time = False
     config = LaunchConfiguration('params_file').perform(context) or os.path.join(
         get_package_share_directory('navigation'), 'config', 'nav2_params.yaml')
 
-    # Unbuffered stdout, matching nav2_bringup's own launch files, so node
-    # logs interleave correctly when backgrounded/redirected to a file.
+    # As in nav2_bringup, so logs interleave correctly when redirected.
     stdout_linebuf_envvar = SetEnvironmentVariable(
         'RCUTILS_LOGGING_BUFFERED_STREAM', '1')
 
-    # wz_max, when given, replaces every angular-velocity limit in the file at
-    # once (MPPI's wz_max, the rotation shim's pivot rate, the smoother's
-    # limits), so they cannot disagree. Empty keeps the file's values. The
-    # hardware launch uses it because wheel_drive_node makes a commanded rate the
-    # real rate; the file's 1.5 was tuned for the MCU's own kinematics, which
-    # turned ~2.3x weaker than commanded.
+    # wz_max, if given, replaces every angular-velocity limit at once (MPPI,
+    # the rotation shim, the smoother) so they cannot disagree. The hardware
+    # launch uses it because wheel_drive_node makes the commanded rate the real
+    # one; the file's 1.5 was tuned for the MCU's kinematics, ~2.3x weaker.
     wz_text = LaunchConfiguration('wz_max').perform(context).strip()
     wz = float(wz_text) if wz_text else None
     controller_wz = ({'FollowPath.wz_max': wz,
                       'FollowPath.rotate_to_heading_angular_vel': wz}
                      if wz is not None else {})
-    # velocity_smoother's arrays carry vx, vy, wz; only wz changes.
+    # The smoother's arrays hold vx, vy, wz; only wz changes.
     smoother_wz = ({'max_velocity': [0.3, 0.0, wz],
                     'min_velocity': [-0.15, 0.0, -wz]}
                    if wz is not None else {})
@@ -146,8 +114,7 @@ def _launch_nodes(context):
         **common_args,
     )
 
-    # Replan only when the path is blocked or the goal changes; see the
-    # bt_navigator comment in nav2_params.yaml.
+    # Replan only when the path is blocked or the goal changes (see nav2_params.yaml).
     nav_to_pose_bt = LaunchConfiguration('bt_xml').perform(context) or os.path.join(
         get_package_share_directory('nav2_bt_navigator'), 'behavior_trees',
         'navigate_w_recovery_and_replanning_only_if_path_becomes_invalid.xml')
@@ -169,8 +136,7 @@ def _launch_nodes(context):
         parameters=[config, {'use_sim_time': use_sim_time, **smoother_wz}],
     )
 
-    # The safety chain ends in cmd_vel_ctrl, which localization's
-    # wheel_drive_node turns into wheel speeds.
+    # The chain ends in cmd_vel_ctrl, which wheel_drive_node turns into wheel speeds.
     collision_monitor = Node(
         package='nav2_collision_monitor',
         executable='collision_monitor',
@@ -191,9 +157,7 @@ def _launch_nodes(context):
             'use_sim_time': use_sim_time,
             'autostart': True,
             'node_names': LIFECYCLE_NODES,
-            # Generous: bt_navigator/controller_server can take a while to
-            # come up on a loaded machine (same reasoning as Task 2/3's
-            # watchdog timeout).
+            # Generous: nodes can be slow to come up on a loaded machine.
             'bond_timeout': 10.0,
         }],
     )
@@ -211,6 +175,7 @@ def _launch_nodes(context):
 
 
 def generate_launch_description():
+    """Declares `params_file`, `wz_max` and `bt_xml`, then launches Nav2."""
     return LaunchDescription([
         DeclareLaunchArgument(
             'params_file', default_value='',
