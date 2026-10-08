@@ -385,3 +385,11 @@ def test_tolerance_from_tag_distance_accepts_a_region_not_a_point():
     assert tolerance.accepts(PredockError(along=0.0, lateral=-0.29, heading=0.34))
     assert not tolerance.accepts(PredockError(along=0.0, lateral=0.31, heading=0.0))
     assert not tolerance.accepts(PredockError(along=0.0, lateral=0.0, heading=-0.36))
+
+
+def test_points_near_counts_points_within_the_radius():
+    from perception.tag_docking import points_near
+    pose = Pose2D(1.0, 2.0, 0.0)
+    points = [(1.0, 2.0), (1.2, 2.0), (1.0, 2.31), (3.0, 3.0)]
+    assert points_near(points, pose, 0.30) == 2
+    assert points_near([], pose, 0.30) == 0

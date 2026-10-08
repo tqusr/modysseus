@@ -437,3 +437,12 @@ tag_dock_server:
         # workspace SOURCE copies, as capture_dock_pose does; it takes effect at
         # the next colcon build). Off: measure and dock only.
         save_measured_pose: true
+        # FALLBACK when something stands on the pre-dock pose (more than
+        # bay_min_cells occupied local-costmap cells within
+        # predock_clear_radius_m of it, checked while the robot is outside the
+        # box, and again if Nav2 fails to reach it). The bay is checked as
+        # usual, then Nav2 alone drives straight to the dock pose (facing it,
+        # within Nav2's own goal tolerance). No docking_server, no tag
+        # measurement, no saved pose.
+        predock_fallback: true
+        predock_clear_radius_m: 0.30

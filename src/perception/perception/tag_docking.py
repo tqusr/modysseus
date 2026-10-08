@@ -409,6 +409,16 @@ def points_in_dock_bay(points_xy, docking_pose: Pose2D, min_out_m: float,
     return count
 
 
+def points_near(points_xy, pose: Pose2D, radius_m: float) -> int:
+    """How many of `points_xy` (map frame) lie within `radius_m` of `pose`'s x, y.
+
+    Used on the occupied costmap cells to tell whether something stands on a
+    pose the robot is about to be sent to (the pre-dock pose).
+    """
+    return sum(1 for x, y in points_xy
+               if math.hypot(x - pose.x, y - pose.y) <= radius_m)
+
+
 def occupied_cell_points(data, width: int, height: int, resolution: float,
                          origin_x: float, origin_y: float, occupied_value: int):
     """Centres (x, y), in the grid's frame, of the cells marked occupied.

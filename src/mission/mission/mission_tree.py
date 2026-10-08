@@ -600,7 +600,16 @@ def build_goto_dock_subtree(node, dock_key, docks, tf_buffer):
 
     move_and_dock = py_trees.composites.Sequence(name="Move and dock", memory=True, children=[
         ensure_undocked,
-        py_trees.composites.Selector(name="At pre-dock?", memory=False, children=[at_predock, navigate]),
+        # A failed Nav2 goal to the pre-dock pose does not stop the docking:
+        # tag_dock_server, which answers DockRobot, checks for itself whether
+        # something is standing on that pose and, if so, drives in past it.
+        py_trees.composites.Selector(name="At pre-dock?", memory=False, children=[
+            at_predock,
+            py_trees.composites.Selector(name="Try the pre-dock", memory=True, children=[
+                navigate,
+                py_trees.behaviours.Success(name="Let DockRobot handle it"),
+            ]),
+        ]),
         dock_is_free,
         dock_action,
     ])

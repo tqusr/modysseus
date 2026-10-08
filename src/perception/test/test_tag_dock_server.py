@@ -41,7 +41,7 @@ import yaml  # noqa: E402
 from action_msgs.msg import GoalStatus  # noqa: E402
 from apriltag_msgs.msg import AprilTagDetection, AprilTagDetectionArray  # noqa: E402
 from geometry_msgs.msg import TransformStamped  # noqa: E402
-from nav2_msgs.action import DockRobot, NavigateToPose  # noqa: E402
+from nav2_msgs.action import DockRobot, NavigateToPose, UndockRobot  # noqa: E402
 from rclpy.action import ActionClient, ActionServer, CancelResponse  # noqa: E402
 from rclpy.callback_groups import ReentrantCallbackGroup  # noqa: E402
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
@@ -95,7 +95,9 @@ class Rig(Node):
         self.tag_visible = True
         self.costmap_enabled = True
         self.bay_points = []                                # map-frame obstacle points in the bay
+        self.predock_points = []                            # ... and on the pre-dock pose
         self.gate_calls, self.nav_goals, self.dock_goals = [], [], []
+        self.undock_calls = 0
         self.events = []                                    # 'nav' / 'dock', in order
         self.nav_moves_robot = True
         self._lock = threading.Lock()
@@ -117,6 +119,10 @@ class Rig(Node):
             cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
         self._dock = ActionServer(
             self, DockRobot, 'docking_server/dock_robot', self._on_dock,
+            cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
+
+        self._undock = ActionServer(
+            self, UndockRobot, 'docking_server/undock_robot', self._on_undock,
             cancel_callback=lambda _: CancelResponse.ACCEPT, callback_group=group)
 
     def _transform(self, parent, child, x, y, yaw=0.0, quaternion=None):
@@ -179,7 +185,7 @@ class Rig(Node):
             return
         size, resolution = 60, 0.05
         with self._lock:
-            robot, extra = self.robot, list(self.bay_points)
+            robot, extra = self.robot, list(self.bay_points) + list(self.predock_points)
         origin_x = round((robot.x - 1.5) / resolution) * resolution
         origin_y = round((robot.y - 1.5) / resolution) * resolution
         lethal = set()
@@ -234,6 +240,18 @@ class Rig(Node):
                                 goal_handle.request.navigate_to_staging_pose))
         goal_handle.succeed()
         return DockRobot.Result(success=True)
+
+    def _on_undock(self, goal_handle):
+        self.undock_calls += 1
+        goal_handle.succeed()
+        return UndockRobot.Result(success=True)
+
+    def put_obstacle_on_predock(self):
+        """Another robot parked on the pre-dock pose."""
+        predock = predock_pose_for(_stored_pose())
+        with self._lock:
+            self.predock_points = [(predock.x + dx, predock.y + dy)
+                                   for dx in (-0.1, 0.0, 0.1) for dy in (-0.1, 0.0, 0.1)]
 
     def _bay_point(self, out, lateral):
         stored = _stored_pose()
@@ -295,17 +313,20 @@ def sequence(ros, tmp_path, monkeypatch):
     rig = Rig()
     client_node = Node('dock_client')
     client = ActionClient(client_node, DockRobot, 'dock_robot')
+    undock_client = ActionClient(client_node, UndockRobot, 'undock_robot')
     executor = MultiThreadedExecutor(num_threads=12)
     for node in (server, rig, client_node):
         executor.add_node(node)
     thread = threading.Thread(target=executor.spin, daemon=True)
     thread.start()
     assert client.wait_for_server(timeout_sec=10.0)
+    assert undock_client.wait_for_server(timeout_sec=10.0)
 
     class Sequence:
         pass
     run = Sequence()
     run.rig, run.client, run.docks, run.docking = rig, client, docks, docking
+    run.undock_client = undock_client
     yield run
 
     executor.shutdown()
@@ -481,3 +502,95 @@ def test_a_tag_that_is_never_seen_docks_against_the_stored_pose(sequence):
     stored = _stored_pose()
     assert (x, y) == pytest.approx((stored.x, stored.y), abs=1e-3)
     assert (line_of(run.docks, LETTER), line_of(run.docking, LETTER)) == before
+
+
+def _park_on_predock_and_start_outside_the_box(run):
+    stored = _stored_pose()
+    run.rig.robot = predock_pose_for(stored, 0.624 + 0.7)   # 0.7 m behind the pre-dock pose
+    run.rig.put_obstacle_on_predock()
+
+
+def test_a_taken_predock_pose_sends_nav2_straight_to_the_dock_pose(sequence):
+    run = sequence
+    _park_on_predock_and_start_outside_the_box(run)
+    before = (line_of(run.docks, LETTER), line_of(run.docking, LETTER))
+    response = result_of(send_goal(run)[1])
+
+    assert response.status == GoalStatus.STATUS_SUCCEEDED and response.result.success
+    # One Nav2 goal, to the dock pose itself, facing the dock; docking_server
+    # is not called and the tag is not measured.
+    assert run.rig.events == ['nav']
+    stored = _stored_pose()
+    goal = run.rig.nav_goals[0]
+    assert (goal.x, goal.y) == pytest.approx((stored.x, stored.y), abs=1e-3)
+    assert math.cos(goal.theta - stored.theta) == pytest.approx(1.0, abs=1e-3)
+    assert run.rig.dock_goals == []
+    assert run.rig.gate_calls == []
+    assert (line_of(run.docks, LETTER), line_of(run.docking, LETTER)) == before
+
+
+def test_a_taken_predock_pose_and_an_occupied_bay_waits(sequence):
+    run = sequence
+    _park_on_predock_and_start_outside_the_box(run)
+    run.rig.put_robot_in_bay()
+    _, result_future = send_goal(run)
+
+    time.sleep(WAIT_SEC + 3.5)
+    assert not result_future.done()
+    assert run.rig.events == [], 'must not drive towards an occupied dock'
+
+    run.rig.clear_bay()
+    response = result_of(result_future)
+    assert response.result.success
+    assert run.rig.events == ['nav']
+
+
+def test_a_free_predock_pose_still_takes_the_normal_route(sequence):
+    run = sequence
+    run.rig.robot = predock_pose_for(_stored_pose(), 0.624 + 0.7)
+    response = result_of(send_goal(run)[1])
+    assert response.result.success
+    assert run.rig.events == ['nav', 'nav', 'dock']
+
+
+
+def undock(run):
+    future = run.undock_client.send_goal_async(UndockRobot.Goal(dock_type='arena_dock'))
+    wait_for(future.done, 10.0, 'the undock goal to be accepted')
+    return result_of(future.result().get_result_async())
+
+
+def test_undocking_after_the_nav2_fallback_just_reports_undocked(sequence):
+    run = sequence
+    _park_on_predock_and_start_outside_the_box(run)
+    assert result_of(send_goal(run)[1]).result.success
+    run.rig.events.clear()
+    reached = run.rig.robot
+
+    response = undock(run)
+    assert response.status == GoalStatus.STATUS_SUCCEEDED and response.result.success
+    assert run.rig.undock_calls == 0, 'docking_server is not asked to undock'
+    assert run.rig.events == [] and run.rig.robot == reached, 'the robot does not move'
+
+    # The flag is spent: a second undock goes to docking_server as usual.
+    assert undock(run).result.success
+    assert run.rig.undock_calls == 1
+
+
+def test_undocking_after_a_normal_dock_is_left_to_docking_server(sequence):
+    run = sequence
+    assert result_of(send_goal(run)[1]).result.success
+    assert undock(run).result.success
+    assert run.rig.undock_calls == 1
+
+
+def test_a_new_docking_clears_the_nav2_flag(sequence):
+    run = sequence
+    _park_on_predock_and_start_outside_the_box(run)
+    assert result_of(send_goal(run)[1]).result.success      # fallback
+    with run.rig._lock:
+        run.rig.predock_points = []
+        run.rig.robot = predock_pose_for(_stored_pose())
+    assert result_of(send_goal(run)[1]).result.success      # normal
+    assert undock(run).result.success
+    assert run.rig.undock_calls == 1
