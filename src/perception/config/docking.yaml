@@ -149,14 +149,14 @@ docking_server:
         # wrong. The target is now a pose the robot can reach, so it stops just
         # short of contact.
         docks: ["A", "B", "C", "D", "E", "F", "G", "H"]
-        A: {type: "arena_dock", frame: "map", pose: [3.060, 0.890, -0.0404], id: "0"}
-        B: {type: "arena_dock", frame: "map", pose: [3.112, -0.491, 0.06415], id: "1"}
-        C: {type: "arena_dock", frame: "map", pose: [2.031, -0.667, -1.52166], id: "2"}
-        D: {type: "arena_dock", frame: "map", pose: [0.153, -0.994, -1.57273], id: "3"}
-        E: {type: "arena_dock", frame: "map", pose: [-1.190, -0.875, -3.10042], id: "4"}
-        F: {type: "arena_dock", frame: "map", pose: [1.926, 0.433, 0.15974], id: "5"}
-        G: {type: "arena_dock", frame: "map", pose: [1.059, -0.768, -1.56092], id: "6"}
-        H: {type: "arena_dock", frame: "map", pose: [-1.178, -0.124, -3.11265], id: "7"}
+        A: {type: "arena_dock", frame: "map", pose: [1.407, -1.600, -0.53854], id: "0"}
+        B: {type: "arena_dock", frame: "map", pose: [4.759, -6.413, -1.20675], id: "1"}
+        C: {type: "arena_dock", frame: "map", pose: [4.268, -5.666, -1.17827], id: "2"}
+        D: {type: "arena_dock", frame: "map", pose: [1.030, 0.018, -0.02431], id: "3"}
+        E: {type: "arena_dock", frame: "map", pose: [1.885, -0.059, -0.49785], id: "4"}
+        F: {type: "arena_dock", frame: "map", pose: [5.307, -7.739, -0.01665], id: "5"}
+        G: {type: "arena_dock", frame: "map", pose: [2.243, -4.977, -1.77837], id: "6"}
+        H: {type: "arena_dock", frame: "map", pose: [0.942, -1.162, -0.92133], id: "7"}
         # Checked on a second dock (G, -Y wall, theta -pi/2): pose.y = -2.992 -
         # 0.126 * sin(-pi/2) = -2.866, so the nose lands at -2.9891, again 3 mm
         # short of the wall.
