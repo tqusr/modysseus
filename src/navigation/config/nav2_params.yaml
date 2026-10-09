@@ -25,10 +25,11 @@
 # Sensors:
 #   - lidar: /scan_filtered (LaserScan, LD19).
 #   - camera: /oak/points_filtered (PointCloud2), not the vendor's raw
-#     /oak/points. perception's oak_points_filter builds a small cloud from the
+#     /oak/points. perception's oak_points_filter builds an XYZ cloud from the
 #     OAK-D depth image (perception/launch/oak_points_filter.launch.py)
 #     because the 29.5 MB raw cloud starved the collision monitor's camera
-#     source. The camera does not see the robot, so nothing near the body is
+#     source. The camera publishes 320x240 unaligned depth, so that cloud is
+#     76,800 points and needs no downsampling. The camera does not see the robot, so nothing near the body is
 #     cropped and obstacle_min_range is 0.0.
 #
 #     min_obstacle_height / min_height is 0.05 m: not 0.1 m, which made the
@@ -348,10 +349,10 @@ collision_monitor:
       #   /oak/points_filtered   median 0.099 s   p95 0.396 s   max 0.990 s
       #   /oak/points (upstream)  median 0.099 s   p95 0.429 s   max 1.255 s
       #
-      # The excursions come from /oak/points, the one remaining 29.5 MB hop,
-      # built by depth_image_proc in the vendor's camera container (upstream of
-      # perception's small-cloud chain, see perception/config/oak_points_filter.yaml).
-      # 2.0 s clears the 1.255 s worst case with ~0.75 s margin; 1.5 s kept
+      # (Measured before the camera moved to 320x240 unaligned depth and the
+      # voxel filter was removed; re-measure `ros2 topic hz` before tightening.)
+      # The excursions came from /oak/points, then a 29.5 MB hop upstream of
+      # perception's chain. 2.0 s clears the 1.255 s worst case with ~0.75 s margin; 1.5 s kept
       # firing. A briefly stale cloud is safe here: `base_shift_correction:
       # true` re-projects it through TF at its stamp, so only moving obstacles
       # add error, and the arena's are static. Dropping the source instead
@@ -414,7 +415,7 @@ local_costmap:
           # antenna) and lowest overhead to pass under (0.40 m): table tops ignored,
           # legs still seen. Keep equal in all three oak_cloud height limits.
           max_obstacle_height: 0.35
-          obstacle_max_range: 2.5
+          obstacle_max_range: 1
           obstacle_min_range: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0
@@ -494,7 +495,7 @@ global_costmap:
           # antenna) and lowest overhead to pass under (0.40 m): table tops ignored,
           # legs still seen. Keep equal in all three oak_cloud height limits.
           max_obstacle_height: 0.35
-          obstacle_max_range: 2.5
+          obstacle_max_range: 1
           obstacle_min_range: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.0

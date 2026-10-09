@@ -11,7 +11,7 @@
        setup.py's data_files. -->
   <depend>apriltag_ros</depend>
   <depend>opennav_docking</depend>
-  <depend>pcl_ros</depend>
+  <depend>depth_image_proc</depend>
 
   <!-- capture_dock_pose's runtime dependencies. -->
   <depend>rclpy</depend>

@@ -42,40 +42,31 @@ def _components(**args):
             'remappings': {text(a): text(b) for a, b in c.remappings},
             'inline': inline,
             'files': files,
-            'extra': {text(k): v for arg in c.extra_arguments
-                      for k, v in arg.items()},
         })
     return out
 
 
-def test_chains_depth_image_to_points_filtered():
-    # No CropBox: the real camera does not see the robot, so nothing near it
-    # is cut.
-    stages = _components()
-    assert [s['plugin'] for s in stages] == [
-        'image_proc::ResizeNode', 'depth_image_proc::PointCloudXyzNode',
-        'pcl_ros::VoxelGrid']
-    resize, points, voxel = (s['remappings'] for s in stages)
-    assert resize['image/image_raw'] == '/oak/stereo/image_raw'
-    assert resize['image/camera_info'] == '/oak/stereo/camera_info'
-    assert points['image_rect'] == resize['resize/image_raw']
-    assert points['camera_info'] == resize['resize/camera_info']
-    assert voxel['input'] == points['points']
-    assert voxel['output'] == '/oak/points_filtered'
+def test_builds_points_filtered_straight_from_the_depth_image():
+    # No resize, voxel or CropBox: the camera publishes small depth itself and
+    # does not see the robot.
+    [stage] = _components()
+    assert stage['plugin'] == 'depth_image_proc::PointCloudXyzNode'
+    assert stage['remappings'] == {
+        'image_rect': '/oak/stereo/image_raw',
+        'camera_info': '/oak/stereo/camera_info',
+        'points': '/oak/points_filtered',
+    }
 
 
 def test_keeps_the_filters_yaml_names():
     # The YAML is keyed by node name; a renamed component would silently run
-    # on pcl_ros defaults (and VoxelGrid's default range cut is 1 m).
-    names = [s['name'] for s in _components()]
-    assert names == ['oak_depth_resize', 'oak_depth_points',
-                     'filter_voxel_grid_node']
-    for stage in _components():
-        assert [os.path.basename(f) for f in stage['files']] == [
-            'oak_points_filter.yaml']
+    # on the defaults.
+    [stage] = _components()
+    assert stage['name'] == 'oak_depth_points'
+    assert [os.path.basename(f) for f in stage['files']] == [
+        'oak_points_filter.yaml']
 
 
-def test_every_stage_runs_on_wall_clock_in_process():
-    for stage in _components():
-        assert stage['inline']['use_sim_time'] is False, stage['name']
-        assert stage['extra'] == {'use_intra_process_comms': True}
+def test_runs_on_wall_clock():
+    [stage] = _components()
+    assert stage['inline']['use_sim_time'] is False

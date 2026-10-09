@@ -21,7 +21,7 @@ Start order (seconds after launch):
                             odom -> base_footprint                (always)
      0  wheel_drive         cmd_vel_ctrl -> T:1 wheel speeds      (always)
      5  apriltag            rectified, on /oak/rgb/image_raw      (apriltag)
-     5  oak_points_filter   voxel-filtered cloud from
+     5  oak_points_filter   XYZ cloud from
                             /oak/stereo/image_raw                 (nav)
      7  localize            slam_toolbox localization on `map`    (always)
     18  navigation          Nav2                                  (nav)
