@@ -35,6 +35,13 @@ LIFECYCLE_POLL_TIMEOUT_SEC = 30.0
 # Above the measured ~0.03-0.04 m docking precision, below the 0.6 m staging
 # offset in docks.yaml.
 DOCK_PROXIMITY_TOLERANCE_M = 0.3
+# A docked robot sits straight out from the wall: within DOCK_AXIS_TOLERANCE_M of
+# the dock's axis and between DOCK_ALONG_MIN_M and DOCK_ALONG_MAX_M out from the
+# wall pose (chassis ~0.1 m out, plus docking_threshold). Distance alone read a
+# robot standing beside a dock as docked, and undocking it is refused forever.
+DOCK_AXIS_TOLERANCE_M = 0.12
+DOCK_ALONG_MIN_M = -0.10
+DOCK_ALONG_MAX_M = 0.25
 
 # Dock plugin from perception/config/docking.yaml (`dock_plugins`); sent as
 # UndockRobot.Goal.dock_type.
@@ -209,9 +216,10 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
     inflated. TF recency is not checked here: the Mission sequence has
     already required `VehicleStatusOK` and `Localize` this tick.
 
-    A false positive costs one short reverse undock. That is acceptable
-    because it needs the robot within `tolerance_m` of a dock pose without
-    being docked, and the arena keeps that approach corridor clear.
+    The robot counts as docked when it is within `tolerance_m` of a dock pose
+    and also lined up with that dock: close to its axis (the wall pose's outward
+    normal) and not far out from the wall. Distance alone read a robot standing
+    beside a dock as docked, and docking_server refuses to undock it.
 
     Not recoverable: if docking_server also restarted while the robot was
     docked, it has lost its dock state and rejects undocking.
@@ -222,7 +230,9 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
         tolerance_m: Radius around each dock pose in meters.
 
     Returns:
-        True if map->base_footprint is within `tolerance_m` of a dock pose.
+        True if map->base_footprint is at a dock: within `tolerance_m` of its
+        pose, `DOCK_AXIS_TOLERANCE_M` of its axis and between `DOCK_ALONG_MIN_M`
+        and `DOCK_ALONG_MAX_M` out from the wall.
     """
     try:
         transform = tf_buffer.lookup_transform('map', 'base_footprint', Time())
@@ -232,10 +242,17 @@ def _near_any_dock_pose(tf_buffer, docks, tolerance_m=DOCK_PROXIMITY_TOLERANCE_M
         return False
     x = transform.transform.translation.x
     y = transform.transform.translation.y
-    return any(
-        math.hypot(x - dock.dock_pose["x"], y - dock.dock_pose["y"]) <= tolerance_m
-        for dock in docks.values()
-    )
+    for dock in docks.values():
+        dx = x - dock.dock_pose["x"]
+        dy = y - dock.dock_pose["y"]
+        if math.hypot(dx, dy) > tolerance_m:
+            continue
+        theta = dock.dock_pose.get("theta", 0.0)
+        along = dx * math.cos(theta) + dy * math.sin(theta)
+        lateral = -dx * math.sin(theta) + dy * math.cos(theta)
+        if abs(lateral) <= DOCK_AXIS_TOLERANCE_M and DOCK_ALONG_MIN_M <= along <= DOCK_ALONG_MAX_M:
+            return True
+    return False
 
 
 class VehicleStatusOK(py_trees.behaviour.Behaviour):

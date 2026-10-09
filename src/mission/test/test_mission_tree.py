@@ -649,3 +649,44 @@ def test_ensure_undocked_proximity_tolerance_is_not_absurdly_large():
         assert status == py_trees.common.Status.SUCCESS
     finally:
         rclpy.shutdown()
+
+
+def test_ensure_undocked_ignores_a_robot_standing_beside_a_dock():
+    """Within the proximity radius of a dock's wall pose, but off to its side.
+
+    A docked robot sits straight out from the wall, a few centimetres off the
+    dock's axis. A robot 0.2 m along the wall from it (as happened beside dock F
+    when navigation left it jammed there) is not docked, and asking
+    docking_server to undock it is refused forever ("Robot is not in the dock").
+    """
+    rclpy.init()
+    try:
+        node = rclpy.create_node("test_undock_beside_dock")
+        executor = SingleThreadedExecutor()
+        executor.add_node(node)
+        undock_server = _CountingUndockServer(node)
+
+        docks = _dock_pose_docks()          # B at (10, 10), outward normal +x
+        dock_b = docks["B"].dock_pose
+        tf_buffer = tf2_ros.Buffer()
+        now = node.get_clock().now().to_msg()
+        tf_buffer.set_transform(
+            _stamped_transform_at(now, 'map', 'base_footprint',
+                                   dock_b["x"] + 0.05, dock_b["y"] + 0.2), "test")
+
+        position_writer = py_trees.blackboard.Client(name="test-position-writer-e")
+        position_writer.register_key(key=BB_CURRENT_POSITION, access=py_trees.common.Access.WRITE)
+        if position_writer.exists(BB_CURRENT_POSITION):
+            position_writer.unset(BB_CURRENT_POSITION)
+
+        root = build_ensure_undocked(node, tf_buffer, docks, position_writer)
+        tree = py_trees.trees.BehaviourTree(root)
+        tree.setup(node=node, timeout=5.0)
+
+        status = _tick_until_settled(tree, executor, deadline_sec=2.0)
+
+        assert undock_server.goal_count == 0, \
+            "a robot 0.2 m beside a dock is not docked; undocking it can never succeed"
+        assert status == py_trees.common.Status.SUCCESS
+    finally:
+        rclpy.shutdown()
