@@ -622,7 +622,7 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       </div>
     </section>
     <section class="slide" aria-label="Navigation">
-      <!-- NOTES: Navigation is Nav2: NavFn global planner, MPPI controller (with a RotationShim so it turns in place first), a velocity smoother,
+      <!-- NOTES: Navigation is Nav2: smac_planner global planner, MPPI controller (with a RotationShim so it turns in place first), a velocity smoother,
            and a collision monitor fed by lidar and camera that has the last word before /cmd_vel.
            Costmaps are built from the saved map plus live lidar and camera. Same chain in sim and on the robot. -->
       
@@ -635,7 +635,7 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
       <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Navigation</h2>
       <p class="abs body reveal" style="--i:5;left:32px;top:340px">Nav2, tuned for a skid-steer truck.</p>
-      <div class="chain" style="top:560px"><div class="chain-item step" style="--s:1.0"><span class="pill lg">NavFn planner</span><small>Plans the path</small></div><span class="conn lg step" style="--s:1.5"><i class="runner"></i></span><div class="chain-item step" style="--s:2.0"><span class="pill lg">MPPI controller</span><small>Turns first, then follows</small></div><span class="conn lg step" style="--s:2.5"><i class="runner"></i></span><div class="chain-item step" style="--s:3.0"><span class="pill lg">Velocity smoother</span><small>Keeps it gentle</small></div><span class="conn lg step" style="--s:3.5"><i class="runner"></i></span><div class="chain-item step" style="--s:4.0"><span class="pill lg">Collision monitor</span><small>Lidar + camera, last word</small></div><span class="conn lg step" style="--s:4.5"><i class="runner"></i></span><div class="chain-item step" style="--s:5.0"><span class="pill lg on">/cmd_vel</span><small>To the wheels</small></div></div>
+      <div class="chain" style="top:560px"><div class="chain-item step" style="--s:1.0"><span class="pill lg">smac_planner</span><small>Plans the path</small></div><span class="conn lg step" style="--s:1.5"><i class="runner"></i></span><div class="chain-item step" style="--s:2.0"><span class="pill lg">MPPI controller</span><small>Turns first, then follows</small></div><span class="conn lg step" style="--s:2.5"><i class="runner"></i></span><div class="chain-item step" style="--s:3.0"><span class="pill lg">Velocity smoother</span><small>Keeps it gentle</small></div><span class="conn lg step" style="--s:3.5"><i class="runner"></i></span><div class="chain-item step" style="--s:4.0"><span class="pill lg">Collision monitor</span><small>Lidar + camera, last word</small></div><span class="conn lg step" style="--s:4.5"><i class="runner"></i></span><div class="chain-item step" style="--s:5.0"><span class="pill lg on">/cmd_vel</span><small>To the wheels</small></div></div>
       <div class="abs hair rule" style="--i:9;left:32px;top:800px;right:32px"></div>
       <div class="abs step" style="--s:6.5;left:32px;top:836px;display:flex;align-items:center;gap:20px">
         <span class="lbl dim" style="margin-right:12px">Costmaps from</span>
