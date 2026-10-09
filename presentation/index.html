@@ -151,7 +151,6 @@ svg {
   --line: #373737;
   --muted: #999;
   --signal-pink: #ff0078;
-  --signal-green: #00f525;
   --ease: cubic-bezier(.27, .63, .37, 1);
   --serif: 'Newsreader', 'Times New Roman', serif;
   --sans: 'Switzer', 'Helvetica Neue', Arial, sans-serif;
@@ -189,6 +188,7 @@ body { font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rende
 .h-l  { font-size: 168px; line-height: 160px; letter-spacing: -.022em; }
 .h-m  { font-size: 120px; line-height: 116px; letter-spacing: -.02em; }
 .h-s  { font-size: 96px;  line-height: 96px;  letter-spacing: -.015em; }
+.h-title { font-size: 208px; line-height: 190px; letter-spacing: -.025em; }
 .arw  { font-family: var(--sans); font-size: .62em; letter-spacing: 0; vertical-align: .12em; }
 .wordmark { font-size: 32px; line-height: 40px; font-weight: 500; letter-spacing: -.01em; }
 .lbl  { font-size: 24px; line-height: 32px; color: var(--fg); }
@@ -238,11 +238,9 @@ body { font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rende
   font-size: 22px; font-weight: 400; white-space: nowrap;
   border: 1px solid var(--hair); color: var(--fg); background: var(--pillbg);
 }
-.pill .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--signal-green); flex: none; }
+.pill .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--signal-pink); flex: none; }
 .pill.sm { height: 48px; padding: 0 24px; font-size: 24px; }
 .pill.on { border-color: var(--fg); }
-.pill.dashed { border-style: dashed; border-color: var(--dash); color: var(--muted); background: transparent; }
-.pill.dashed .dot { background: var(--muted); }
 
 /* === SLAM MAP (embedded once as --map) === */
 .map-wrap { position: absolute; }
@@ -261,6 +259,8 @@ body { font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rende
 .photo img, .photo video { display: block; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
 /* Cool, desaturated, on-brand treatment so mixed phone shots sit together */
 .photo img { filter: saturate(.45) contrast(1.06) brightness(.92); }
+/* Screenshots keep their own colours and are never cropped */
+.photo img.shot { object-fit: contain; filter: none; background: #0b0b0b; }
 .photo video { filter: saturate(.7); object-fit: contain; background: #000; }
 .photo::after { content: ''; position: absolute; inset: 0; background: rgba(40,70,110,.14); mix-blend-mode: color; pointer-events: none; }
 .photo .ph { display: none; position: absolute; inset: 0; flex-direction: column; justify-content: space-between; padding: 28px 32px; }
@@ -299,9 +299,9 @@ body { font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rende
 .box .bs { margin-top: 6px; font-size: 24px; line-height: 32px; color: var(--fg2); }
 .layer { position: absolute; left: 504px; width: 1384px; height: 112px; border: 1px solid var(--hair); display: flex; align-items: center; padding: 0 32px; }
 .layer.ext { border-style: dashed; }
-.layer .ln { width: 540px; flex: none; font-family: var(--serif); font-size: 54px; line-height: 56px; letter-spacing: -.01em; white-space: nowrap; }
-.layer .lp { font-size: 22px; line-height: 28px; color: var(--muted); width: 120px; flex: none; }
-.layer .lc { margin-left: auto; display: flex; gap: 12px; }
+.layer .ln { flex: none; font-family: var(--serif); font-size: 54px; line-height: 56px; letter-spacing: -.01em; white-space: nowrap; }
+.layer .ll { flex: 1; height: 0; margin: 0 32px; border-top: 1px dotted var(--hair); }
+.layer .lc { display: flex; gap: 12px; }
 .chip { display: inline-flex; align-items: center; height: 44px; padding: 0 20px; border-radius: 24px; border: 1px solid var(--hair); font-size: 22px; color: var(--fg2); white-space: nowrap; }
 .vline { position: absolute; width: 1px; background: var(--hair); }
 
@@ -344,11 +344,6 @@ body { font-family: var(--sans); -webkit-font-smoothing: antialiased; text-rende
 .bignum .c { margin-top: 16px; font-size: 28px; line-height: 38px; color: var(--fg2); width: 760px; }
 .bignum .c b { font-weight: 400; color: var(--fg); }
 
-/* === METHOD PLACEHOLDERS === */
-.dashed-frame { position: absolute; border: 1px dashed var(--dash); }
-.dashed-line { position: absolute; height: 0; border-top: 1px dashed var(--dash); }
-.hint { font-size: 24px; line-height: 32px; color: var(--muted); }
-
 /* === SLIDE CHROME (header + footer) === */
 .pn { font-variant-numeric: tabular-nums; }
 
@@ -381,6 +376,13 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
 .sw { display: inline-block; width: 32px; height: 20px; border: 1px solid var(--hair); margin-right: 16px; vertical-align: -3px; }
 .sw.d { border-style: dashed; }
 .c-tag { font-size: 32px; line-height: 40px; color: var(--fg2); }
+
+/* === NEEDS (problem slide) === */
+.need { position: absolute; left: 976px; width: 912px; height: 138px; border: 1px solid var(--hair); display: flex; align-items: center; padding: 0 32px; background: var(--bg); }
+.need .nn { width: 72px; flex: none; font-size: 22px; color: var(--fg2); }
+.need .nt { flex: none; font-family: var(--serif); font-size: 56px; line-height: 60px; letter-spacing: -.01em; white-space: nowrap; }
+.need .nl { flex: 1; height: 0; margin: 0 28px; border-top: 1px dotted var(--hair); }
+.need .nd { flex: none; font-size: 24px; line-height: 32px; color: var(--fg2); white-space: nowrap; }
 
 </style>
 </head>
@@ -415,36 +417,33 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
 
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Live in Gazebo &amp; on hardware</span></div>
 
-      <h1 class="abs display h-xl reveal" style="--i:3;left:24px;top:580px">Modysseus</h1>
-      <p class="abs c-tag reveal" style="--i:5;left:32px;top:872px">An autonomy stack for the mini-truck.</p>
+      <h1 class="abs display h-title reveal" style="--i:3;left:24px;top:424px">Team<br>Modysseus</h1>
+      <p class="abs c-tag reveal" style="--i:5;left:32px;top:872px">Our solution</p>
 
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Arena 6 &times; 6 m &middot; docks A&ndash;H</div>
-      <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">01 / 17</div>
+      <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">01 / 14</div>
     </section>
-    <section class="slide" aria-label="The challenge">
-      <!-- NOTES: The setup. A 6 x 6 m arena with eight docks, A to H, each marked with an AprilTag.
-           Saga AI is Einride's dispatch server (mocked for the hackathon, plain HTTP). It hands us a route:
-           a source dock and a destination dock. The truck has to get there, dock, wait for loading, drive on, dock again, and report.
-           The pink dot on the map is the truck's route from dock H to dock B. The map itself is the real SLAM map we recorded. -->
-      <div class="map-wrap map-fade" style="left:1010px;top:130px;width:820px;height:827px">
+    <section class="slide" aria-label="The problem">
+      <!-- NOTES: The problem. A 6 x 6 m arena, eight docks A to H, no driver. Saga AI (Einride's dispatch server, mocked for the hackathon)
+           hands the truck a route: a source dock and a destination dock. To run deliveries between the docks on its own, the truck needs
+           five capabilities: mapping, localization, planning, obstacle detection and AprilTag recognition.
+           The map is the real SLAM map we recorded; the pink dot is one route, dock H to dock B. -->
+      <div class="map-wrap map-fade" style="left:32px;top:480px;width:480px;height:484px">
         <div class="map-drift ambient">
           <div class="map-img"></div>
           <svg class="map-svg" viewBox="0 0 249 251" aria-hidden="true">
             <path id="route2" class="route" d="M183,246 C183,176 222,150 222,74 L240,70"/>
-            <path class="route-solid draw" pathLength="1" style="--s:5.2" d="M183,246 C183,176 222,150 222,74 L240,70"/>
-            <g class="fade" style="--s:0.40"><rect x="240.2" y="186.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="231.3" y="183.1" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">A</text></g>
-<g class="fade" style="--s:0.70"><rect x="241.5" y="67.0" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.5" opacity="1"/><text x="232.3" y="75.1" text-anchor="middle" dominant-baseline="central" class="dock-letter on" style="font-size:7.4px">B</text></g>
-<g class="fade" style="--s:1.00"><rect x="181.1" y="6.5" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="177.8" y="20.7" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">C</text></g>
-<g class="fade" style="--s:1.30"><rect x="60.5" y="7.0" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="69.2" y="21.1" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">D</text></g>
-<g class="fade" style="--s:1.60"><rect x="0.8" y="66.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="15.2" y="74.8" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">E</text></g>
-<g class="fade" style="--s:1.90"><rect x="0.8" y="186.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="14.9" y="183.3" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">F</text></g>
-<g class="fade" style="--s:2.20"><rect x="60.5" y="246.4" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="68.9" y="237.4" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:7.4px">G</text></g>
-<g class="fade" style="--s:2.50"><rect x="180.5" y="246.4" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.5" opacity="1"/><text x="177.5" y="237.3" text-anchor="middle" dominant-baseline="central" class="dock-letter on" style="font-size:7.4px">H</text></g>
-            <circle r="2.1" fill="#ff0078" opacity="0">
+            <g class="fade" style="--s:1.20"><rect x="240.2" y="186.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="229.6" y="182.2" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">A</text></g>
+<g class="fade" style="--s:1.40"><rect x="241.5" y="67.0" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="230.5" y="76.0" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">B</text></g>
+<g class="fade" style="--s:1.60"><rect x="181.1" y="6.5" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="176.9" y="22.5" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">C</text></g>
+<g class="fade" style="--s:1.80"><rect x="60.5" y="7.0" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="70.1" y="22.9" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">D</text></g>
+<g class="fade" style="--s:2.00"><rect x="0.8" y="66.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="17.0" y="75.6" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">E</text></g>
+<g class="fade" style="--s:2.20"><rect x="0.8" y="186.7" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="16.7" y="182.3" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">F</text></g>
+<g class="fade" style="--s:2.40"><rect x="60.5" y="246.4" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="69.8" y="235.6" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">G</text></g>
+<g class="fade" style="--s:2.60"><rect x="180.5" y="246.4" width="5.2" height="5.2" fill="#050505" stroke="#fff" stroke-width="0.35" opacity="0.75"/><text x="176.7" y="235.4" text-anchor="middle" dominant-baseline="central" class="dock-letter" style="font-size:11px">H</text></g>
+            <circle r="2.8" fill="#ff0078" opacity="0">
               <animateMotion begin="4.4s" dur="9s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.5;1" calcMode="spline" keySplines=".45 .05 .35 1;0 0 1 1"><mpath href="#route2"/></animateMotion>
               <animate attributeName="opacity" begin="4.4s" dur="9s" repeatCount="indefinite" values="0;1;1;0" keyTimes="0;.05;.92;1"/>
             </circle>
@@ -454,120 +453,71 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>The challenge</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">The problem</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Arena 6 &times; 6 m &middot; docks A&ndash;H</div>
+      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Five capabilities &middot; eight docks</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:150px">Eight docks.<br>One truck.<br>No driver.</h2>
-      <div class="abs hair rule" style="--i:5;left:32px;top:716px;width:880px"></div>
-      <div class="abs lbl dim step" style="--s:5;left:32px;top:740px">Saga AI sends a route</div>
-      <div class="abs display step" style="--s:5.6;left:32px;top:784px;font-size:96px;line-height:96px;letter-spacing:-.015em">H <span class="arw">&rarr;</span> B</div>
-      <div class="abs sm step" style="--s:6.2;left:32px;top:900px;width:880px">Pick up at the source dock. Deliver to the destination. Then the next route.</div>
+      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">The problem</h2>
+      <p class="abs body reveal" style="--i:5;left:32px;top:300px;width:800px">To run deliveries between eight docks on its own, the truck needs five capabilities.</p>
+      <div class="need step" style="--s:1.6;top:150px"><span class="nn">01</span><span class="nt">Mapping</span><span class="nl"></span><span class="nd">Chart the arena</span></div><div class="need step" style="--s:2.6;top:318px"><span class="nn">02</span><span class="nt">Localization</span><span class="nl"></span><span class="nd">Know where it is</span></div><div class="need step" style="--s:3.6;top:486px"><span class="nn">03</span><span class="nt">Planning</span><span class="nl"></span><span class="nd">Find the way</span></div><div class="need step" style="--s:4.6;top:654px"><span class="nn">04</span><span class="nt">Obstacle detection</span><span class="nl"></span><span class="nd">Stay clear of anything</span></div><div class="need step" style="--s:5.6;top:822px"><span class="nn">05</span><span class="nt">AprilTag recognition</span><span class="nl"></span><span class="nd">Spot the docks</span></div>
     </section>
-    <section class="slide" aria-label="Meet the mini-truck">
-      <!-- NOTES: Einride's mini-truck: a skid-steer, six-wheel UGV02 base. Everything we added is on top.
+    <section class="slide" aria-label="Meet Rojas">
+      <!-- NOTES: Meet Rojas, our name for Einride's mini-truck: a skid-steer, six-wheel UGV02 base. Everything we added is on top.
            Sensors: LD19 2D lidar, ICM-20948 IMU (we use the gyro), wheel encoders on the front axle, a Luxonis OAK-D Lite (RGB + depth).
            Compute is a Jetson Orin Nano, CPU only - no GPU in our stack. The numbered pins match the list on the left.
            (Edit mode: drag the pins onto the right parts of your photo, then Ctrl+S.) -->
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Hardware</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Hardware</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Skid-steer &middot; six wheels &middot; UGV02 base</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">Meet the<br>mini-truck.</h2>
-      <p class="abs sm reveal" style="--i:5;left:32px;top:420px;width:620px">A skid-steer truck with six wheels. Five parts do the seeing and the knowing.</p>
+      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">Meet<br>Rojas</h2>
+      <p class="abs sm reveal" style="--i:5;left:32px;top:420px;width:620px">Rojas is a skid-steer truck with six wheels. Five parts do the seeing and the knowing.</p>
       <div class="row step" style="left:32px;top:560px;width:640px;--s:2.5"><span class="rn">01</span><span class="rt">Lidar</span><span class="rd">LD19 &middot; 2D</span></div><div class="row step" style="left:32px;top:640px;width:640px;--s:3.5"><span class="rn">02</span><span class="rt">Camera</span><span class="rd">OAK-D Lite &middot; RGB + depth</span></div><div class="row step" style="left:32px;top:720px;width:640px;--s:4.5"><span class="rn">03</span><span class="rt">IMU</span><span class="rd">ICM-20948 &middot; gyro</span></div><div class="row step" style="left:32px;top:800px;width:640px;--s:5.5"><span class="rn">04</span><span class="rt">Wheel encoders</span><span class="rd">Front axle</span></div><div class="row step" style="left:32px;top:880px;width:640px;--s:6.5"><span class="rn">05</span><span class="rt">Compute</span><span class="rd">Jetson Orin Nano &middot; CPU only</span></div>
       
       <figure class="photo reveal" style="left:704px;top:136px;width:1184px;height:800px;--i:4">
-        <img src="photos/robot-hero.jpg" alt="The mini-truck, three-quarter front view. Dark floor, one flash, truck centred, nothing else in frame." onerror="this.closest('.photo').classList.add('missing')">
+        <img src="photos/robot-hero.jpg" style="object-position:50% 47%" alt="Rojas on the arena floor, three-quarter front view, with its antennas, lidar and camera visible." onerror="this.closest('.photo').classList.add('missing')">
         <div class="ph-cross"></div>
-        <div class="ph"><span class="ph-label">Photo &middot; photos/robot-hero.jpg</span><span class="ph-desc">The mini-truck, three-quarter front view. Dark floor, one flash, truck centred, nothing else in frame.</span></div><span class="pin step" style="left:50%;top:24%;--s:2.5">1</span><span class="pin step" style="left:74%;top:50%;--s:3.5">2</span><span class="pin step" style="left:52%;top:54%;--s:4.5">3</span><span class="pin step" style="left:28%;top:80%;--s:5.5">4</span><span class="pin step" style="left:36%;top:40%;--s:6.5">5</span>
+        <div class="ph"><span class="ph-label">Photo &middot; photos/robot-hero.jpg</span><span class="ph-desc">Rojas, three-quarter front view. Dark floor, one flash, truck centred, nothing else in frame.</span></div><span class="pin step" style="left:56%;top:31%;--s:2.5">1</span><span class="pin step" style="left:59%;top:47%;--s:3.5">2</span><span class="pin step" style="left:66%;top:39%;--s:4.5">3</span><span class="pin step" style="left:48%;top:79%;--s:5.5">4</span><span class="pin step" style="left:44%;top:41%;--s:6.5">5</span>
       </figure>
     </section>
-    <section class="slide light" aria-label="Method">
-      <!-- NOTES: Section 1 of 2: Method. How the team worked. -->
-      
-      <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Method</span></div>
-      <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
-      <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Section 01</div>
-      <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <div class="abs lbl dim reveal" style="--i:3;left:32px;top:150px">01</div>
-      <div class="abs lbl reveal" style="--i:3;left:504px;top:150px">Method</div>
-      <h2 class="abs display reveal" style="--i:4;left:24px;top:400px;font-size:288px;line-height:264px;letter-spacing:-.025em">How we<br>worked.</h2>
-    </section>
-    <section class="slide" aria-label="Method placeholder: team">
-      <!-- NOTES (to fill): Method 1 of 2. Add: how the team split work - who took perception, localization, navigation, mission. -->
-      
-      <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Method</span></div>
-      <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
-      <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Method &middot; to be written</div>
-      <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <div class="abs reveal" style="--i:3;left:32px;top:150px"><span class="pill dashed"><span class="dot"></span>Method &mdash; to be written</span></div>
-      <h2 class="abs display h-l reveal" style="--i:4;left:32px;top:256px;color:var(--muted)">Who built<br>what.</h2>
-      <p class="abs reveal" style="--i:5;left:32px;top:640px;width:820px;font-size:28px;line-height:40px;color:var(--muted)">Add: how the team split the work. Who took perception, localization, navigation and mission.</p>
-      <div class="dashed-frame fade" style="--s:.5;left:976px;top:150px;width:912px;height:810px"></div>
-      <div class="abs hint step" style="--s:1.0;left:1008px;top:182px">Name &middot; role &middot; package</div><div class="abs hint step" style="--s:1.8;left:1008px;top:384px">Name &middot; role &middot; package</div><div class="abs hint step" style="--s:2.6;left:1008px;top:586px">Name &middot; role &middot; package</div><div class="abs hint step" style="--s:3.4;left:1008px;top:788px">Name &middot; role &middot; package</div><div class="dashed-line step" style="--s:1.4;left:976px;width:912px;top:352px"></div><div class="dashed-line step" style="--s:2.2;left:976px;width:912px;top:554px"></div><div class="dashed-line step" style="--s:3.0;left:976px;width:912px;top:756px"></div>
-    </section>
-    <section class="slide" aria-label="Method placeholder: workflow">
-      <!-- NOTES (to fill): Method 2 of 2. Add: sim-first workflow (everything proven end-to-end in Gazebo before touching the robot), tools, timeline. -->
-      
-      <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Method</span></div>
-      <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
-      <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Method &middot; to be written</div>
-      <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <div class="abs reveal" style="--i:3;left:32px;top:150px"><span class="pill dashed"><span class="dot"></span>Method &mdash; to be written</span></div>
-      <h2 class="abs display h-l reveal" style="--i:4;left:32px;top:256px;color:var(--muted)">How we got<br>there.</h2>
-      <p class="abs reveal" style="--i:5;left:1100px;top:290px;width:780px;font-size:28px;line-height:40px;color:var(--muted)">Add: the sim-first workflow, the tools we used, and the timeline.</p>
-      <div class="dashed-line step" style="--s:.6;left:32px;width:1856px;top:816px"></div>
-      <div class="dashed-frame step" style="--s:1.0;left:32px;top:630px;width:434px;height:150px;padding:24px 28px"><span class="hint">Milestone 1<br>Add what happened</span></div><div class="vline step" style="--s:1.2;left:249px;top:780px;height:36px;background:var(--dash)"></div><div class="abs hint step" style="--s:1.4;left:209px;top:836px;width:80px;text-align:center">Time</div><div class="dashed-frame step" style="--s:1.8;left:506px;top:630px;width:434px;height:150px;padding:24px 28px"><span class="hint">Milestone 2<br>Add what happened</span></div><div class="vline step" style="--s:2.0;left:723px;top:780px;height:36px;background:var(--dash)"></div><div class="abs hint step" style="--s:2.2;left:683px;top:836px;width:80px;text-align:center">Time</div><div class="dashed-frame step" style="--s:2.6;left:980px;top:630px;width:434px;height:150px;padding:24px 28px"><span class="hint">Milestone 3<br>Add what happened</span></div><div class="vline step" style="--s:2.8;left:1197px;top:780px;height:36px;background:var(--dash)"></div><div class="abs hint step" style="--s:3.0;left:1157px;top:836px;width:80px;text-align:center">Time</div><div class="dashed-frame step" style="--s:3.4;left:1454px;top:630px;width:434px;height:150px;padding:24px 28px"><span class="hint">Milestone 4<br>Add what happened</span></div><div class="vline step" style="--s:3.6;left:1671px;top:780px;height:36px;background:var(--dash)"></div><div class="abs hint step" style="--s:3.8;left:1631px;top:836px;width:80px;text-align:center">Time</div>
-    </section>
     <section class="slide light" aria-label="Architecture">
-      <!-- NOTES: Section 2 of 2: Architecture. We walk the stack from the top: mission, then navigation and docking, localization, perception. -->
+      <!-- NOTES: Architecture. We walk the stack from the top: mission, then navigation and docking, localization, perception. -->
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Architecture</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Architecture</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Section 02</div>
+      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">The stack, top to bottom</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <div class="abs lbl dim reveal" style="--i:3;left:32px;top:150px">02</div>
-      <div class="abs lbl reveal" style="--i:3;left:504px;top:150px">Architecture</div>
+      <div class="abs lbl reveal" style="--i:3;left:32px;top:150px">Architecture</div>
       <h2 class="abs display reveal" style="--i:4;left:24px;top:380px;font-size:248px;line-height:228px;letter-spacing:-.025em">The stack,<br>top to bottom.</h2>
     </section>
-    <section class="slide" aria-label="Architecture overview">
+    <section class="slide" aria-label="The stack">
       <!-- NOTES: Four ROS 2 packages, one layer each: mission, navigation (with docking), localization, perception.
            Mission only talks to the rest of the stack through two actions: NavigateToPose and DockRobot.
            Everything runs identically against Gazebo or the real hardware - only the bottom layer changes. Saga AI sits outside, over HTTP. -->
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Architecture</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Architecture</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Four packages &middot; one stack</div>
+      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Top to bottom &middot; one stack</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-s reveal" style="--i:3;left:32px;top:150px">Four<br>packages,<br>one stack.</h2>
+      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">The<br>stack</h2>
       <div class="abs sm reveal" style="--i:5;left:32px;top:868px"><span class="sw"></span>Our packages</div>
       <div class="abs sm reveal" style="--i:5;left:32px;top:912px"><span class="sw d"></span>External</div>
-      <div class="layer ext step" style="--s:0;top:136px;height:84px"><span class="ln" style="font-size:44px;width:300px">Saga AI</span><span class="lp" style="width:auto">Dispatch server &middot; HTTP &middot; mocked for the hackathon</span><span class="lc"><span class="chip">Route: source &rarr; destination</span></span></div>
+      <div class="layer ext step" style="--s:0;top:136px;height:84px"><span class="ln" style="font-size:44px">Saga AI</span><span class="ll"></span><span class="lc"><span class="chip">Route: source &rarr; destination</span></span></div>
       <div class="vline grow" style="--s:.8;left:1196px;top:220px;height:40px"></div>
-      <div class="layer step" style="--s:1.4;top:260px"><span class="ln">Mission</span><span class="lp">mission</span><span class="lc"><span class="chip">py_trees</span><span class="chip">1 Hz tick</span><span class="chip">SafeStop</span></span></div><div class="vline grow" style="--s:2.0;left:1196px;top:372px;height:36px"></div><div class="layer step" style="--s:2.6;top:408px"><span class="ln">Navigation &amp; Docking</span><span class="lp">navigation</span><span class="lc"><span class="chip">Nav2</span><span class="chip">Docking</span><span class="chip">Collision monitor</span></span></div><div class="vline grow" style="--s:3.2;left:1196px;top:520px;height:36px"></div><div class="layer step" style="--s:3.8;top:556px"><span class="ln">Localization</span><span class="lp">localization</span><span class="lc"><span class="chip">Wheels + gyro</span><span class="chip">EKF</span><span class="chip">SLAM</span></span></div><div class="vline grow" style="--s:4.4;left:1196px;top:668px;height:36px"></div><div class="layer step" style="--s:5.0;top:704px"><span class="ln">Perception</span><span class="lp">perception</span><span class="lc"><span class="chip">Lidar filter</span><span class="chip">Camera cloud</span><span class="chip">AprilTags</span></span></div><div class="vline grow" style="--s:5.6;left:1196px;top:816px;height:36px"></div><div class="layer step ext" style="--s:6.2;top:852px"><span class="ln">Hardware &amp; Gazebo</span><span class="lp">sim or real</span><span class="lc"><span class="chip">LD19</span><span class="chip">IMU</span><span class="chip">Encoders</span><span class="chip">OAK-D Lite</span><span class="chip">Orin Nano</span></span></div>
+      <div class="layer step" style="--s:1.4;top:260px"><span class="ln">Mission</span><span class="ll"></span><span class="lc"><span class="chip">py_trees</span><span class="chip">1 Hz tick</span><span class="chip">SafeStop</span></span></div><div class="vline grow" style="--s:2.0;left:1196px;top:372px;height:36px"></div><div class="layer step" style="--s:2.6;top:408px"><span class="ln">Navigation &amp; Docking</span><span class="ll"></span><span class="lc"><span class="chip">Nav2</span><span class="chip">Docking</span><span class="chip">Collision monitor</span></span></div><div class="vline grow" style="--s:3.2;left:1196px;top:520px;height:36px"></div><div class="layer step" style="--s:3.8;top:556px"><span class="ln">Localization</span><span class="ll"></span><span class="lc"><span class="chip">Wheels + gyro</span><span class="chip">EKF</span><span class="chip">SLAM</span></span></div><div class="vline grow" style="--s:4.4;left:1196px;top:668px;height:36px"></div><div class="layer step" style="--s:5.0;top:704px"><span class="ln">Perception</span><span class="ll"></span><span class="lc"><span class="chip">Lidar filter</span><span class="chip">Camera cloud</span><span class="chip">AprilTags</span></span></div><div class="vline grow" style="--s:5.6;left:1196px;top:816px;height:36px"></div><div class="layer step ext" style="--s:6.2;top:852px"><span class="ln">Hardware &amp; Gazebo</span><span class="ll"></span><span class="lc"><span class="chip">LD19</span><span class="chip">IMU</span><span class="chip">Encoders</span><span class="chip">OAK-D Lite</span><span class="chip">Orin Nano</span></span></div>
     </section>
-    <section class="slide" aria-label="The delivery loop">
+    <section class="slide" aria-label="Behaviour loop">
       <!-- NOTES: The whole job as one loop: get a route from Saga AI, navigate to the source dock, dock, wait for the loading confirmation,
            undock, drive to the destination, dock, wait for unload, report, take the next route.
            It is a py_trees behaviour tree ticking at 1 Hz. Every tick it checks vehicle status and localization.
@@ -576,12 +526,12 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Mission</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Mission</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Behaviour tree &middot; 1 Hz</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-s reveal" style="--i:3;left:32px;top:150px">A loop<br>that never<br>stops.</h2>
+      <h2 class="abs display h-s reveal" style="--i:3;left:32px;top:150px">Behaviour<br>Loop</h2>
       <div class="abs lbl dim step" style="--s:7;left:32px;top:728px">Talks to the stack through</div>
       <div class="abs step" style="--s:7.5;left:32px;top:772px;font-size:34px;line-height:46px">NavigateToPose<br>DockRobot</div>
       <svg class="abs" style="left:0;top:0;width:1920px;height:1080px" viewBox="0 0 1920 1080" aria-hidden="true">
@@ -592,7 +542,7 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       <div class="abs lbl dim step" style="--s:6;left:760px;top:372px">Mission &middot; py_trees</div>
       <div class="abs display step" style="--s:6.4;left:756px;top:412px;font-size:92px;line-height:96px;letter-spacing:-.015em">Ticks at 1&nbsp;Hz.</div>
       <div class="abs hair step" style="--s:6.8;left:760px;top:540px;width:760px"></div>
-      <div class="abs step" style="--s:6.8;left:760px;top:566px"><span class="pill"><span class="dot" style="background:var(--signal-pink)"></span>Fault &rarr; SafeStop &middot; holds still</span></div>
+      <div class="abs step" style="--s:6.8;left:760px;top:566px"><span class="pill"><span class="dot"></span>Fault &rarr; SafeStop &middot; holds still</span></div>
     </section>
     <section class="slide" aria-label="Perception">
       <!-- NOTES: Perception turns raw sensors into things the rest of the stack can trust.
@@ -602,16 +552,16 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Perception</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Perception</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Lidar &middot; camera &middot; AprilTags</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">See what<br>matters.</h2>
-      <div class="item step" style="--s:2.0;left:32px;top:520px;width:860px"><span class="in">01</span><div class="it">Lidar, minus the antennas</div><div class="id">The robot&rsquo;s own antennas are boxed out of the scan.</div></div><div class="item step" style="--s:3.1;left:32px;top:670px;width:860px"><span class="in">02</span><div class="it">A lighter camera cloud</div><div class="id">Cropped and downsampled before anything uses it.</div></div><div class="item step" style="--s:4.2;left:32px;top:820px;width:860px"><span class="in">03</span><div class="it">AprilTags on every dock</div><div class="id">Seen in the camera image, tied to a dock.</div></div>
+      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Perception</h2>
+      <div class="item step" style="--s:2.0;left:32px;top:420px;width:860px"><span class="in">01</span><div class="it">Lidar, minus the antennas</div><div class="id">The robot&rsquo;s own antennas are boxed out of the scan.</div></div><div class="item step" style="--s:3.1;left:32px;top:590px;width:860px"><span class="in">02</span><div class="it">A lighter camera cloud</div><div class="id">Cropped and downsampled before anything uses it.</div></div><div class="item step" style="--s:4.2;left:32px;top:760px;width:860px"><span class="in">03</span><div class="it">AprilTags on every dock</div><div class="id">Seen in the camera image, tied to a dock.</div></div>
       
       <figure class="photo reveal" style="left:960px;top:136px;width:928px;height:832px;--i:4">
-        <img src="photos/apriltag-dock.jpg" alt="Close-up of a dock&rsquo;s AprilTag on the arena wall, flash-lit, truck nose just in frame." onerror="this.closest('.photo').classList.add('missing')">
+        <img src="photos/apriltag-dock.jpg" style="object-position:50% 52%" alt="Close-up of the AprilTag for dock D, taped to the arena wall." onerror="this.closest('.photo').classList.add('missing')">
         <div class="ph-cross"></div>
         <div class="ph"><span class="ph-label">Photo &middot; photos/apriltag-dock.jpg</span><span class="ph-desc">Close-up of a dock&rsquo;s AprilTag on the arena wall, flash-lit, truck nose just in frame.</span></div>
       </figure>
@@ -624,12 +574,12 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Localization</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Localization</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Wheels + gyro &rarr; EKF &rarr; SLAM map</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Know where<br>you are.</h2>
+      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Localization</h2>
       <div class="map-wrap map-fade" style="left:1400px;top:410px;width:488px;height:492px">
         <div class="map-img"></div>
         <svg class="map-svg" viewBox="0 0 249 251" aria-hidden="true">
@@ -678,12 +628,12 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Navigation</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Navigation</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Nav2 &middot; planner to /cmd_vel</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Get there safely.</h2>
+      <h2 class="abs display h-l reveal" style="--i:3;left:32px;top:140px">Navigation</h2>
       <p class="abs body reveal" style="--i:5;left:32px;top:340px">Nav2, tuned for a skid-steer truck.</p>
       <div class="chain" style="top:560px"><div class="chain-item step" style="--s:1.0"><span class="pill lg">NavFn planner</span><small>Plans the path</small></div><span class="conn lg step" style="--s:1.5"><i class="runner"></i></span><div class="chain-item step" style="--s:2.0"><span class="pill lg">MPPI controller</span><small>Turns first, then follows</small></div><span class="conn lg step" style="--s:2.5"><i class="runner"></i></span><div class="chain-item step" style="--s:3.0"><span class="pill lg">Velocity smoother</span><small>Keeps it gentle</small></div><span class="conn lg step" style="--s:3.5"><i class="runner"></i></span><div class="chain-item step" style="--s:4.0"><span class="pill lg">Collision monitor</span><small>Lidar + camera, last word</small></div><span class="conn lg step" style="--s:4.5"><i class="runner"></i></span><div class="chain-item step" style="--s:5.0"><span class="pill lg on">/cmd_vel</span><small>To the wheels</small></div></div>
       <div class="abs hair rule" style="--i:9;left:32px;top:800px;right:32px"></div>
@@ -699,55 +649,55 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Docking</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Docking</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">AprilTag-aligned &middot; docks.yaml</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
       
-      <figure class="photo reveal" style="left:32px;top:136px;width:896px;height:832px;--i:3">
-        <img src="photos/docking.jpg" alt="The truck mid-dock: nose to the dock, tag centred in frame, low angle, flash-lit." onerror="this.closest('.photo').classList.add('missing')">
+      <figure class="photo reveal" style="left:1420px;top:136px;width:468px;height:832px;--i:3">
+        <video src="photos/docking.mp4" poster="photos/docking-poster.jpg" muted loop playsinline controls preload="metadata" onerror="this.closest('.photo').classList.add('missing')"></video>
         <div class="ph-cross"></div>
-        <div class="ph"><span class="ph-label">Photo &middot; photos/docking.jpg</span><span class="ph-desc">The truck mid-dock: nose to the dock, tag centred in frame, low angle, flash-lit.</span></div>
+        <div class="ph"><span class="ph-label">Video &middot; photos/docking.mp4</span><span class="ph-desc">Rojas driving in to dock B, tag in view, shot from above and behind.</span></div>
       </figure>
-      <h2 class="abs display h-m reveal" style="--i:4;left:976px;top:150px">The last few<br>centimetres.</h2>
-      <div class="vline grow" style="--s:1.8;left:1000px;top:518px;height:82px"></div>
-      <div class="vline grow" style="--s:3.0;left:1000px;top:648px;height:82px"></div>
-      <div class="circ step" style="--s:1.6;left:976px;top:470px">1</div><div class="abs step" style="--s:1.6;left:1056px;top:468px;width:830px"><div style="font-size:38px;line-height:44px">Measure the tag</div><div class="sm" style="margin-top:4px">Read the AprilTag while driving in.</div></div><div class="circ step" style="--s:2.8;left:976px;top:600px">2</div><div class="abs step" style="--s:2.8;left:1056px;top:598px;width:830px"><div style="font-size:38px;line-height:44px">Square up</div><div class="sm" style="margin-top:4px">Line the truck up, nose on.</div></div><div class="circ step" style="--s:4.0;left:976px;top:730px">3</div><div class="abs step" style="--s:4.0;left:1056px;top:728px;width:830px"><div style="font-size:38px;line-height:44px">Dock</div><div class="sm" style="margin-top:4px">Drive the last stretch. Then wait for the load.</div></div>
-      <i class="run" style="--del:4.8s;offset-path:path('M1000,522 L1000,596')"></i>
-      <i class="run" style="--del:5.7s;offset-path:path('M1000,652 L1000,726')"></i>
-      <p class="abs sm step" style="--s:6;left:976px;top:900px;width:880px">Dock poses were captured on the real robot, from the tag positions.</p>
+      <h2 class="abs display h-l reveal" style="--i:4;left:32px;top:150px">Docking</h2>
+      <div class="vline grow" style="--s:1.8;left:56px;top:518px;height:82px"></div>
+      <div class="vline grow" style="--s:3.0;left:56px;top:648px;height:82px"></div>
+      <div class="circ step" style="--s:1.6;left:32px;top:470px">1</div><div class="abs step" style="--s:1.6;left:112px;top:468px;width:1200px"><div style="font-size:38px;line-height:44px">Measure the tag</div><div class="sm" style="margin-top:4px">Read the AprilTag while driving in.</div></div><div class="circ step" style="--s:2.8;left:32px;top:600px">2</div><div class="abs step" style="--s:2.8;left:112px;top:598px;width:1200px"><div style="font-size:38px;line-height:44px">Square up</div><div class="sm" style="margin-top:4px">Line the truck up, nose on.</div></div><div class="circ step" style="--s:4.0;left:32px;top:730px">3</div><div class="abs step" style="--s:4.0;left:112px;top:728px;width:1200px"><div style="font-size:38px;line-height:44px">Dock</div><div class="sm" style="margin-top:4px">Drive the last stretch. Then wait for the load.</div></div>
+      <i class="run" style="--del:4.8s;offset-path:path('M56,522 L56,596')"></i>
+      <i class="run" style="--del:5.7s;offset-path:path('M56,652 L56,726')"></i>
+      <p class="abs sm step" style="--s:6;left:32px;top:900px;width:1200px">Dock poses were captured on the real robot, from the tag positions.</p>
     </section>
-    <section class="slide" aria-label="Sim to real">
+    <section class="slide" aria-label="Simulation to integration">
       <!-- NOTES: We built and verified the whole loop end-to-end in Gazebo first, then ported it to the real robot.
            The same launch brings both up; only the bottom layer changes. One launch file starts everything in timed stages:
            sim at 0 s, EKF / AprilTag / cloud at 5 s, SLAM at 7 s, docking at 10 s, Nav2 at 18 s, mission at 25 s. -->
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Sim to real</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Integration</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">One launch &middot; same stack</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display reveal" style="--i:3;left:32px;top:130px;font-size:112px;line-height:112px;letter-spacing:-.02em">Gazebo first. Then the real thing.</h2>
+      <h2 class="abs display reveal" style="--i:3;left:32px;top:130px;font-size:112px;line-height:112px;letter-spacing:-.02em">Simulation to integration</h2>
       
-      <figure class="photo reveal" style="left:32px;top:300px;width:912px;height:600px;--i:4">
-        <img src="photos/gazebo.jpg" alt="Screenshot of the arena in Gazebo: truck, dock tags, walls. Clean window, no UI clutter." onerror="this.closest('.photo').classList.add('missing')">
+      <figure class="photo reveal" style="left:32px;top:300px;width:700px;height:600px;--i:4">
+        <img class="shot" src="photos/foxglove.png" alt="Foxglove 3D view: the costmap over the saved arena map, with the planned path in purple and the truck at its end." onerror="this.closest('.photo').classList.add('missing')">
         <div class="ph-cross"></div>
-        <div class="ph"><span class="ph-label">Photo &middot; photos/gazebo.jpg</span><span class="ph-desc">Screenshot of the arena in Gazebo: truck, dock tags, walls. Clean window, no UI clutter.</span></div>
+        <div class="ph"><span class="ph-label">Photo &middot; photos/foxglove.png</span><span class="ph-desc">Foxglove 3D view: costmap, planned path and the truck.</span></div>
       </figure>
       
-      <figure class="photo reveal" style="left:976px;top:300px;width:912px;height:600px;--i:5">
-        <img src="photos/robot-arena.jpg" alt="The real 6 &times; 6 m arena: truck on the floor, docks on the walls, lit by flash." onerror="this.closest('.photo').classList.add('missing')">
+      <figure class="photo reveal" style="left:764px;top:300px;width:1124px;height:600px;--i:5">
+        <img src="photos/robot-arena.jpg" style="object-position:50% 30%" alt="The real arena: AprilTag docks along the walls, the truck by the table, tape marks on the floor." onerror="this.closest('.photo').classList.add('missing')">
         <div class="ph-cross"></div>
         <div class="ph"><span class="ph-label">Photo &middot; photos/robot-arena.jpg</span><span class="ph-desc">The real 6 &times; 6 m arena: truck on the floor, docks on the walls, lit by flash.</span></div>
       </figure>
-      <div class="abs lbl reveal" style="--i:6;left:32px;top:924px">01 &nbsp;Simulation</div>
-      <div class="abs lbl reveal" style="--i:7;left:976px;top:924px">02 &nbsp;Hardware</div>
+      <div class="abs lbl reveal" style="--i:6;left:32px;top:924px">01 &nbsp;Foxglove &middot; costmap and plan</div>
+      <div class="abs lbl reveal" style="--i:7;left:764px;top:924px">02 &nbsp;Hardware &middot; the arena</div>
     </section>
-    <section class="slide light" aria-label="What the real world taught us">
-      <!-- NOTES: Four things the simulator never showed us.
+    <section class="slide light" aria-label="Fine tuning">
+      <!-- NOTES: Fine tuning. Four things the simulator never showed us, and what we tuned because of them.
            12 deg/min: the chassis gyro drifted ~12 degrees a minute while parked (bias 0.0035 rad/s) - hence gyro_bias_node.
            2.34x: skid-steer scrub means the effective wheel separation is 2.34 times the geometric one.
            201 counts: 2.00 m of driving read as 201 - the encoder "metres" were centimetre counts.
@@ -756,32 +706,32 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Lessons</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Fine tuning</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
-      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Sim to real</div>
+      <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Four numbers</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display reveal" style="--i:3;left:32px;top:130px;font-size:96px;line-height:100px;letter-spacing:-.015em">What the real world taught us.</h2>
-      <div class="bignum step" style="--s:1.0;left:32px;top:280px;width:880px"><span class="n display"><span class="cnt">12</span><span class="u">&deg;/min</span></span><div class="c"><b>Gyro drift</b> while parked. We now estimate the bias whenever the wheels say stopped.</div></div><div class="bignum step" style="--s:2.1;left:976px;top:280px;width:880px"><span class="n display"><span class="cnt">2.34</span><span class="u" style="font-size:.6em">&times;</span></span><div class="c"><b>Skid-steer scrub.</b> The effective wheel separation is 2.34 times the geometric one.</div></div><div class="bignum step" style="--s:3.2;left:32px;top:640px;width:880px"><span class="n display"><span class="cnt">201</span><span class="u"> counts</span></span><div class="c"><b>For a 2.00 m drive.</b> The encoder &ldquo;metres&rdquo; were really centimetre counts.</div></div><div class="bignum step" style="--s:4.3;left:976px;top:640px;width:880px"><span class="n display"><span class="cnt">29.5</span><span class="u"> MB</span></span><div class="c"><b>Per camera cloud.</b> It starved the collision monitor until we downsampled.</div></div>
+      <h2 class="abs display reveal" style="--i:3;left:32px;top:130px;font-size:120px;line-height:116px;letter-spacing:-.02em">Fine tuning</h2>
+      <div class="bignum step" style="--s:1.0;left:32px;top:316px;width:880px"><span class="n display"><span class="cnt">12</span><span class="u">&deg;/min</span></span><div class="c"><b>Gyro drift</b> while parked. We now estimate the bias whenever the wheels say stopped.</div></div><div class="bignum step" style="--s:2.1;left:976px;top:316px;width:880px"><span class="n display"><span class="cnt">2.34</span><span class="u" style="font-size:.6em">&times;</span></span><div class="c"><b>Skid-steer scrub.</b> The effective wheel separation is 2.34 times the geometric one.</div></div><div class="bignum step" style="--s:3.2;left:32px;top:666px;width:880px"><span class="n display"><span class="cnt">201</span><span class="u"> counts</span></span><div class="c"><b>For a 2.00 m drive.</b> The encoder &ldquo;metres&rdquo; were really centimetre counts.</div></div><div class="bignum step" style="--s:4.3;left:976px;top:666px;width:880px"><span class="n display"><span class="cnt">29.5</span><span class="u"> MB</span></span><div class="c"><b>Per camera cloud.</b> It starved the collision monitor until we downsampled.</div></div>
     </section>
-    <section class="slide" aria-label="Demo">
-      <!-- NOTES: Demo time. Put a screen recording or phone video of one full delivery loop in photos/demo.mp4.
+    <section class="slide" aria-label="Results">
+      <!-- NOTES: Results: the demo. The video is photos/result.mp4 (H.264, transcoded from result.MOV).
            It autoplays muted on this slide; use the controls for sound. -->
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Demo</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Results</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">One full delivery loop</div>
       <div class="abs lbl pn reveal" style="--i:7;right:32px;top:1016px">00 / 00</div>
-      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">Watch it<br>run.</h2>
-      <p class="abs body reveal" style="--i:5;left:32px;top:420px;width:420px">Route in, docked, delivered. Gazebo and hardware, same stack.</p>
+      <h2 class="abs display h-m reveal" style="--i:3;left:32px;top:150px">Results</h2>
+      <p class="abs body reveal" style="--i:5;left:32px;top:300px;width:420px">Route in, docked, delivered. Gazebo and hardware, same stack.</p>
       
       <figure class="photo reveal" style="left:504px;top:136px;width:1384px;height:778px;--i:4">
-        <video src="photos/demo.mp4" muted loop playsinline controls preload="metadata" onerror="this.closest('.photo').classList.add('missing')"></video>
+        <video src="photos/result.mp4" poster="photos/result-poster.jpg" muted loop playsinline controls preload="metadata" onerror="this.closest('.photo').classList.add('missing')"></video>
         <div class="ph-cross"></div>
-        <div class="ph"><span class="ph-label">Video &middot; photos/demo.mp4</span><span class="ph-desc">Screen recording or phone video of one full delivery loop: route in, dock, load, deliver.</span></div>
+        <div class="ph"><span class="ph-label">Video &middot; photos/result.mp4</span><span class="ph-desc">Screen recording or phone video of one full delivery loop: route in, dock, load, deliver.</span></div>
       </figure>
       <div class="abs lbl dim reveal" style="--i:6;left:504px;top:932px">Plays automatically &middot; muted</div>
     </section>
@@ -793,7 +743,7 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
       
       <div class="abs wordmark reveal" style="--i:0;left:32px;top:36px">modysseus</div>
       <div class="abs lbl dim reveal" style="--i:1;left:504px;top:40px">Einride Hackathon &middot; October 2026</div>
-      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill"><span class="dot"></span>Thank you</span></div>
+      <div class="abs reveal" style="--i:2;right:32px;top:24px"><span class="pill">Thank you</span></div>
       <div class="abs hair rule" style="--i:6;left:32px;right:32px;top:1000px"></div>
       <div class="abs lbl reveal" style="--i:7;left:32px;top:1016px">Team Modysseus</div>
       <div class="abs lbl dim reveal" style="--i:7;left:504px;top:1016px">Einride Hackathon &middot; October 2026</div>
@@ -818,7 +768,7 @@ body.editing .pin { cursor: grab; outline: 1px dashed #999; outline-offset: 4px;
 (function () {
   'use strict';
 
-  var BUILD = '1791358137';
+  var BUILD = '1791369699';
   var stage = document.getElementById('deckStage');
   var slides = [].slice.call(document.querySelectorAll('.slide'));
   var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
