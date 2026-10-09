@@ -17,6 +17,11 @@ presses the admin buttons. This script presses them for you:
      `loading_complete` (source) or `unloading_complete` (destination).
      mission_node then undocks and drives on by itself. unloading_complete
      assigns the next route at once, so this repeats until Ctrl-C.
+  4. moves the other three trucks one step each time it moves yours (the same
+     arrival / completion posts, from their own route status, theirs after
+     yours), so they keep finishing routes and changing docks. Otherwise they sit
+     on their first routes, hold six docks, and the server can only give your
+     truck the same two (G -> F) over and over. `--solo` leaves them alone.
 
 Start the robot stack separately, with the truck's token (printed below).
 """
@@ -84,11 +89,12 @@ def wait_for_server(url, server, timeout_sec=30.0):
 class Organizer:
     """Presses the admin page's buttons over HTTP and reads the truck's status."""
 
-    def __init__(self, url, admin, truck_token, truck):
+    def __init__(self, url, admin, truck_token, truck, other_tokens=None):
         self.url = url
         self.auth = (admin['username'], admin['password'])
         self.truck_headers = {'Authorization': f'Bearer {truck_token}'}
         self.truck = truck
+        self.other_tokens = other_tokens or {}
 
     def post(self, path, data=None, retries=5):
         """Returns True once the server applied it.
@@ -120,9 +126,27 @@ class Organizer:
         return self.post(f'/admin/trucks/{self.truck}/actions/{name}',
                          data={'expected_status': expected_status})
 
-    def _get(self, path):
+    def nudge_others(self, steps):
+        """Moves each other truck on if its route status is in `steps`.
+
+        `steps` is ARRIVE or COMPLETE: only that kind of post is made, so an
+        arrival and the completion after it stay at least --dwell seconds apart
+        (the server locks the completion for ~3 s after an arrival).
+        """
+        for number, token in self.other_tokens.items():
+            status = (self._get('/api/v1/status', {'Authorization': f'Bearer {token}'})
+                      or {}).get('status')
+            name = steps.get(status)
+            if name is None:
+                continue
+            log(f'Truck {number}: {name}')
+            self.post(f'/admin/trucks/{number}/actions/{name}',
+                      data={'expected_status': status})
+
+    def _get(self, path, headers=None):
         try:
-            response = requests.get(f'{self.url}{path}', headers=self.truck_headers, timeout=2.0)
+            response = requests.get(f'{self.url}{path}',
+                                    headers=headers or self.truck_headers, timeout=2.0)
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as error:
@@ -183,6 +207,9 @@ def main():
                         help="the server's credentials.json "
                              '(default: <server-dir>/credentials.json)')
     parser.add_argument('--truck', default='1', help='truck number, 1-4')
+    parser.add_argument('--solo', action='store_true',
+                        help="do not move the other trucks' routes along (they then "
+                             'keep their docks, so your truck gets the same route)')
     parser.add_argument('--dwell', type=float, default=10.0,
                         help='seconds docked before the load/unload is completed')
     args = parser.parse_args()
@@ -202,8 +229,11 @@ def main():
         if not credentials_path.is_file():
             sys.exit(f'{credentials_path} not found (pass --credentials)')
         credentials = json.loads(credentials_path.read_text())
+        others = {} if args.solo else {
+            number: token for number, token in credentials['trucks'].items()
+            if number != args.truck}
         organizer = Organizer(url, credentials['admin'], credentials['trucks'][args.truck],
-                              args.truck)
+                              args.truck, others)
         log('Saga server is up. Launch the robot (hardware.launch.py in another terminal) with:')
         log('  ros2 launch mission mission.launch.py saga_url:=<this host> '
             f"saga_token:=$(jq -r '.trucks[\"{args.truck}\"]' "
@@ -237,6 +267,7 @@ def main():
                     log(f"Docked, but route status is {status.get('status')}: nothing to post")
                 elif organizer.action(arrival, status['status']):
                     docked_at = time.monotonic()
+                    organizer.nudge_others(ARRIVE)
                     log(f'Docked, completing in {dwell:.0f} s')
             if docked_at is not None and time.monotonic() - docked_at >= dwell:
                 docked_at = None
@@ -246,6 +277,11 @@ def main():
                 if completion is None:
                     log(f"Route status is {status.get('status')}, nothing to complete")
                 elif organizer.action(completion, status['status']):
+                    # After ours: a route holds only its destination between loading
+                    # and unloading, so while the others are mid-route more docks are
+                    # free when ours is drawn. Finishing theirs first hands each a new
+                    # two-dock route and leaves yours only two docks to choose from.
+                    organizer.nudge_others(COMPLETE)
                     if completion == 'loading_complete':
                         log('Loaded, robot heads for the destination')
                     else:
