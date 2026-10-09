@@ -96,6 +96,8 @@ class Rig(Node):
         self.predock_points = []                            # ... and on the pre-dock pose
         self.gate_calls, self.nav_goals, self.dock_goals = [], [], []
         self.undock_calls = 0
+        self.not_in_dock = False                            # docking_server: "Robot is not in the dock"
+        self.undock_error = None                            # else a real failure with this code
         self.events = []                                    # 'nav' / 'dock', in order
         self.nav_moves_robot = True
         self._lock = threading.Lock()
@@ -241,6 +243,15 @@ class Rig(Node):
 
     def _on_undock(self, goal_handle):
         self.undock_calls += 1
+        if self.not_in_dock:
+            # What opennav_docking answers a robot that is not in the dock:
+            # aborted, success false, error code NONE (0), no message.
+            goal_handle.abort()
+            return UndockRobot.Result(success=False, error_code=UndockRobot.Result.NONE)
+        if self.undock_error is not None:
+            goal_handle.abort()
+            return UndockRobot.Result(success=False, error_code=self.undock_error,
+                                      error_msg='failed to control')
         goal_handle.succeed()
         return UndockRobot.Result(success=True)
 
@@ -618,3 +629,24 @@ def test_undocking_without_a_costmap_does_not_back_out_blind(sequence):
 
     assert undock(run).result.success
     assert run.rig.undock_calls == 0
+
+
+def test_undocking_a_robot_docking_server_says_is_not_docked_counts_as_undocked(sequence):
+    run = sequence
+    run.rig.not_in_dock = True
+
+    response = undock(run)
+
+    assert response.status == GoalStatus.STATUS_SUCCEEDED and response.result.success
+    assert run.rig.undock_calls == 1, 'docking_server was asked and said it is not docked'
+
+
+def test_a_real_undock_failure_is_still_a_failure(sequence):
+    run = sequence
+    run.rig.undock_error = UndockRobot.Result.FAILED_TO_CONTROL
+
+    response = undock(run)
+
+    assert response.status == GoalStatus.STATUS_ABORTED
+    assert not response.result.success
+    assert response.result.error_code == UndockRobot.Result.FAILED_TO_CONTROL

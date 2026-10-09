@@ -901,6 +901,16 @@ class TagDockServer(Node):
             if response.status == GoalStatus.STATUS_SUCCEEDED and result.success:
                 self._docked_at = None
                 goal_handle.succeed()
+            elif result.error_code == UndockRobot.Result.NONE:
+                # docking_server's "Robot is not in the dock, no need to undock":
+                # aborted with success false and no error. Asking again can never
+                # succeed, so the robot is already undocked as far as the mission goes.
+                self.get_logger().warning(
+                    'undock: docking_server says the robot is not in the dock; '
+                    'now undocked')
+                self._docked_at = None
+                goal_handle.succeed()
+                result = UndockRobot.Result(success=True)
             else:
                 self.get_logger().error(
                     f'undock failed: code {result.error_code} {result.error_msg}')
